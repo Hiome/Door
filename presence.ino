@@ -192,66 +192,71 @@ void loop() {
   uint8_t s1 = read_sensor1();
   uint8_t s2 = read_sensor2();
 
-  if (s1 != SENSOR_ERROR && s2 != SENSOR_ERROR) {
-    // Neither of the readings resulted in an error. Therefore,
-    // s1 and s2 are each either 1 or 0, depending on activity, so
-    // diff can be either 1 (1 - 0), 0 (1 - 1, 0 - 0), or -1 (0 - 1)
-    int diff = s1 - s2;
+  if (s1 == SENSOR_ERROR || s2 == SENSOR_ERROR) {
+    // at least one of the readings is definitely wrong,
+    // let's just skip this cycle and try again.
+    return;
+  }
 
-    if (diff == 0) {
-      // either there is no activity or user is in the middle of both
-      // sensors, so we know nothing about directional intent anyway.
-      if (s1 == SENSOR_LOW && s2 == SENSOR_LOW) { // there's no activity
-        if (_start > 0 && _end > 0) { // activity just ended
-          // _start and _end can be either 1 or 2 (see below), so
-          // dir can be either 1 (2 - 1), 0 (1 - 1, 2 - 2), or -1 (1 - 2).
-          // 0 means the user walked in and out on the same side, don't care.
-          int dir = _start - _end;
-          if (dir == 1) {
-            // moved from sensor 2 to sensor 1
-            mqtt_client.publish(data_topic, "2-1");
-            Serial.println("---- 2-1 ----");
-          } else if (dir == -1) {
-            // moved from sensor 1 to sensor 2
-            mqtt_client.publish(data_topic, "1-2");
-            Serial.println("---- 1-2 ----");
-          }
-        }
-  
-        if (_start != 0 || _end != 0) {
-          Serial.println("all clear!");
-          Serial.println();
-          Serial.println();
-        }
-        // reset values
-        _start = 0;
-        _end = 0;
-      } else {
-        // we are in the middle of both lasers, try to guess what direction we're moving
-        int closer_sensor = (sensor1_range < sensor2_range ? 1 : 2);
-        if (_start == 0) {
-          // somehow we didn't pick up a starting side, let's guess it
-          _start = closer_sensor;
-          Serial.print("guessing start ");
-          Serial.println(_start);
-        } else {
-          // guess ending direction, in case we don't pick up the ending side
-          _end = closer_sensor;
-          Serial.print("guessing direction ");
-          Serial.println(_end);
+  // s1 and s2 are each either 1 or 0, depending on activity, so
+  // diff can be either 1 (1 - 0), 0 (1 - 1, 0 - 0), or -1 (0 - 1)
+  int diff = s1 - s2;
+
+  if (diff == 0) {
+    // either there is no activity or user is in the middle of both
+    // sensors, so we know nothing about directional intent anyway.
+    if (s1 == SENSOR_LOW && s2 == SENSOR_LOW) {
+      // there's no activity
+      if (_start > 0 && _end > 0) {
+        // activity just ended.
+        // _start and _end can be either 1 or 2 (see below), so
+        // dir can be either 1 (2 - 1), 0 (1 - 1, 2 - 2), or -1 (1 - 2).
+        // 0 means the user walked in and out on the same side, don't care.
+        int dir = _start - _end;
+        if (dir == 1) {
+          // moved from sensor 2 to sensor 1
+          mqtt_client.publish(data_topic, "2-1");
+          Serial.println("---- 2-1 ----");
+        } else if (dir == -1) {
+          // moved from sensor 1 to sensor 2
+          mqtt_client.publish(data_topic, "1-2");
+          Serial.println("---- 1-2 ----");
         }
       }
+
+      if (_start != 0 || _end != 0) {
+        Serial.println("all clear!");
+        Serial.println();
+        Serial.println();
+      }
+      // reset values
+      _start = 0;
+      _end = 0;
     } else {
-      // there is activity on one side or the other
+      // we are in the middle of both lasers, try to guess what direction we're moving
+      uint8_t closer_sensor = (sensor1_range < sensor2_range ? 1 : 2);
       if (_start == 0) {
-        // activity is just starting.
-        // diff can be either 1 or -1. Positive diff implies
-        // sensor 1 is the cause of activity, else sensor 2
-        _start = (diff == 1 ? 1 : 2);
+        // somehow we didn't pick up a starting side, let's guess it
+        _start = closer_sensor;
+        Serial.print("guessing start ");
+        Serial.println(_start);
       } else {
-        // activity is ongoing, track where it might end.
-        _end = (diff == 1 ? 1 : 2);
+        // guess ending direction, in case we don't pick up the ending side
+        _end = closer_sensor;
+        Serial.print("guessing direction ");
+        Serial.println(_end);
       }
+    }
+  } else {
+    // there is activity on one side or the other
+    if (_start == 0) {
+      // activity is just starting.
+      // diff can be either 1 or -1. Positive diff implies
+      // sensor 1 is the cause of activity, else sensor 2
+      _start = (diff == 1 ? 1 : 2);
+    } else {
+      // activity is ongoing, track where it might end.
+      _end = (diff == 1 ? 1 : 2);
     }
   }
 }
