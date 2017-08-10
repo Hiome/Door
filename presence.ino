@@ -21,6 +21,9 @@
 #define SENSOR_HIGH 1
 #define SENSOR_ERROR 2
 
+#define TIMEOUT_THRESHOLD 7000
+#define CONFIDENCE_THRESHOLD 4
+
 WiFiClient esp_client;
 PubSubClient mqtt_client(esp_client);
 
@@ -137,48 +140,59 @@ void calibrate() {
 }
 
 static const int POWER = 256;
-static const int PADDING = 18; // 7% of 256
-static const int ALPHA = 38; // 15% of 256
+static const int PADDING = 28; // 10% of 256
+static const int SLOW_ALPHA = 18; // 7% of 256
+static const int FAST_ALPHA = 38; // 15% of 256
 
 static uint16_t sensor1_range = 0;
 static uint16_t sensor2_range = 0;
 
 uint8_t read_sensor1() {
   uint16_t range = sensor1.readRangeContinuousMillimeters();
-  if (range > 7000) {
+  if (range > TIMEOUT_THRESHOLD) {
+    Serial.println("sensor 1 error");
     return SENSOR_ERROR;
   }
 
   sensor1_range = range;
   static uint16_t avg = range;
-  uint8_t motion = range < ((POWER - PADDING)*avg/POWER) ? SENSOR_HIGH : SENSOR_LOW;
-  if (motion == SENSOR_HIGH) {
+
+  if (range < ((POWER - PADDING)*avg/POWER)) {
     Serial.print("sensor1: ");
     Serial.print(range);
     Serial.print("/");
     Serial.println(avg);
+    avg = (SLOW_ALPHA * range + (POWER - SLOW_ALPHA) * avg) / POWER;
+    return SENSOR_HIGH;
+  } else {
+    // learn faster when sensor is not active
+    avg = (FAST_ALPHA * range + (POWER - FAST_ALPHA) * avg) / POWER;
+    return SENSOR_LOW;
   }
-  avg = (ALPHA * range + (POWER - ALPHA) * avg) / POWER;
-  return motion;
 }
 
 uint8_t read_sensor2() {
   uint16_t range = sensor2.readRangeContinuousMillimeters();
-  if (range > 7000) {
+  if (range > TIMEOUT_THRESHOLD) {
+    Serial.println("sensor 2 error");
     return SENSOR_ERROR;
   }
 
   sensor2_range = range;
   static uint16_t avg = range;
-  uint8_t motion = range < ((POWER - PADDING)*avg/POWER) ? SENSOR_HIGH : SENSOR_LOW;
-  if (motion == SENSOR_HIGH) {
-    Serial.print("--- sensor2: ");
+  
+  if (range < ((POWER - PADDING)*avg/POWER)) {
+    Serial.print("sensor2: ");
     Serial.print(range);
     Serial.print("/");
     Serial.println(avg);
+    avg = (SLOW_ALPHA * range + (POWER - SLOW_ALPHA) * avg) / POWER;
+    return SENSOR_HIGH;
+  } else {
+    // learn faster when sensor is not active
+    avg = (FAST_ALPHA * range + (POWER - FAST_ALPHA) * avg) / POWER;
+    return SENSOR_LOW;
   }
-  avg = (ALPHA * range + (POWER - ALPHA) * avg) / POWER;
-  return motion;
 }
 
 void loop() {
@@ -188,6 +202,7 @@ void loop() {
 
   static uint8_t _start = 0;
   static uint8_t _end = 0;
+  static uint8_t confidence = 0;
 
   uint8_t s1 = read_sensor1();
   uint8_t s2 = read_sensor2();
@@ -207,8 +222,8 @@ void loop() {
     // sensors, so we know nothing about directional intent anyway.
     if (s1 == SENSOR_LOW && s2 == SENSOR_LOW) {
       // there's no activity
-      if (_start > 0 && _end > 0) {
-        // activity just ended.
+      if (confidence > CONFIDENCE_THRESHOLD) {
+        // activity just ended with enough data points.
         // _start and _end can be either 1 or 2 (see below), so
         // dir can be either 1 (2 - 1), 0 (1 - 1, 2 - 2), or -1 (1 - 2).
         // 0 means the user walked in and out on the same side, don't care.
@@ -232,22 +247,28 @@ void loop() {
       // reset values
       _start = 0;
       _end = 0;
+      confidence = 0;
     } else {
-      // we are in the middle of both lasers, try to guess what direction we're moving
-      uint8_t closer_sensor = (sensor1_range < sensor2_range ? 1 : 2);
-      if (_start == 0) {
-        // somehow we didn't pick up a starting side, let's guess it
-        _start = closer_sensor;
-        Serial.print("guessing start ");
-        Serial.println(_start);
-      } else {
-        // guess ending direction, in case we don't pick up the ending side
-        _end = closer_sensor;
-        Serial.print("guessing direction ");
-        Serial.println(_end);
+      // we are in the middle of both lasers
+      confidence++;
+      if (sensor1_range != sensor2_range) {
+        // try to guess what direction we're moving
+        uint8_t closer_sensor = (sensor1_range < sensor2_range ? 1 : 2);
+        if (_start == 0) {
+          // somehow we didn't pick up a starting side, let's guess it
+          _start = closer_sensor;
+          Serial.print("guessing start ");
+          Serial.println(_start);
+        } else {
+          // guess ending direction, in case we don't pick up the ending side
+          _end = closer_sensor;
+          Serial.print("guessing direction ");
+          Serial.println(_end);
+        }
       }
     }
   } else {
+    confidence++;
     // there is activity on one side or the other
     if (_start == 0) {
       // activity is just starting.
