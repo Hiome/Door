@@ -140,7 +140,7 @@ void calibrate() {
 }
 
 static const int POWER = 256;
-static const int PADDING = 28; // 10% of 256
+static const int PADDING = 228; // 90% of 256
 static const int SLOW_ALPHA = 18; // 7% of 256
 static const int FAST_ALPHA = 38; // 15% of 256
 
@@ -157,7 +157,7 @@ uint8_t read_sensor1() {
   sensor1_range = range;
   static uint16_t avg = range;
 
-  if (range < ((POWER - PADDING)*avg/POWER)) {
+  if (range < (PADDING*avg/POWER)) {
     Serial.print("sensor1: ");
     Serial.print(range);
     Serial.print("/");
@@ -181,7 +181,7 @@ uint8_t read_sensor2() {
   sensor2_range = range;
   static uint16_t avg = range;
   
-  if (range < ((POWER - PADDING)*avg/POWER)) {
+  if (range < (PADDING*avg/POWER)) {
     Serial.print("sensor2: ");
     Serial.print(range);
     Serial.print("/");
