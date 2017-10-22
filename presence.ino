@@ -16,12 +16,10 @@
 #include <SPIFlash.h>
 
 /* Pin Connections */
+#define PIR    3
 #define xshut1 4
 #define xshut2 5
-
-#define SENSOR_LOW 0
-#define SENSOR_HIGH 1
-#define SENSOR_ERROR 2
+#define LED    9
 
 #define TIMEOUT_THRESHOLD 7000
 #define CONFIDENCE_THRESHOLD 4
@@ -30,12 +28,8 @@
 #define NODEID        2   //unique for each node on same network
 #define NETWORKID     27  //the same on all nodes that talk to each other
 #define GATEWAYID     1
-#define FREQUENCY     RF69_915MHZ
 #define ENCRYPTKEY    "smarterisbetters" //exactly the same 16 characters/bytes on all nodes!
-#define ENABLE_ATC    //comment out this line to disable AUTO TRANSMISSION CONTROL
 #define ATC_RSSI      -90
-#define ACK_TIME      30  // max # of ms to wait for an ack
-#define LED     9  // Moteinos have LEDs on D9
 
 RFM69_ATC radio;
 
@@ -47,6 +41,11 @@ VL53L0X sensor2;
 
 void setup() {
   pinMode(LED, OUTPUT);
+  digitalWrite(LED, HIGH);
+
+  pinMode(PIR, INPUT);
+  attachInterrupt(digitalPinToInterrupt(PIR), motion, CHANGE);
+
   pinMode(xshut1, OUTPUT);
   pinMode(xshut2, OUTPUT);
   digitalWrite(xshut1, LOW);
@@ -54,10 +53,13 @@ void setup() {
 
   Serial.begin(SERIAL_BAUD);
 
-  if (flash.initialize()) flash.sleep(); //if Moteino has FLASH-MEM, make sure it sleeps
+  if (flash.initialize()) {
+    Serial.println("Initialized flash...");
+    flash.sleep();
+  }
 
   Wire.begin();
-  radio.initialize(FREQUENCY,NODEID,NETWORKID);
+  radio.initialize(RF69_915MHZ, NODEID, NETWORKID);
   radio.encrypt(ENCRYPTKEY);
   radio.enableAutoPower(ATC_RSSI);
 
@@ -76,92 +78,109 @@ void setup() {
   sensor2.setAddress((uint8_t)25);
 
   sensor1.setMeasurementTimingBudget(20000);
-  sensor1.startContinuous();
   sensor2.setMeasurementTimingBudget(20000);
-  sensor2.startContinuous();
 
   calibrate();
   radio.sendWithRetry(GATEWAYID, "START", 5);
+  radio.sleep();
+
+  digitalWrite(LED, LOW);
 }
 
-void calibrate() {
-  Serial.print("Calibrating for ~10 seconds... ");
-  for(int i = 0; i < 500; i++){
-    read_sensor1();
-    read_sensor2();
-    delay(1); // needed to reset watchdog timer
+volatile boolean motionEnded = true;
+
+void motion() {
+  if (digitalRead(PIR) == HIGH) {
+    motionEnded = false;
+  } else {
+    motionEnded = true;
   }
-  Serial.println("done.");
 }
 
 static const int POWER = 256;
 static const int PADDING = 228; // 90% of 256
-static const int SLOW_ALPHA = 18; // 7% of 256
-static const int FAST_ALPHA = 38; // 15% of 256
+static const int ALPHA = 38; // 15% of 256
 
+static uint16_t avg1 = 0;
+static uint16_t avg2 = 0;
 static uint16_t sensor1_range = 0;
 static uint16_t sensor2_range = 0;
 
+void calibrate() {
+  Serial.print("Calibrating for ~30 seconds... ");
+  uint16_t range = 0;
+  for(int i = 0; i < 750; i++){
+    range = sensor1.readRangeSingleMillimeters();
+    if (range < TIMEOUT_THRESHOLD) {
+      avg1 = (avg1 == 0 ? range : (ALPHA * range + (POWER - ALPHA) * avg1) / POWER);
+    }
+
+    range = sensor2.readRangeSingleMillimeters();
+    if (range < TIMEOUT_THRESHOLD) {
+      avg2 = (avg2 == 0 ? range : (ALPHA * range + (POWER - ALPHA) * avg2) / POWER);
+    }
+
+    delay(1); // needed to reset watchdog timer
+  }
+
+  Serial.println("done.");
+}
+
+#define SENSOR_LOW   0
+#define SENSOR_HIGH  1
+#define SENSOR_ERROR 2
+
 uint8_t read_sensor1() {
-  uint16_t range = sensor1.readRangeContinuousMillimeters();
+  uint16_t range = sensor1.readRangeSingleMillimeters();
   if (range > TIMEOUT_THRESHOLD) {
     Serial.println("sensor 1 error");
     return SENSOR_ERROR;
   }
 
   sensor1_range = range;
-  static uint16_t avg = range;
 
-  if (range < (PADDING*avg/POWER)) {
+  if (range < (PADDING*avg1/POWER)) {
     Serial.print("sensor1: ");
     Serial.print(range);
     Serial.print("/");
-    Serial.println(avg);
-    avg = (SLOW_ALPHA * range + (POWER - SLOW_ALPHA) * avg) / POWER;
+    Serial.println(avg1);
     return SENSOR_HIGH;
   } else {
-    // learn faster when sensor is not active
-    avg = (FAST_ALPHA * range + (POWER - FAST_ALPHA) * avg) / POWER;
     return SENSOR_LOW;
   }
 }
 
 uint8_t read_sensor2() {
-  uint16_t range = sensor2.readRangeContinuousMillimeters();
+  uint16_t range = sensor2.readRangeSingleMillimeters();
   if (range > TIMEOUT_THRESHOLD) {
     Serial.println("sensor 2 error");
     return SENSOR_ERROR;
   }
 
   sensor2_range = range;
-  static uint16_t avg = range;
   
-  if (range < (PADDING*avg/POWER)) {
+  if (range < (PADDING*avg2/POWER)) {
     Serial.print("sensor2: ");
     Serial.print(range);
     Serial.print("/");
-    Serial.println(avg);
-    avg = (SLOW_ALPHA * range + (POWER - SLOW_ALPHA) * avg) / POWER;
+    Serial.println(avg2);
     return SENSOR_HIGH;
   } else {
-    // learn faster when sensor is not active
-    avg = (FAST_ALPHA * range + (POWER - FAST_ALPHA) * avg) / POWER;
     return SENSOR_LOW;
   }
 }
 
-void loop() {
-  static uint8_t _start = 0;
-  static uint8_t _end = 0;
-  static uint8_t confidence = 0;
+static uint8_t _start = 0;
+static uint8_t _end = 0;
+static uint8_t confidence = 0;
 
+void run_sensor() {
   uint8_t s1 = read_sensor1();
   uint8_t s2 = read_sensor2();
 
   if (s1 == SENSOR_ERROR || s2 == SENSOR_ERROR) {
     // at least one of the readings is definitely wrong,
     // let's just skip this cycle and try again.
-    radio.sendWithRetry(GATEWAYID, "ERROR", 5);
     return;
   }
 
@@ -183,23 +202,17 @@ void loop() {
         if (dir == 1) {
           // moved from sensor 2 to sensor 1
           radio.sendWithRetry(GATEWAYID, "2-1", 3);
+          radio.sleep();
           Serial.println("---- 2-1 ----");
         } else if (dir == -1) {
           // moved from sensor 1 to sensor 2
           radio.sendWithRetry(GATEWAYID, "1-2", 3);
+          radio.sleep();
           Serial.println("---- 1-2 ----");
         }
       }
 
-      if (_start != 0 || _end != 0) {
-        Serial.println("all clear!");
-        Serial.println();
-        Serial.println();
-      }
-      // reset values
-      _start = 0;
-      _end = 0;
-      confidence = 0;
+      reset_sensor();
     } else {
       // we are in the middle of both lasers
       confidence++;
@@ -219,7 +232,6 @@ void loop() {
         }
       }
     }
-    Blink(LED,3);
   } else {
     confidence++;
     // there is activity on one side or the other
@@ -232,18 +244,29 @@ void loop() {
       // activity is ongoing, track where it might end.
       _end = (diff == 1 ? 1 : 2);
     }
-    Blink(LED,3);
-    radio.sendWithRetry(GATEWAYID, "READ", 4);
   }
-
-  radio.sleep();
 }
 
-void Blink(byte PIN, int DELAY_MS)
-{
-  pinMode(PIN, OUTPUT);
-  digitalWrite(PIN,HIGH);
-  delay(DELAY_MS);
-  digitalWrite(PIN,LOW);
+void reset_sensor(){
+  if (_start != 0 || _end != 0) {
+    Serial.println("all clear!");
+    Serial.println();
+    Serial.println();
+  }
+  // reset values
+  _start = 0;
+  _end = 0;
+  confidence = 0;
+}
+
+void loop() {
+  if (motionEnded) {
+    reset_sensor();
+    Serial.println("night night");
+    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
+    Serial.println("morning!");
+  }
+
+  run_sensor();
 }
 
