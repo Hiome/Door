@@ -9,7 +9,6 @@
 
 #include <Wire.h>
 #include <VL53L0X.h>
-
 #include <RFM69_ATC.h>
 #include <SPI.h>
 #include <LowPower.h>
@@ -20,6 +19,7 @@
 #define xshut1 4
 #define xshut2 5
 #define LED    9
+#define BATT   A7
 
 #define TIMEOUT_THRESHOLD 7000
 #define CONFIDENCE_THRESHOLD 4
@@ -81,8 +81,7 @@ void setup() {
   sensor2.setMeasurementTimingBudget(20000);
 
   calibrate();
-  radio.sendWithRetry(GATEWAYID, "START", 5);
-  radio.sleep();
+  publish("ON");
 
   digitalWrite(LED, LOW);
 }
@@ -201,14 +200,10 @@ void run_sensor() {
         int dir = _start - _end;
         if (dir == 1) {
           // moved from sensor 2 to sensor 1
-          radio.sendWithRetry(GATEWAYID, "2-1", 3);
-          radio.sleep();
-          Serial.println("---- 2-1 ----");
+          publish("2-1");
         } else if (dir == -1) {
           // moved from sensor 1 to sensor 2
-          radio.sendWithRetry(GATEWAYID, "1-2", 3);
-          radio.sleep();
-          Serial.println("---- 1-2 ----");
+          publish("1-2");
         }
       }
 
@@ -259,12 +254,25 @@ void reset_sensor(){
   confidence = 0;
 }
 
+char sendBuf[10];
+char BATstr[5];
+
+void publish(char* msg) {
+  checkBattery();
+  sprintf(sendBuf, "%s;%sv", msg, BATstr);
+  radio.sendWithRetry(GATEWAYID, sendBuf, strlen(sendBuf));
+  radio.sleep();
+}
+
+void checkBattery() {
+  float batteryVolts = analogRead(BATT) * 0.00644;
+  dtostrf(batteryVolts, 3,2, BATstr);
+}
+
 void loop() {
   if (motionEnded) {
     reset_sensor();
-    Serial.println("night night");
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
-    Serial.println("morning!");
   }
 
   run_sensor();
