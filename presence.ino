@@ -15,14 +15,15 @@
 #include <SPIFlash.h>
 
 /* Pin Connections */
-#define PIR    3
+#define PIR1   2
+#define PIR2   3
 #define xshut1 4
 #define xshut2 5
 #define LED    9
 #define BATT   A7
 
 #define TIMEOUT_THRESHOLD 7000
-#define CONFIDENCE_THRESHOLD 4
+#define CONFIDENCE_THRESHOLD 3
 #define SERIAL_BAUD    115200
 
 #define NODEID        2   //unique for each node on same network
@@ -39,12 +40,17 @@ SPIFlash flash(FLASH_SS, 0xEF30); //EF30 for 4mbit  Windbond chip (W25X40CL)
 VL53L0X sensor1;
 VL53L0X sensor2;
 
+// just wake up
+void motion() {}
+
 void setup() {
   pinMode(LED, OUTPUT);
   digitalWrite(LED, HIGH);
 
-  pinMode(PIR, INPUT);
-  attachInterrupt(digitalPinToInterrupt(PIR), motion, CHANGE);
+  pinMode(PIR1, INPUT);
+  attachInterrupt(digitalPinToInterrupt(PIR1), motion, RISING);
+  pinMode(PIR2, INPUT);
+  attachInterrupt(digitalPinToInterrupt(PIR2), motion, RISING);
 
   pinMode(xshut1, OUTPUT);
   pinMode(xshut2, OUTPUT);
@@ -86,20 +92,6 @@ void setup() {
   digitalWrite(LED, LOW);
 }
 
-volatile boolean motionEnded = true;
-
-void motion() {
-  if (digitalRead(PIR) == HIGH) {
-    motionEnded = false;
-  } else {
-    motionEnded = true;
-  }
-}
-
-static const int POWER = 256;
-static const int PADDING = 228; // 90% of 256
-static const int ALPHA = 38; // 15% of 256
-
 static uint16_t avg1 = 0;
 static uint16_t avg2 = 0;
 static uint16_t sensor1_range = 0;
@@ -108,21 +100,35 @@ static uint16_t sensor2_range = 0;
 void calibrate() {
   Serial.print("Calibrating for ~30 seconds... ");
   uint16_t range = 0;
+  uint32_t sum1 = 0;
+  uint32_t sum2 = 0;
+  uint16_t count1 = 0;
+  uint16_t count2 = 0;
   for(int i = 0; i < 750; i++){
     range = sensor1.readRangeSingleMillimeters();
     if (range < TIMEOUT_THRESHOLD) {
-      avg1 = (avg1 == 0 ? range : (ALPHA * range + (POWER - ALPHA) * avg1) / POWER);
+      sum1 += range;
+      count1++;
     }
 
     range = sensor2.readRangeSingleMillimeters();
     if (range < TIMEOUT_THRESHOLD) {
-      avg2 = (avg2 == 0 ? range : (ALPHA * range + (POWER - ALPHA) * avg2) / POWER);
+      sum2 += range;
+      count2++;
     }
 
     delay(1); // needed to reset watchdog timer
   }
 
+  avg1 = sum1/count1;
+  avg2 = sum2/count2;
+
   Serial.println("done.");
+
+  Serial.print("avg1 is ");
+  Serial.println(avg1);
+  Serial.print("avg2 is ");
+  Serial.println(avg2);
 }
 
 #define SENSOR_LOW   0
@@ -137,8 +143,9 @@ uint8_t read_sensor1() {
   }
 
   sensor1_range = range;
+  static const uint16_t padded_avg = avg1 * 0.9;
 
-  if (range < (PADDING*avg1/POWER)) {
+  if (range < padded_avg) {
     Serial.print("sensor1: ");
     Serial.print(range);
     Serial.print("/");
@@ -157,8 +164,9 @@ uint8_t read_sensor2() {
   }
 
   sensor2_range = range;
+  static const uint16_t padded_avg = avg2 * 0.9;
   
-  if (range < (PADDING*avg2/POWER)) {
+  if (range < padded_avg) {
     Serial.print("sensor2: ");
     Serial.print(range);
     Serial.print("/");
@@ -270,7 +278,16 @@ void checkBattery() {
 }
 
 void loop() {
-  if (motionEnded) {
+  static int cyclesRemaining = 1;
+
+  if (digitalRead(PIR1) == HIGH || digitalRead(PIR2) == HIGH) {
+    cyclesRemaining = 20;
+  } else {
+    cyclesRemaining--;
+  }
+
+  if (cyclesRemaining == 0) {
+    Serial.println("good night");
     reset_sensor();
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
   }
