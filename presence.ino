@@ -9,7 +9,6 @@
 
 #define EI_NOTEXTERNAL
 #include <EnableInterrupt.h>
-
 #include <Wire.h>
 #include <VL53L0X.h>
 #include <RFM69_ATC.h>
@@ -162,11 +161,6 @@ void calibrate() {
   sprintf(avg_arr2, "%d", avg2);
   publish(avg_arr1);
   publish(avg_arr2);
-
-  Serial.print("avg1 is ");
-  Serial.println(avg1);
-  Serial.print("avg2 is ");
-  Serial.println(avg2);
 }
 
 #define SENSOR_LOW   0
@@ -175,9 +169,7 @@ void calibrate() {
 
 uint8_t read_sensor1() {
   if (!enable_sensor1) {
-    Serial.flush();
     LowPower.powerDown(SLEEP_15MS, ADC_OFF, BOD_ON);
-    Serial.flush();
     return SENSOR_ERROR;
   }
 
@@ -203,9 +195,7 @@ uint8_t read_sensor1() {
 
 uint8_t read_sensor2() {
   if (!enable_sensor2) {
-    Serial.flush();
     LowPower.powerDown(SLEEP_15MS, ADC_OFF, BOD_ON);
-    Serial.flush();
     return SENSOR_ERROR;
   }
 
@@ -344,9 +334,7 @@ void loop() {
     enable_sensor1 = false;
     enable_sensor2 = false;
     publish("gn");
-    Serial.flush();
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
-    Serial.flush();
     publish("hi");
   }
 
