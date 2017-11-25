@@ -7,6 +7,9 @@
  *  
  */
 
+#define EI_NOTEXTERNAL
+#include <EnableInterrupt.h>
+
 #include <Wire.h>
 #include <VL53L0X.h>
 #include <RFM69_ATC.h>
@@ -15,10 +18,10 @@
 #include <SPIFlash.h>
 
 /* Pin Connections */
-#define PIR1   2
-#define PIR2   3
 #define xshut1 4
 #define xshut2 5
+#define PIR1   6
+#define PIR2   7
 #define LED    9
 #define BATT   A7
 
@@ -41,23 +44,35 @@ VL53L0X sensor1;
 VL53L0X sensor2;
 
 // just wake up
-void motion() {}
+volatile int cyclesRemaining;
+volatile boolean enable_sensor1;
+volatile boolean enable_sensor2;
+void motion1() {
+  enable_sensor1 = true;
+  cyclesRemaining = 125;
+  publish("m1");
+}
+void motion2() {
+  enable_sensor2 = true;
+  cyclesRemaining = 125;
+  publish("m2");
+}
 
 void setup() {
+  Serial.begin(SERIAL_BAUD);
+
   pinMode(LED, OUTPUT);
   digitalWrite(LED, HIGH);
 
   pinMode(PIR1, INPUT);
-  attachInterrupt(digitalPinToInterrupt(PIR1), motion, RISING);
+  enableInterrupt(PIR1, motion1, RISING);
   pinMode(PIR2, INPUT);
-  attachInterrupt(digitalPinToInterrupt(PIR2), motion, RISING);
+  enableInterrupt(PIR2, motion2, RISING);
 
   pinMode(xshut1, OUTPUT);
   pinMode(xshut2, OUTPUT);
   digitalWrite(xshut1, LOW);
   digitalWrite(xshut2, LOW);
-
-  Serial.begin(SERIAL_BAUD);
 
   if (flash.initialize()) {
     Serial.println("Initialized flash...");
@@ -87,6 +102,7 @@ void setup() {
   sensor2.setMeasurementTimingBudget(20000);
 
   calibrate();
+  cyclesRemaining = 1;
   publish("ON");
 
   digitalWrite(LED, LOW);
@@ -97,7 +113,22 @@ static uint16_t avg2 = 0;
 static uint16_t sensor1_range = 0;
 static uint16_t sensor2_range = 0;
 
+void blink(int times) {
+  while (times > 0) {
+    digitalWrite(LED, LOW);
+    delay(125);
+    digitalWrite(LED, HIGH);
+    delay(250);
+    digitalWrite(LED, LOW);
+    delay(125);
+    times--;
+  }
+}
+
 void calibrate() {
+  blink(4); // give the user 2 seconds to get out of the way
+  digitalWrite(LED, HIGH);
+
   Serial.print("Calibrating for ~30 seconds... ");
   uint16_t range = 0;
   uint32_t sum1 = 0;
@@ -125,6 +156,13 @@ void calibrate() {
 
   Serial.println("done.");
 
+  char avg_arr1[5];
+  char avg_arr2[5];
+  sprintf(avg_arr1, "%d", avg1);
+  sprintf(avg_arr2, "%d", avg2);
+  publish(avg_arr1);
+  publish(avg_arr2);
+
   Serial.print("avg1 is ");
   Serial.println(avg1);
   Serial.print("avg2 is ");
@@ -136,6 +174,13 @@ void calibrate() {
 #define SENSOR_ERROR 2
 
 uint8_t read_sensor1() {
+  if (!enable_sensor1) {
+    Serial.flush();
+    LowPower.powerDown(SLEEP_15MS, ADC_OFF, BOD_ON);
+    Serial.flush();
+    return SENSOR_ERROR;
+  }
+
   uint16_t range = sensor1.readRangeSingleMillimeters();
   if (range > TIMEOUT_THRESHOLD) {
     Serial.println("sensor 1 error");
@@ -157,6 +202,13 @@ uint8_t read_sensor1() {
 }
 
 uint8_t read_sensor2() {
+  if (!enable_sensor2) {
+    Serial.flush();
+    LowPower.powerDown(SLEEP_15MS, ADC_OFF, BOD_ON);
+    Serial.flush();
+    return SENSOR_ERROR;
+  }
+
   uint16_t range = sensor2.readRangeSingleMillimeters();
   if (range > TIMEOUT_THRESHOLD) {
     Serial.println("sensor 2 error");
@@ -185,8 +237,16 @@ void run_sensor() {
   uint8_t s1 = read_sensor1();
   uint8_t s2 = read_sensor2();
 
-  if (s1 == SENSOR_ERROR || s2 == SENSOR_ERROR) {
-    // at least one of the readings is definitely wrong,
+  if (s1 == SENSOR_HIGH && !enable_sensor2) {
+    // motion detected, turn on the other sensor
+    s2 = SENSOR_LOW;
+    enable_sensor2 = true;
+  } else if (s2 == SENSOR_HIGH && !enable_sensor1) {
+    // motion detected, turn on the other sensor
+    s1 = SENSOR_LOW;
+    enable_sensor1 = true;
+  } else if (s1 == SENSOR_ERROR || s2 == SENSOR_ERROR) {
+    // at least one of the readings is definitely missing,
     // let's just skip this cycle and try again.
     return;
   }
@@ -262,13 +322,13 @@ void reset_sensor(){
   confidence = 0;
 }
 
-char sendBuf[10];
+char sendBuf[12];
 char BATstr[5];
 
 void publish(char* msg) {
   checkBattery();
-  sprintf(sendBuf, "%s;%sv", msg, BATstr);
-  radio.sendWithRetry(GATEWAYID, sendBuf, strlen(sendBuf));
+  int len = sprintf(sendBuf, "%s;%sv", msg, BATstr);
+  radio.sendWithRetry(GATEWAYID, sendBuf, len);
   radio.sleep();
 }
 
@@ -278,18 +338,16 @@ void checkBattery() {
 }
 
 void loop() {
-  static int cyclesRemaining = 1;
-
-  if (digitalRead(PIR1) == HIGH || digitalRead(PIR2) == HIGH) {
-    cyclesRemaining = 20;
-  } else {
-    cyclesRemaining--;
-  }
-
+  cyclesRemaining--;
   if (cyclesRemaining == 0) {
-    Serial.println("good night");
     reset_sensor();
+    enable_sensor1 = false;
+    enable_sensor2 = false;
+    publish("gn");
+    Serial.flush();
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
+    Serial.flush();
+    publish("hi");
   }
 
   run_sensor();
