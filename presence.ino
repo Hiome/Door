@@ -259,16 +259,20 @@ void run_sensor() {
         if (dir == 1) {
           // moved from sensor 2 to sensor 1
           publish("2-1");
+          Serial.println("published 2-1");
         } else if (dir == -1) {
           // moved from sensor 1 to sensor 2
           publish("1-2");
+          Serial.println("published 1-2");
         }
       }
 
+      Serial.println("naturally resetting sensors...");
       reset_sensor();
     } else {
       // we are in the middle of both lasers
       confidence++;
+      cyclesRemaining++;
       if (sensor1_range != sensor2_range) {
         // try to guess what direction we're moving
         uint8_t closer_sensor = (sensor1_range < sensor2_range ? 1 : 2);
@@ -287,6 +291,7 @@ void run_sensor() {
     }
   } else {
     confidence++;
+    cyclesRemaining++;
     // there is activity on one side or the other
     if (_start == 0) {
       // activity is just starting.
