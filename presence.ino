@@ -17,10 +17,14 @@
 #include <SPIFlash.h>
 
 /* Pin Connections */
-#define xshut1 4
-#define xshut2 5
-#define PIR1   6
-#define PIR2   7
+//#define xshut1 4
+//#define xshut2 5
+//#define PIR1   6
+//#define PIR2   7
+#define PIR1   4
+#define PIR2   5
+#define xshut1 6
+#define xshut2 7
 #define LED    9
 #define BATT   A7
 
@@ -28,7 +32,7 @@
 #define CONFIDENCE_THRESHOLD 3
 #define SERIAL_BAUD    115200
 
-#define NODEID        2   //unique for each node on same network
+#define NODEID        3   //unique for each node on same network
 #define NETWORKID     27  //the same on all nodes that talk to each other
 #define GATEWAYID     1
 #define ENCRYPTKEY    "smarterisbetters" //exactly the same 16 characters/bytes on all nodes!
@@ -334,7 +338,7 @@ void checkBattery() {
 
 void loop() {
   cyclesRemaining--;
-  if (cyclesRemaining == 0) {
+  if (cyclesRemaining <= 0) {
     reset_sensor();
     enable_sensor1 = false;
     enable_sensor2 = false;
