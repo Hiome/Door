@@ -32,7 +32,7 @@
 #define CONFIDENCE_THRESHOLD 3
 #define SERIAL_BAUD    115200
 
-#define NODEID        3   //unique for each node on same network
+#define NODEID        2   //unique for each node on same network
 #define NETWORKID     27  //the same on all nodes that talk to each other
 #define GATEWAYID     1
 #define ENCRYPTKEY    "smarterisbetters" //exactly the same 16 characters/bytes on all nodes!
@@ -47,7 +47,7 @@ VL53L0X sensor1;
 VL53L0X sensor2;
 
 // just wake up
-volatile int cyclesRemaining;
+volatile uint8_t cyclesRemaining;
 volatile boolean enable_sensor1;
 volatile boolean enable_sensor2;
 void motion1() {
@@ -116,7 +116,7 @@ static uint16_t avg2 = 0;
 static uint16_t sensor1_range = 0;
 static uint16_t sensor2_range = 0;
 
-void blink(int times) {
+void blink(uint8_t times) {
   while (times > 0) {
     digitalWrite(LED, LOW);
     delay(125);
@@ -247,7 +247,7 @@ void run_sensor() {
 
   // s1 and s2 are each either 1 or 0, depending on activity, so
   // diff can be either 1 (1 - 0), 0 (1 - 1, 0 - 0), or -1 (0 - 1)
-  int diff = s1 - s2;
+  int8_t diff = s1 - s2;
 
   if (diff == 0) {
     // either there is no activity or user is in the middle of both
@@ -259,7 +259,7 @@ void run_sensor() {
         // _start and _end can be either 1 or 2 (see below), so
         // dir can be either 1 (2 - 1), 0 (1 - 1, 2 - 2), or -1 (1 - 2).
         // 0 means the user walked in and out on the same side, don't care.
-        int dir = _start - _end;
+        int8_t dir = _start - _end;
         if (dir == 1) {
           // moved from sensor 2 to sensor 1
           publish("2-1");
@@ -326,7 +326,7 @@ char BATstr[5];
 
 void publish(char* msg) {
   checkBattery();
-  int len = sprintf(sendBuf, "%s;%sv", msg, BATstr);
+  uint8_t len = sprintf(sendBuf, "%s;%sv", msg, BATstr);
   radio.sendWithRetry(GATEWAYID, sendBuf, len);
   radio.sleep();
 }
@@ -338,6 +338,11 @@ void checkBattery() {
 
 void loop() {
   cyclesRemaining--;
+  if (confidence > 100) {
+    // prevent an overflow
+    confidence = 10;
+  }
+
   if (cyclesRemaining <= 0) {
     reset_sensor();
     enable_sensor1 = false;
