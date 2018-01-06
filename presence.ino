@@ -38,6 +38,11 @@
 #define ENCRYPTKEY    "smarterisbetters" //exactly the same 16 characters/bytes on all nodes!
 #define ATC_RSSI      -90
 
+//#define Sprintln(a) (Serial.println(a))
+//#define Sprint(a) (Serial.print(a))
+#define Sprintln(a)
+#define Sprint(a)
+
 RFM69_ATC radio;
 
 #define FLASH_SS      8 // and FLASH SS on D8 on regular Moteinos (D23 on MoteinoMEGA)
@@ -78,7 +83,7 @@ void setup() {
   digitalWrite(xshut2, LOW);
 
   if (flash.initialize()) {
-    Serial.println("Initialized flash...");
+    Sprintln("Initialized flash...");
     flash.sleep();
   }
 
@@ -87,14 +92,14 @@ void setup() {
   radio.encrypt(ENCRYPTKEY);
   radio.enableAutoPower(ATC_RSSI);
 
-  Serial.println("Initializing Sensor 1...");
+  Sprintln("Initializing Sensor 1...");
   pinMode(xshut1, INPUT);
   delay(150);
   sensor1.init();
   delay(100);
   sensor1.setAddress((uint8_t)22);
   
-  Serial.println("Initializing Sensor 2...");
+  Sprintln("Initializing Sensor 2...");
   pinMode(xshut2, INPUT);
   delay(150);
   sensor2.init();
@@ -132,7 +137,7 @@ void calibrate() {
   blink(4); // give the user 2 seconds to get out of the way
   digitalWrite(LED, HIGH);
 
-  Serial.print("Calibrating for ~30 seconds... ");
+  Sprint("Calibrating for ~30 seconds... ");
   uint16_t range = 0;
   uint32_t sum1 = 0;
   uint32_t sum2 = 0;
@@ -157,7 +162,7 @@ void calibrate() {
   avg1 = sum1/count1;
   avg2 = sum2/count2;
 
-  Serial.println("done.");
+  Sprintln("done.");
 
   char avg_arr1[5];
   char avg_arr2[5];
@@ -179,7 +184,7 @@ uint8_t read_sensor1() {
 
   uint16_t range = sensor1.readRangeSingleMillimeters();
   if (range > TIMEOUT_THRESHOLD) {
-    Serial.println("sensor 1 error");
+    Sprintln("sensor 1 error");
     return SENSOR_ERROR;
   }
 
@@ -187,10 +192,10 @@ uint8_t read_sensor1() {
   static const uint16_t padded_avg = avg1 * 0.9;
 
   if (range < padded_avg) {
-    Serial.print("sensor1: ");
-    Serial.print(range);
-    Serial.print("/");
-    Serial.println(avg1);
+    Sprint("sensor1: ");
+    Sprint(range);
+    Sprint("/");
+    Sprintln(avg1);
     return SENSOR_HIGH;
   } else {
     return SENSOR_LOW;
@@ -205,7 +210,7 @@ uint8_t read_sensor2() {
 
   uint16_t range = sensor2.readRangeSingleMillimeters();
   if (range > TIMEOUT_THRESHOLD) {
-    Serial.println("sensor 2 error");
+    Sprintln("sensor 2 error");
     return SENSOR_ERROR;
   }
 
@@ -213,10 +218,10 @@ uint8_t read_sensor2() {
   static const uint16_t padded_avg = avg2 * 0.9;
   
   if (range < padded_avg) {
-    Serial.print("sensor2: ");
-    Serial.print(range);
-    Serial.print("/");
-    Serial.println(avg2);
+    Sprint("sensor2: ");
+    Sprint(range);
+    Sprint("/");
+    Sprintln(avg2);
     return SENSOR_HIGH;
   } else {
     return SENSOR_LOW;
@@ -263,15 +268,15 @@ void run_sensor() {
         if (dir == 1) {
           // moved from sensor 2 to sensor 1
           publish("2-1");
-          Serial.println("published 2-1");
+          Sprintln("published 2-1");
         } else if (dir == -1) {
           // moved from sensor 1 to sensor 2
           publish("1-2");
-          Serial.println("published 1-2");
+          Sprintln("published 1-2");
         }
       }
 
-      Serial.println("naturally resetting sensors...");
+      Sprintln("naturally resetting sensors...");
       reset_sensor();
     } else {
       // we are in the middle of both lasers
@@ -283,13 +288,13 @@ void run_sensor() {
         if (_start == 0) {
           // somehow we didn't pick up a starting side, let's guess it
           _start = closer_sensor;
-          Serial.print("guessing start ");
-          Serial.println(_start);
+          Sprint("guessing start ");
+          Sprintln(_start);
         } else {
           // guess ending direction, in case we don't pick up the ending side
           _end = closer_sensor;
-          Serial.print("guessing direction ");
-          Serial.println(_end);
+          Sprint("guessing direction ");
+          Sprintln(_end);
         }
       }
     }
@@ -311,9 +316,9 @@ void run_sensor() {
 
 void reset_sensor(){
   if (_start != 0 || _end != 0) {
-    Serial.println("all clear!");
-    Serial.println();
-    Serial.println();
+    Sprintln("all clear!");
+    Sprintln();
+    Sprintln();
   }
   // reset values
   _start = 0;
