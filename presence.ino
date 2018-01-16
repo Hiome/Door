@@ -2,7 +2,7 @@
  *  Check VL53L0X sensors repeatedly for human presence and direction of movement.
  *  Reads sensor data and streams any changes over an RFM69 radio.
  *  
- *  Copyright 2017 Neil Gupta
+ *  Copyright 2018 Neil Gupta
  *  All rights reserved.
  *  
  */
@@ -25,9 +25,10 @@
 #define LED    9
 #define BATT   A7
 
-#define TIMEOUT_THRESHOLD 7000
+#define TIMEOUT_THRESHOLD    7000
+#define MOTIONONLY_THRESHOLD 1000
 #define CONFIDENCE_THRESHOLD 3
-#define SERIAL_BAUD    115200
+#define SERIAL_BAUD   115200
 
 #define NODEID        2   //unique for each node on same network
 #define NETWORKID     27  //the same on all nodes that talk to each other
@@ -148,7 +149,7 @@ void calibrate() {
   uint32_t sum2 = 0;
   uint16_t count1 = 0;
   uint16_t count2 = 0;
-  for(int i = 0; i < 750; i++){
+  for (uint16_t i = 0; i < 750; i++) {
     range = sensor1.readRangeSingleMillimeters();
     if (range < TIMEOUT_THRESHOLD) {
       sum1 += range;
@@ -235,12 +236,24 @@ uint8_t read_sensor2() {
 
 static uint8_t _start = 0;
 static uint8_t _end = 0;
-static uint8_t confidence = 0;
+static int8_t confidence = 0;
 
 void check_motion_sensors() {
+  // if all 3 motion sensors picked up motion but
+  // the LIDAR sensors failed to detect enough data
+  // points, we can still guess what happened based
+  // on the order of the motion sensor triggers
   if (motion0_at && motion1_at && motion2_at &&
-      confidence < CONFIDENCE_THRESHOLD &&
-      abs(motion1_at - motion2_at) < 1000) {
+      confidence < CONFIDENCE_THRESHOLD) {
+    long time_diff = motion1_at - motion2_at;
+    if (abs(time_diff) > MOTIONONLY_THRESHOLD) {
+      return;
+    }
+
+    Sprintln("reading motion sensors...");
+    _start = 0;
+    _end = 0;
+
     if (motion1_at <= motion0_at) {
       _start = 1;
     } else if (motion2_at <= motion0_at) {
@@ -252,7 +265,9 @@ void check_motion_sensors() {
       _end = 2;
     }
 
-    confidence = CONFIDENCE_THRESHOLD;
+    if (_start > 0 && _end > 0) {
+      confidence = CONFIDENCE_THRESHOLD;
+    }
   }
 }
 
@@ -271,6 +286,8 @@ void run_sensor() {
   } else if (s1 == SENSOR_ERROR || s2 == SENSOR_ERROR) {
     // at least one of the readings is definitely missing,
     // let's just skip this cycle and try again.
+    confidence--;
+    confidence = max(confidence, 0);
     return;
   }
 
@@ -281,9 +298,11 @@ void run_sensor() {
   if (diff == 0) {
     // either there is no activity or user is in the middle of both
     // sensors, so we know nothing about directional intent anyway.
-    if (s1 == SENSOR_LOW && s2 == SENSOR_LOW) {
-      // there's no activity
+    if (s1 == SENSOR_LOW && s2 == SENSOR_LOW) { // there's no LIDAR activity
+      // check what the motion sensors saw
       check_motion_sensors();
+
+      // evaluate all the data collected so far
       if (confidence >= CONFIDENCE_THRESHOLD) {
         // activity just ended with enough data points.
         // _start and _end can be either 1 or 2 (see below), so
@@ -372,7 +391,7 @@ void loop() {
     confidence = 10;
   }
 
-  if (cyclesRemaining <= 0) {
+  if (cyclesRemaining == 0) {
     reset_sensor();
     enable_sensor1 = false;
     enable_sensor2 = false;
