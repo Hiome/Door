@@ -17,10 +17,7 @@
 #include <SPIFlash.h>
 
 /* Pin Connections */
-//#define xshut1 4
-//#define xshut2 5
-//#define PIR1   6
-//#define PIR2   7
+#define PIR0   3
 #define PIR1   4
 #define PIR2   5
 #define xshut1 6
@@ -38,10 +35,10 @@
 #define ENCRYPTKEY    "smarterisbetters" //exactly the same 16 characters/bytes on all nodes!
 #define ATC_RSSI      -90
 
-//#define Sprintln(a) (Serial.println(a))
-//#define Sprint(a) (Serial.print(a))
-#define Sprintln(a)
-#define Sprint(a)
+#define Sprintln(a) (Serial.println(a))
+#define Sprint(a) (Serial.print(a))
+//#define Sprintln(a)
+//#define Sprint(a)
 
 RFM69_ATC radio;
 
@@ -52,18 +49,24 @@ VL53L0X sensor1;
 VL53L0X sensor2;
 
 // just wake up
+volatile unsigned long motion0_at;
+volatile unsigned long motion1_at;
+volatile unsigned long motion2_at;
 volatile uint8_t cyclesRemaining;
 volatile boolean enable_sensor1;
 volatile boolean enable_sensor2;
+void motion0() {
+  motion0_at = millis();
+}
 void motion1() {
   enable_sensor1 = true;
   cyclesRemaining = 125;
-  publish("m1");
+  motion1_at = millis();
 }
 void motion2() {
   enable_sensor2 = true;
   cyclesRemaining = 125;
-  publish("m2");
+  motion2_at = millis();
 }
 
 void setup() {
@@ -72,6 +75,8 @@ void setup() {
   pinMode(LED, OUTPUT);
   digitalWrite(LED, HIGH);
 
+  pinMode(PIR0, INPUT);
+  attachInterrupt(digitalPinToInterrupt(PIR0), motion0, RISING);
   pinMode(PIR1, INPUT);
   enableInterrupt(PIR1, motion1, RISING);
   pinMode(PIR2, INPUT);
@@ -189,7 +194,7 @@ uint8_t read_sensor1() {
   }
 
   sensor1_range = range;
-  static const uint16_t padded_avg = avg1 * 0.9;
+  static const uint16_t padded_avg = avg1 * 0.95;
 
   if (range < padded_avg) {
     Sprint("sensor1: ");
@@ -215,7 +220,7 @@ uint8_t read_sensor2() {
   }
 
   sensor2_range = range;
-  static const uint16_t padded_avg = avg2 * 0.9;
+  static const uint16_t padded_avg = avg2 * 0.95;
   
   if (range < padded_avg) {
     Sprint("sensor2: ");
@@ -231,6 +236,25 @@ uint8_t read_sensor2() {
 static uint8_t _start = 0;
 static uint8_t _end = 0;
 static uint8_t confidence = 0;
+
+void check_motion_sensors() {
+  if (motion0_at && motion1_at && motion2_at &&
+      confidence < CONFIDENCE_THRESHOLD &&
+      abs(motion1_at - motion2_at) < 1000) {
+    if (motion1_at <= motion0_at) {
+      _start = 1;
+    } else if (motion2_at <= motion0_at) {
+      _start = 2;
+    }
+    if (motion1_at > motion0_at) {
+      _end = 1;
+    } else if (motion2_at > motion0_at) {
+      _end = 2;
+    }
+
+    confidence = CONFIDENCE_THRESHOLD;
+  }
+}
 
 void run_sensor() {
   uint8_t s1 = read_sensor1();
@@ -259,7 +283,8 @@ void run_sensor() {
     // sensors, so we know nothing about directional intent anyway.
     if (s1 == SENSOR_LOW && s2 == SENSOR_LOW) {
       // there's no activity
-      if (confidence > CONFIDENCE_THRESHOLD) {
+      check_motion_sensors();
+      if (confidence >= CONFIDENCE_THRESHOLD) {
         // activity just ended with enough data points.
         // _start and _end can be either 1 or 2 (see below), so
         // dir can be either 1 (2 - 1), 0 (1 - 1, 2 - 2), or -1 (1 - 2).
@@ -268,62 +293,61 @@ void run_sensor() {
         if (dir == 1) {
           // moved from sensor 2 to sensor 1
           publish("2-1");
-          Sprintln("published 2-1");
+          Sprintln("published 2-1\n\n");
         } else if (dir == -1) {
           // moved from sensor 1 to sensor 2
           publish("1-2");
-          Sprintln("published 1-2");
+          Sprintln("published 1-2\n\n");
         }
       }
 
-      Sprintln("naturally resetting sensors...");
       reset_sensor();
-    } else {
-      // we are in the middle of both lasers
-      confidence++;
-      cyclesRemaining++;
-      if (sensor1_range != sensor2_range) {
-        // try to guess what direction we're moving
-        uint8_t closer_sensor = (sensor1_range < sensor2_range ? 1 : 2);
-        if (_start == 0) {
-          // somehow we didn't pick up a starting side, let's guess it
-          _start = closer_sensor;
-          Sprint("guessing start ");
-          Sprintln(_start);
-        } else {
-          // guess ending direction, in case we don't pick up the ending side
-          _end = closer_sensor;
-          Sprint("guessing direction ");
-          Sprintln(_end);
-        }
-      }
+      return;
     }
-  } else {
+
+    // we are in the middle of both lasers
     confidence++;
     cyclesRemaining++;
-    // there is activity on one side or the other
-    if (_start == 0) {
-      // activity is just starting.
-      // diff can be either 1 or -1. Positive diff implies
-      // sensor 1 is the cause of activity, else sensor 2
-      _start = (diff == 1 ? 1 : 2);
-    } else {
-      // activity is ongoing, track where it might end.
-      _end = (diff == 1 ? 1 : 2);
+    if (sensor1_range != sensor2_range) {
+      // try to guess what direction we're moving
+      uint8_t closer_sensor = (sensor1_range < sensor2_range ? 1 : 2);
+      if (_start == 0) {
+        // somehow we didn't pick up a starting side, let's guess it
+        _start = closer_sensor;
+        Sprint("guessing start ");
+        Sprintln(_start);
+      } else {
+        // guess ending direction, in case we don't pick up the ending side
+        _end = closer_sensor;
+        Sprint("guessing direction ");
+        Sprintln(_end);
+      }
     }
+    return;
+  }
+
+  // user is on one side or the other
+  confidence++;
+  cyclesRemaining++;
+  // there is activity on one side or the other
+  if (_start == 0) {
+    // activity is just starting.
+    // diff can be either 1 or -1. Positive diff implies
+    // sensor 1 is the cause of activity, else sensor 2
+    _start = (diff == 1 ? 1 : 2);
+  } else {
+    // activity is ongoing, track where it might end.
+    _end = (diff == 1 ? 1 : 2);
   }
 }
 
-void reset_sensor(){
-  if (_start != 0 || _end != 0) {
-    Sprintln("all clear!");
-    Sprintln();
-    Sprintln();
-  }
-  // reset values
+void reset_sensor() {
   _start = 0;
   _end = 0;
   confidence = 0;
+  motion0_at = null;
+  motion1_at = null;
+  motion2_at = null;
 }
 
 char sendBuf[12];
@@ -352,9 +376,7 @@ void loop() {
     reset_sensor();
     enable_sensor1 = false;
     enable_sensor2 = false;
-    publish("gn");
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
-    publish("hi");
   }
 
   run_sensor();
