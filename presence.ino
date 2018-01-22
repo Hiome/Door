@@ -58,16 +58,19 @@ volatile boolean enable_sensor1;
 volatile boolean enable_sensor2;
 void motion0() {
   motion0_at = millis();
+  publish("m0");
 }
 void motion1() {
+//  motion1_at = millis();
+  publish("m1");
   enable_sensor1 = true;
   cyclesRemaining = 125;
-  motion1_at = millis();
 }
 void motion2() {
+//  motion2_at = millis();
+  publish("m2");
   enable_sensor2 = true;
   cyclesRemaining = 125;
-  motion2_at = millis();
 }
 
 void setup() {
@@ -76,8 +79,8 @@ void setup() {
   pinMode(LED, OUTPUT);
   digitalWrite(LED, HIGH);
 
-  pinMode(PIR0, INPUT);
-  attachInterrupt(digitalPinToInterrupt(PIR0), motion0, RISING);
+//  pinMode(PIR0, INPUT);
+//  attachInterrupt(digitalPinToInterrupt(PIR0), motion0, RISING);
   pinMode(PIR1, INPUT);
   enableInterrupt(PIR1, motion1, RISING);
   pinMode(PIR2, INPUT);
@@ -251,12 +254,16 @@ void check_motion_sensors() {
     }
 
     Sprintln("reading motion sensors...");
+    Sprintln(motion1_at);
+    Sprintln(motion0_at);
+    Sprintln(motion2_at);
+
     _start = 0;
     _end = 0;
 
-    if (motion1_at <= motion0_at) {
+    if (motion1_at < motion2_at) {
       _start = 1;
-    } else if (motion2_at <= motion0_at) {
+    } else if (motion2_at < motion1_at) {
       _start = 2;
     }
     if (motion1_at > motion0_at) {
@@ -300,7 +307,7 @@ void run_sensor() {
     // sensors, so we know nothing about directional intent anyway.
     if (s1 == SENSOR_LOW && s2 == SENSOR_LOW) { // there's no LIDAR activity
       // check what the motion sensors saw
-      check_motion_sensors();
+//      check_motion_sensors();
 
       // evaluate all the data collected so far
       if (confidence >= CONFIDENCE_THRESHOLD) {
@@ -318,6 +325,10 @@ void run_sensor() {
           publish("1-2");
           Sprintln("published 1-2\n\n");
         }
+
+        motion0_at = null;
+        motion1_at = null;
+        motion2_at = null;
       }
 
       reset_sensor();
@@ -364,9 +375,6 @@ void reset_sensor() {
   _start = 0;
   _end = 0;
   confidence = 0;
-  motion0_at = null;
-  motion1_at = null;
-  motion2_at = null;
 }
 
 char sendBuf[12];
@@ -395,6 +403,10 @@ void loop() {
     reset_sensor();
     enable_sensor1 = false;
     enable_sensor2 = false;
+    motion0_at = null;
+    motion1_at = null;
+    motion2_at = null;
+    publish("gn");
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
   }
 
