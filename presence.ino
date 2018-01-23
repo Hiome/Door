@@ -26,7 +26,6 @@
 #define BATT   A7
 
 #define TIMEOUT_THRESHOLD    7000
-#define MOTIONONLY_THRESHOLD 1000
 #define CONFIDENCE_THRESHOLD 3
 #define SERIAL_BAUD   115200
 
@@ -50,25 +49,14 @@ VL53L0X sensor1;
 VL53L0X sensor2;
 
 // just wake up
-volatile unsigned long motion0_at;
-volatile unsigned long motion1_at;
-volatile unsigned long motion2_at;
 volatile uint8_t cyclesRemaining;
 volatile boolean enable_sensor1;
 volatile boolean enable_sensor2;
-void motion0() {
-  motion0_at = millis();
-  publish("m0");
-}
 void motion1() {
-//  motion1_at = millis();
-  publish("m1");
   enable_sensor1 = true;
   cyclesRemaining = 125;
 }
 void motion2() {
-//  motion2_at = millis();
-  publish("m2");
   enable_sensor2 = true;
   cyclesRemaining = 125;
 }
@@ -79,8 +67,6 @@ void setup() {
   pinMode(LED, OUTPUT);
   digitalWrite(LED, HIGH);
 
-//  pinMode(PIR0, INPUT);
-//  attachInterrupt(digitalPinToInterrupt(PIR0), motion0, RISING);
   pinMode(PIR1, INPUT);
   enableInterrupt(PIR1, motion1, RISING);
   pinMode(PIR2, INPUT);
@@ -123,6 +109,8 @@ void setup() {
   publish("ON");
 
   digitalWrite(LED, LOW);
+  enable_sensor1 = true;
+  enable_sensor2 = true;
 }
 
 static uint16_t avg1 = 0;
@@ -241,43 +229,6 @@ static uint8_t _start = 0;
 static uint8_t _end = 0;
 static int8_t confidence = 0;
 
-void check_motion_sensors() {
-  // if all 3 motion sensors picked up motion but
-  // the LIDAR sensors failed to detect enough data
-  // points, we can still guess what happened based
-  // on the order of the motion sensor triggers
-  if (motion0_at && motion1_at && motion2_at &&
-      confidence < CONFIDENCE_THRESHOLD) {
-    long time_diff = motion1_at - motion2_at;
-    if (abs(time_diff) > MOTIONONLY_THRESHOLD) {
-      return;
-    }
-
-    Sprintln("reading motion sensors...");
-    Sprintln(motion1_at);
-    Sprintln(motion0_at);
-    Sprintln(motion2_at);
-
-    _start = 0;
-    _end = 0;
-
-    if (motion1_at < motion2_at) {
-      _start = 1;
-    } else if (motion2_at < motion1_at) {
-      _start = 2;
-    }
-    if (motion1_at > motion0_at) {
-      _end = 1;
-    } else if (motion2_at > motion0_at) {
-      _end = 2;
-    }
-
-    if (_start > 0 && _end > 0) {
-      confidence = CONFIDENCE_THRESHOLD;
-    }
-  }
-}
-
 void run_sensor() {
   uint8_t s1 = read_sensor1();
   uint8_t s2 = read_sensor2();
@@ -305,11 +256,8 @@ void run_sensor() {
   if (diff == 0) {
     // either there is no activity or user is in the middle of both
     // sensors, so we know nothing about directional intent anyway.
-    if (s1 == SENSOR_LOW && s2 == SENSOR_LOW) { // there's no LIDAR activity
-      // check what the motion sensors saw
-//      check_motion_sensors();
-
-      // evaluate all the data collected so far
+    if (s1 == SENSOR_LOW && s2 == SENSOR_LOW) {
+      // there's no LIDAR activity
       if (confidence >= CONFIDENCE_THRESHOLD) {
         // activity just ended with enough data points.
         // _start and _end can be either 1 or 2 (see below), so
@@ -325,10 +273,6 @@ void run_sensor() {
           publish("1-2");
           Sprintln("published 1-2\n\n");
         }
-
-        motion0_at = null;
-        motion1_at = null;
-        motion2_at = null;
       }
 
       reset_sensor();
@@ -399,16 +343,12 @@ void loop() {
     confidence = 10;
   }
 
-  if (cyclesRemaining == 0) {
-    reset_sensor();
-    enable_sensor1 = false;
-    enable_sensor2 = false;
-    motion0_at = null;
-    motion1_at = null;
-    motion2_at = null;
-    publish("gn");
-    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
-  }
+//  if (cyclesRemaining == 0) {
+//    reset_sensor();
+//    enable_sensor1 = false;
+//    enable_sensor2 = false;
+//    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
+//  }
 
   run_sensor();
 }
