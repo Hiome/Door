@@ -17,7 +17,6 @@
 #include <SPIFlash.h>
 
 /* Pin Connections */
-#define PIR0   3
 #define PIR1   4
 #define PIR2   5
 #define xshut1 6
