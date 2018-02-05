@@ -343,12 +343,12 @@ void loop() {
     confidence = 10;
   }
 
-//  if (cyclesRemaining == 0) {
-//    reset_sensor();
-//    enable_sensor1 = false;
-//    enable_sensor2 = false;
-//    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
-//  }
+  if (cyclesRemaining == 0) {
+    reset_sensor();
+    enable_sensor1 = false;
+    enable_sensor2 = false;
+    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
+  }
 
   run_sensor();
 }
