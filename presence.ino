@@ -28,16 +28,16 @@
 #define CONFIDENCE_THRESHOLD 3
 #define SERIAL_BAUD   115200
 
-#define NODEID        2   //unique for each node on same network
+#define NODEID        3   //unique for each node on same network
 #define NETWORKID     27  //the same on all nodes that talk to each other
 #define GATEWAYID     1
 #define ENCRYPTKEY    "smarterisbetters" //exactly the same 16 characters/bytes on all nodes!
 #define ATC_RSSI      -90
 
-#define Sprintln(a) (Serial.println(a))
-#define Sprint(a) (Serial.print(a))
-//#define Sprintln(a)
-//#define Sprint(a)
+//#define Sprintln(a) (Serial.println(a))
+//#define Sprint(a) (Serial.print(a))
+#define Sprintln(a)
+#define Sprint(a)
 
 RFM69_ATC radio;
 
@@ -185,7 +185,7 @@ uint8_t read_sensor1() {
   }
 
   sensor1_range = range;
-  static const uint16_t padded_avg = avg1 * 0.95;
+  static const uint16_t padded_avg = avg1 * 0.85;
 
   if (range < padded_avg) {
     Sprint("sensor1: ");
@@ -211,7 +211,7 @@ uint8_t read_sensor2() {
   }
 
   sensor2_range = range;
-  static const uint16_t padded_avg = avg2 * 0.95;
+  static const uint16_t padded_avg = avg2 * 0.85;
   
   if (range < padded_avg) {
     Sprint("sensor2: ");
