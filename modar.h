@@ -1,4 +1,4 @@
-#define MOTION_THRESHOLD   1000
+#define MOTION_THRESHOLD   5000
 
 volatile boolean motion_woke;
 volatile uint8_t next_motion;
@@ -9,26 +9,30 @@ void motion0() {
   motion0_order = next_motion;
   next_motion++;
   motion_woke = true;
+  Sprintln("m0");
 }
 void motion1() {
   motion1_order = next_motion;
   next_motion++;
   motion_woke = true;
+  Sprintln("m1");
 }
 void motion2() {
   motion2_order = next_motion;
   next_motion++;
   motion_woke = true;
+  Sprintln("m2");
 }
 
 static unsigned long motion_woke_at;
 void reset_sensor() {
-  next_motion = 0;
+  next_motion = 1;
   motion_woke = false;
   motion_woke_at = null;
   motion0_order = null;
   motion1_order = null;
   motion2_order = null;
+  Sprintln("reset");
 }
 
 void initialize() {
@@ -88,7 +92,10 @@ void loop() {
     motion_woke_at = millis();
     motion_woke = false;
   } else if (motion_woke_at && millis() - motion_woke_at > MOTION_THRESHOLD) {
+    Sprintln(millis());
+    Sprintln(motion_woke_at);
     reset_sensor();
+    Serial.flush();
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
   }
 }
