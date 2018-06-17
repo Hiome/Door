@@ -63,9 +63,15 @@ void checkBattery() {
 char sendBuf[12];
 void publish(char* msg) {
   checkBattery();
-  uint8_t len = sprintf(sendBuf, "%s;%sv", msg, BATstr);
+  uint8_t len = sprintf(sendBuf, "%s;%s", msg, BATstr);
   radio.sendWithRetry(GATEWAYID, sendBuf, len);
   radio.sleep();
+  #if DEBUGGER
+    Sprint("published ");
+    Sprint(sendBuf);
+    Sprintln("\n\n");
+    Serial.flush();
+  #endif
 }
 
 #include NODETYPE

@@ -1,4 +1,7 @@
-#define LUX_THRESHOLD   100
+#define BLIND     400
+#define DARK      700
+#define DIM       800
+#define BRIGHT    1024
 
 void motion() {
   publish("m");
@@ -10,14 +13,28 @@ void initialize() {
 }
 
 static int last_lux = 0;
-char LUXstr[5];
 void loop() {
   int curr_lux = analogRead(LUX);
-  int lux_diff = curr_lux - last_lux;
-  if (abs(lux_diff) > LUX_THRESHOLD) {
-    itoa(curr_lux, LUXstr, 10);
-    publish(LUXstr);
+  if (curr_lux <= BLIND) {
+    if (last_lux != BLIND) {
+      publish("blind");
+      last_lux = BLIND;
+    }
+  } else if (curr_lux <= DARK) {
+    if (last_lux != DARK) {
+      publish("dark");
+      last_lux = DARK;
+    }
+  } else if (curr_lux <= DIM) {
+    if (last_lux != DIM) {
+      publish("dim");
+      last_lux = DIM;
+    }
+  } else {
+    if (last_lux != BRIGHT) {
+      publish("bright");
+      last_lux = BRIGHT;
+    }
   }
-  last_lux = curr_lux;
   LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_ON);
 }

@@ -76,10 +76,8 @@ void read_sensors() {
 
     if (_start < _end) {
       publish("1-2");
-      Sprintln("published 1-2\n\n");
     } else if (_start > _end) {
       publish("2-1");
-      Sprintln("published 2-1\n\n");
     }
 
     reset_sensor();
@@ -95,7 +93,6 @@ void loop() {
     Sprintln(millis());
     Sprintln(motion_woke_at);
     reset_sensor();
-    Serial.flush();
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
   }
 }

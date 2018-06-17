@@ -1,5 +1,5 @@
 #define TIMEOUT_THRESHOLD    7000
-#define CONFIDENCE_THRESHOLD 3
+#define CONFIDENCE_THRESHOLD 2
 
 #include <Wire.h>
 #include <VL53L0X.h>
@@ -63,6 +63,8 @@ void calibrate() {
 }
 
 void initialize() {
+//  pinMode(PIR0, INPUT);
+//  attachInterrupt(digitalPinToInterrupt(PIR0), motion1, RISING);
   pinMode(PIR1, INPUT);
   enableInterrupt(PIR1, motion1, RISING);
   pinMode(PIR2, INPUT);
@@ -165,8 +167,16 @@ void reset_sensor() {
 }
 
 void run_sensor() {
-  uint8_t s1 = read_sensor1();
-  uint8_t s2 = read_sensor2();
+  uint8_t s1;
+  uint8_t s2;
+  if (_start == 1) {
+    // read sensor 2 first
+    s2 = read_sensor2();
+    s1 = read_sensor1();
+  } else {
+    s1 = read_sensor1();
+    s2 = read_sensor2();
+  }
 
   if (s1 == SENSOR_HIGH && !enable_sensor2) {
     // motion detected, turn on the other sensor
@@ -195,11 +205,9 @@ void run_sensor() {
         if (_start > _end) {
           // moved from sensor 2 to sensor 1
           publish("2-1");
-          Sprintln("published 2-1\n\n");
         } else if (_start < _end) {
           // moved from sensor 1 to sensor 2
           publish("1-2");
-          Sprintln("published 1-2\n\n");
         }
       }
 
