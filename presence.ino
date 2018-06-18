@@ -9,15 +9,13 @@
 
 #include "config.h"
 #define ENCRYPTKEY    "smarterisbetters" // exactly the same 16 characters/bytes on all nodes!
-#define ATC_RSSI      -90
+#define ATC_RSSI      -75
 #define SERIAL_BAUD   115200
 
 #define EI_NOTEXTERNAL
 #include <EnableInterrupt.h>
 #include <RFM69_ATC.h>
-#include <SPI.h>
 #include <LowPower.h>
-#include <SPIFlash.h>
 
 #if DEBUGGER
   #define Sprintln(a) (Serial.println(a))
@@ -39,9 +37,6 @@
 
 RFM69_ATC radio;
 
-#define FLASH_SS      8 // FLASH SS on D8 on regular Moteinos (D23 on MoteinoMEGA)
-SPIFlash flash(FLASH_SS, 0xEF30); //EF30 for 4mbit  Windbond chip (W25X40CL)
-
 void blink(uint8_t times) {
   while (times > 0) {
     digitalWrite(LED, LOW);
@@ -61,11 +56,16 @@ void checkBattery() {
 }
 
 char sendBuf[12];
+uint8_t packetCount = 1;
 void publish(char* msg) {
   checkBattery();
-  uint8_t len = sprintf(sendBuf, "%s;%s", msg, BATstr);
-  radio.sendWithRetry(GATEWAYID, sendBuf, len);
+  uint8_t len = sprintf(sendBuf, "%s;%s%d", msg, BATstr, packetCount);
+  radio.sendWithRetry(GATEWAYID, sendBuf, len, 5);
   radio.sleep();
+  if (packetCount < 9)
+    packetCount++;
+  else
+    packetCount = 1;
   #if DEBUGGER
     Sprint("published ");
     Sprint(sendBuf);
@@ -81,11 +81,6 @@ void setup() {
 
   pinMode(LED, OUTPUT);
   digitalWrite(LED, HIGH);
-
-  if (flash.initialize()) {
-    Sprintln("Initialized flash...");
-    flash.sleep();
-  }
 
   radio.initialize(RF69_915MHZ, NODEID, NETWORKID);
   radio.encrypt(ENCRYPTKEY);
