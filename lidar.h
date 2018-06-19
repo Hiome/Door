@@ -10,6 +10,11 @@ VL53L0X sensor2;
 volatile uint8_t cyclesRemaining;
 volatile boolean enable_sensor1;
 volatile boolean enable_sensor2;
+void motion0() {
+  enable_sensor1 = true;
+  enable_sensor2 = true;
+  cyclesRemaining = 125;
+}
 void motion1() {
   enable_sensor1 = true;
   cyclesRemaining = 125;
@@ -53,18 +58,11 @@ void calibrate() {
   avg2 = sum2/count2;
 
   Sprintln("done.");
-
-  char avg_arr1[5];
-  char avg_arr2[5];
-  sprintf(avg_arr1, "%d", avg1);
-  sprintf(avg_arr2, "%d", avg2);
-  publish(avg_arr1);
-  publish(avg_arr2);
 }
 
 void initialize() {
 //  pinMode(PIR0, INPUT);
-//  attachInterrupt(digitalPinToInterrupt(PIR0), motion1, RISING);
+//  attachInterrupt(digitalPinToInterrupt(PIR0), motion0, RISING);
   pinMode(PIR1, INPUT);
   enableInterrupt(PIR1, motion1, RISING);
   pinMode(PIR2, INPUT);
