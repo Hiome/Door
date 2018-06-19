@@ -88,7 +88,7 @@ void setup() {
 
   initialize();
 
-  publish("ON");
+  publish("A");
   digitalWrite(LED, LOW);
 }
 
