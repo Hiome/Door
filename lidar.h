@@ -21,28 +21,28 @@ void calibrate() {
   blink(4); // give the user 2 seconds to get out of the way
   digitalWrite(LED, HIGH);
 
-  Sprint("Calibrating for ~30 seconds... ");
+  Sprint("Calibrating... ");
   uint16_t range = 0;
   uint32_t sum1 = 0;
   uint32_t sum2 = 0;
   uint16_t count1 = 0;
   uint16_t count2 = 0;
+  sensor1.startContinuous();
+  sensor2.startContinuous();
   while (count1 < 500 || count2 < 500) {
-    for (uint16_t i = 0; i < 750; i++) {
-      range = sensor1.readRangeSingleMillimeters();
-      if (range < TIMEOUT_THRESHOLD) {
-        sum1 += range;
-        count1++;
-      }
-  
-      range = sensor2.readRangeSingleMillimeters();
-      if (range < TIMEOUT_THRESHOLD) {
-        sum2 += range;
-        count2++;
-      }
-  
-      delay(1); // needed to reset watchdog timer
+    range = sensor1.readRangeContinuousMillimeters();
+    if (range < TIMEOUT_THRESHOLD) {
+      sum1 += range;
+      count1++;
     }
+
+    range = sensor2.readRangeContinuousMillimeters();
+    if (range < TIMEOUT_THRESHOLD) {
+      sum2 += range;
+      count2++;
+    }
+
+    delay(1); // needed to reset watchdog timer
   }
 
   avg1 = sum1/count1;
@@ -204,13 +204,7 @@ void run_sensor() {
 }
 
 void loop() {
-  cyclesRemaining--;
-  if (confidence > 100) {
-    // prevent an overflow
-    confidence = 10;
-  }
-
-  if (cyclesRemaining == 0) {
+  if (--cyclesRemaining == 0) {
     reset_sensor();
     sensor1.stopContinuous();
     Sprintln("disabled sensor 1");
@@ -226,4 +220,9 @@ void loop() {
   }
 
   run_sensor();
+
+  if (confidence > 100) {
+    // prevent an overflow
+    confidence = 10;
+  }
 }
