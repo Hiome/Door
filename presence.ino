@@ -24,16 +24,6 @@
 #define LUX    A6
 #define BATT   A7
 
-//#if defined(LIDAR) || defined(MODAR)
-//#define NEEDFORSPEED
-//#define EI_NOTEXTERNAL
-//#define EI_NOTPORTB
-//#define EI_NOTPORTC
-//#define INTERRUPT_FLAG_PIN4 motion1_triggered
-//#define INTERRUPT_FLAG_PIN5 motion2_triggered
-//#include <EnableInterrupt.h>
-//#endif
-
 #include <RFM69_ATC.h>
 #include <LowPower.h>
 

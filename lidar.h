@@ -7,18 +7,14 @@
 VL53L0X sensor1;
 VL53L0X sensor2;
 
-uint8_t cyclesRemaining = 1;
-boolean enabled_sensor1 = false;
-boolean enabled_sensor2 = false;
+volatile uint8_t cyclesRemaining = 1;
 uint16_t avg1 = 0;
 uint16_t avg2 = 0;
 uint16_t sensor1_range = 0;
 uint16_t sensor2_range = 0;
 
-volatile boolean motion_triggered = false;
-
 void motion() {
-  motion_triggered = true;
+  cyclesRemaining = 250;
 }
 
 void calibrate() {
@@ -58,10 +54,6 @@ void calibrate() {
 void initialize() {
   pinMode(PIR0, INPUT);
   attachInterrupt(digitalPinToInterrupt(PIR0), motion, RISING);
-//  pinMode(PIR1, INPUT);
-//  enableInterruptFast(PIR1, RISING);
-//  pinMode(PIR2, INPUT);
-//  enableInterruptFast(PIR2, RISING);
 
   pinMode(xshut1, OUTPUT);
   pinMode(xshut2, OUTPUT);
@@ -95,10 +87,6 @@ void initialize() {
 #define SENSOR_ERROR 2
 
 uint8_t read_sensor1() {
-  if (!enabled_sensor1) {
-    return SENSOR_ERROR;
-  }
-
   static const uint16_t padded_avg = avg1 * 0.85;
 
   sensor1_range = sensor1.readRangeContinuousMillimeters();
@@ -120,10 +108,6 @@ uint8_t read_sensor1() {
 }
 
 uint8_t read_sensor2() {
-  if (!enabled_sensor2) {
-    return SENSOR_ERROR;
-  }
-
   static const uint16_t padded_avg = avg2 * 0.85;
 
   sensor2_range = sensor2.readRangeContinuousMillimeters();
@@ -154,39 +138,11 @@ void reset_sensor() {
   confidence = 0;
 }
 
-void enable_sensor1() {
-  sensor1.startContinuous();
-  enabled_sensor1 = true;
-  Sprintln("enabled sensor 1");
-}
-void enable_sensor2() {
-  sensor2.startContinuous();
-  enabled_sensor2 = true;
-  Sprintln("enabled sensor 2");
-}
-void disable_sensor1() {
-  sensor1.stopContinuous();
-  enabled_sensor1 = false;
-  Sprintln("disabled sensor 1");
-}
-void disable_sensor2() {
-  sensor2.stopContinuous();
-  enabled_sensor2 = false;
-  Sprintln("disabled sensor 2");
-}
-
 void run_sensor() {
   uint8_t s1 = read_sensor1();
   uint8_t s2 = read_sensor2();
 
-  if (s1 == SENSOR_HIGH && !enabled_sensor2) {
-    s2 = SENSOR_LOW;
-    enable_sensor2();
-  } else if (s2 == SENSOR_HIGH && !enabled_sensor1) {
-    s1 = SENSOR_LOW;
-    enable_sensor1();
-  } else if (s1 == SENSOR_ERROR || s2 == SENSOR_ERROR) {
-    // at least one of the readings is definitely missing,
+  if (s1 == SENSOR_ERROR || s2 == SENSOR_ERROR) {
     // let's just skip this cycle and try again.
     confidence = max(confidence - 1, 0);
     return;
@@ -254,32 +210,20 @@ void loop() {
     confidence = 10;
   }
 
-  if (cyclesRemaining == 0 /*&& motion1_triggered == 0 && motion2_triggered == 0*/) {
+  if (cyclesRemaining == 0) {
     reset_sensor();
-    disable_sensor1();
-    disable_sensor2();
+    sensor1.stopContinuous();
+    Sprintln("disabled sensor 1");
+    sensor2.stopContinuous();
+    Sprintln("disabled sensor 2");
+
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
+
+    sensor1.startContinuous();
+    Sprintln("enabled sensor 1");
+    sensor2.startContinuous();
+    Sprintln("enabled sensor 2");
   }
-  
-//  if (motion1_triggered > 0) {
-  if (motion_triggered) {
-    if (!enabled_sensor1) {
-      enable_sensor1();
-    }
-    if (!enabled_sensor2) {
-      enable_sensor2();
-    }
-    cyclesRemaining = 250;
-//    motion1_triggered = 0;
-    motion_triggered = false;
-  }
-//  if (motion2_triggered > 0) {
-//    if (!enabled_sensor2) {
-//      enable_sensor2();
-//    }
-//    cyclesRemaining = 250;
-//    motion2_triggered = 0;
-//  }
 
   run_sensor();
 }
