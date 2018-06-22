@@ -1,5 +1,5 @@
 #define TIMEOUT_THRESHOLD    7000
-#define CONFIDENCE_THRESHOLD 2
+#define CONFIDENCE_THRESHOLD 5
 
 #include <Wire.h>
 #include <VL53L0X.h>
@@ -7,27 +7,20 @@
 VL53L0X sensor1;
 VL53L0X sensor2;
 
-volatile uint8_t cyclesRemaining;
-volatile boolean enable_sensor1;
-volatile boolean enable_sensor2;
-void motion0() {
-  enable_sensor1 = true;
-  enable_sensor2 = true;
-  cyclesRemaining = 125;
-}
-void motion1() {
-  enable_sensor1 = true;
-  cyclesRemaining = 125;
-}
-void motion2() {
-  enable_sensor2 = true;
-  cyclesRemaining = 125;
+uint8_t cyclesRemaining = 1;
+boolean enabled_sensor1 = false;
+boolean enabled_sensor2 = false;
+uint16_t avg1 = 0;
+uint16_t avg2 = 0;
+uint16_t sensor1_range = 0;
+uint16_t sensor2_range = 0;
+
+volatile boolean motion_triggered = false;
+
+void motion() {
+  motion_triggered = true;
 }
 
-static uint16_t avg1 = 0;
-static uint16_t avg2 = 0;
-static uint16_t sensor1_range = 0;
-static uint16_t sensor2_range = 0;
 void calibrate() {
   blink(4); // give the user 2 seconds to get out of the way
   digitalWrite(LED, HIGH);
@@ -38,20 +31,22 @@ void calibrate() {
   uint32_t sum2 = 0;
   uint16_t count1 = 0;
   uint16_t count2 = 0;
-  for (uint16_t i = 0; i < 750; i++) {
-    range = sensor1.readRangeSingleMillimeters();
-    if (range < TIMEOUT_THRESHOLD) {
-      sum1 += range;
-      count1++;
+  while (count1 < 500 || count2 < 500) {
+    for (uint16_t i = 0; i < 750; i++) {
+      range = sensor1.readRangeSingleMillimeters();
+      if (range < TIMEOUT_THRESHOLD) {
+        sum1 += range;
+        count1++;
+      }
+  
+      range = sensor2.readRangeSingleMillimeters();
+      if (range < TIMEOUT_THRESHOLD) {
+        sum2 += range;
+        count2++;
+      }
+  
+      delay(1); // needed to reset watchdog timer
     }
-
-    range = sensor2.readRangeSingleMillimeters();
-    if (range < TIMEOUT_THRESHOLD) {
-      sum2 += range;
-      count2++;
-    }
-
-    delay(1); // needed to reset watchdog timer
   }
 
   avg1 = sum1/count1;
@@ -61,12 +56,12 @@ void calibrate() {
 }
 
 void initialize() {
-//  pinMode(PIR0, INPUT);
-//  attachInterrupt(digitalPinToInterrupt(PIR0), motion0, RISING);
-  pinMode(PIR1, INPUT);
-  enableInterrupt(PIR1, motion1, RISING);
-  pinMode(PIR2, INPUT);
-  enableInterrupt(PIR2, motion2, RISING);
+  pinMode(PIR0, INPUT);
+  attachInterrupt(digitalPinToInterrupt(PIR0), motion, RISING);
+//  pinMode(PIR1, INPUT);
+//  enableInterruptFast(PIR1, RISING);
+//  pinMode(PIR2, INPUT);
+//  enableInterruptFast(PIR2, RISING);
 
   pinMode(xshut1, OUTPUT);
   pinMode(xshut2, OUTPUT);
@@ -93,9 +88,6 @@ void initialize() {
   sensor2.setMeasurementTimingBudget(20000);
 
   calibrate();
-  cyclesRemaining = 1;
-  enable_sensor1 = true;
-  enable_sensor2 = true;
 }
 
 #define SENSOR_LOW   0
@@ -103,23 +95,22 @@ void initialize() {
 #define SENSOR_ERROR 2
 
 uint8_t read_sensor1() {
-  if (!enable_sensor1) {
-    LowPower.powerDown(SLEEP_15MS, ADC_OFF, BOD_ON);
+  if (!enabled_sensor1) {
     return SENSOR_ERROR;
   }
 
-  uint16_t range = sensor1.readRangeSingleMillimeters();
-  if (range > TIMEOUT_THRESHOLD) {
+  static const uint16_t padded_avg = avg1 * 0.85;
+
+  sensor1_range = sensor1.readRangeContinuousMillimeters();
+
+  if (sensor1_range > TIMEOUT_THRESHOLD) {
     Sprintln("sensor 1 error");
     return SENSOR_ERROR;
   }
 
-  sensor1_range = range;
-  static const uint16_t padded_avg = avg1 * 0.85;
-
-  if (range < padded_avg) {
+  if (sensor1_range < padded_avg) {
     Sprint("sensor1: ");
-    Sprint(range);
+    Sprint(sensor1_range);
     Sprint("/");
     Sprintln(avg1);
     return SENSOR_HIGH;
@@ -129,23 +120,22 @@ uint8_t read_sensor1() {
 }
 
 uint8_t read_sensor2() {
-  if (!enable_sensor2) {
-    LowPower.powerDown(SLEEP_15MS, ADC_OFF, BOD_ON);
+  if (!enabled_sensor2) {
     return SENSOR_ERROR;
   }
 
-  uint16_t range = sensor2.readRangeSingleMillimeters();
-  if (range > TIMEOUT_THRESHOLD) {
+  static const uint16_t padded_avg = avg2 * 0.85;
+
+  sensor2_range = sensor2.readRangeContinuousMillimeters();
+
+  if (sensor2_range > TIMEOUT_THRESHOLD) {
     Sprintln("sensor 2 error");
     return SENSOR_ERROR;
   }
 
-  sensor2_range = range;
-  static const uint16_t padded_avg = avg2 * 0.85;
-  
-  if (range < padded_avg) {
+  if (sensor2_range < padded_avg) {
     Sprint("sensor2: ");
-    Sprint(range);
+    Sprint(sensor2_range);
     Sprint("/");
     Sprintln(avg2);
     return SENSOR_HIGH;
@@ -154,9 +144,9 @@ uint8_t read_sensor2() {
   }
 }
 
-static uint8_t _start = 0;
-static uint8_t _end = 0;
-static int8_t confidence = 0;
+uint8_t _start = 0;
+uint8_t _end = 0;
+int8_t confidence = 0;
 
 void reset_sensor() {
   _start = 0;
@@ -164,38 +154,48 @@ void reset_sensor() {
   confidence = 0;
 }
 
-void run_sensor() {
-  uint8_t s1;
-  uint8_t s2;
-  if (_start == 1) {
-    // read sensor 2 first
-    s2 = read_sensor2();
-    s1 = read_sensor1();
-  } else {
-    s1 = read_sensor1();
-    s2 = read_sensor2();
-  }
+void enable_sensor1() {
+  sensor1.startContinuous();
+  enabled_sensor1 = true;
+  Sprintln("enabled sensor 1");
+}
+void enable_sensor2() {
+  sensor2.startContinuous();
+  enabled_sensor2 = true;
+  Sprintln("enabled sensor 2");
+}
+void disable_sensor1() {
+  sensor1.stopContinuous();
+  enabled_sensor1 = false;
+  Sprintln("disabled sensor 1");
+}
+void disable_sensor2() {
+  sensor2.stopContinuous();
+  enabled_sensor2 = false;
+  Sprintln("disabled sensor 2");
+}
 
-  if (s1 == SENSOR_HIGH && !enable_sensor2) {
-    // motion detected, turn on the other sensor
+void run_sensor() {
+  uint8_t s1 = read_sensor1();
+  uint8_t s2 = read_sensor2();
+
+  if (s1 == SENSOR_HIGH && !enabled_sensor2) {
     s2 = SENSOR_LOW;
-    enable_sensor2 = true;
-  } else if (s2 == SENSOR_HIGH && !enable_sensor1) {
-    // motion detected, turn on the other sensor
+    enable_sensor2();
+  } else if (s2 == SENSOR_HIGH && !enabled_sensor1) {
     s1 = SENSOR_LOW;
-    enable_sensor1 = true;
+    enable_sensor1();
   } else if (s1 == SENSOR_ERROR || s2 == SENSOR_ERROR) {
     // at least one of the readings is definitely missing,
     // let's just skip this cycle and try again.
-    confidence--;
-    confidence = max(confidence, 0);
+    confidence = max(confidence - 1, 0);
     return;
   }
 
   if (s1 == s2) {
     // either there is no activity or user is in the middle of both
     // sensors, so we know nothing about directional intent anyway.
-    if (s1 == SENSOR_LOW && s2 == SENSOR_LOW) {
+    if (s1 == SENSOR_LOW) {
       // there's no LIDAR activity
       if (confidence >= CONFIDENCE_THRESHOLD) {
         // activity just ended with enough data points.
@@ -254,12 +254,32 @@ void loop() {
     confidence = 10;
   }
 
-  if (cyclesRemaining == 0) {
+  if (cyclesRemaining == 0 /*&& motion1_triggered == 0 && motion2_triggered == 0*/) {
     reset_sensor();
-    enable_sensor1 = false;
-    enable_sensor2 = false;
+    disable_sensor1();
+    disable_sensor2();
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
   }
+  
+//  if (motion1_triggered > 0) {
+  if (motion_triggered) {
+    if (!enabled_sensor1) {
+      enable_sensor1();
+    }
+    if (!enabled_sensor2) {
+      enable_sensor2();
+    }
+    cyclesRemaining = 250;
+//    motion1_triggered = 0;
+    motion_triggered = false;
+  }
+//  if (motion2_triggered > 0) {
+//    if (!enabled_sensor2) {
+//      enable_sensor2();
+//    }
+//    cyclesRemaining = 250;
+//    motion2_triggered = 0;
+//  }
 
   run_sensor();
 }
