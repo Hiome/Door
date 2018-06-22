@@ -8,22 +8,11 @@
  */
 
 #include "config.h"
+#define NETWORKID     27  // the same on all nodes that talk to each other
+#define GATEWAYID     1
 #define ENCRYPTKEY    "smarterisbetters" // exactly the same 16 characters/bytes on all nodes!
 #define ATC_RSSI      -75
 #define SERIAL_BAUD   115200
-
-#define EI_NOTEXTERNAL
-#include <EnableInterrupt.h>
-#include <RFM69_ATC.h>
-#include <LowPower.h>
-
-#if DEBUGGER
-  #define Sprintln(a) (Serial.println(a))
-  #define Sprint(a) (Serial.print(a))
-#else
-  #define Sprintln(a)
-  #define Sprint(a)
-#endif
 
 /* Pin Connections */
 #define PIR0   3
@@ -34,6 +23,27 @@
 #define LED    9
 #define LUX    A6
 #define BATT   A7
+
+//#if defined(LIDAR) || defined(MODAR)
+//#define NEEDFORSPEED
+//#define EI_NOTEXTERNAL
+//#define EI_NOTPORTB
+//#define EI_NOTPORTC
+//#define INTERRUPT_FLAG_PIN4 motion1_triggered
+//#define INTERRUPT_FLAG_PIN5 motion2_triggered
+//#include <EnableInterrupt.h>
+//#endif
+
+#include <RFM69_ATC.h>
+#include <LowPower.h>
+
+#if DEBUGGER
+  #define Sprintln(a) (Serial.println(a))
+  #define Sprint(a) (Serial.print(a))
+#else
+  #define Sprintln(a)
+  #define Sprint(a)
+#endif
 
 RFM69_ATC radio;
 
@@ -74,7 +84,15 @@ void publish(char* msg) {
   #endif
 }
 
-#include NODETYPE
+#if defined LIDAR
+#include "lidar.h"
+#elif defined MODAR
+#include "modar.h"
+#elif defined ROOM
+#include "room.h"
+#else
+#error Missing node type
+#endif
 
 void setup() {
   Serial.begin(SERIAL_BAUD);
