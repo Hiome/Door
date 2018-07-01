@@ -1,5 +1,6 @@
 #define TIMEOUT_THRESHOLD    7000
-#define CONFIDENCE_THRESHOLD 5
+#define CONFIDENCE_THRESHOLD 3
+#define WAKE_CYCLES          500  // ~10 seconds
 
 #include <Wire.h>
 #include <VL53L0X.h>
@@ -7,14 +8,15 @@
 VL53L0X sensor1;
 VL53L0X sensor2;
 
-volatile uint8_t cyclesRemaining = 1;
+volatile boolean motion_triggered = false;
+uint16_t cyclesRemaining = 1;
 uint16_t avg1 = 0;
 uint16_t avg2 = 0;
 uint16_t sensor1_range = 0;
 uint16_t sensor2_range = 0;
 
 void motion() {
-  cyclesRemaining = 250;
+  motion_triggered = true;
 }
 
 void calibrate() {
@@ -130,11 +132,13 @@ uint8_t read_sensor2() {
 
 uint8_t _start = 0;
 uint8_t _end = 0;
+uint8_t _prev = 0;
 int8_t confidence = 0;
 
 void reset_sensor() {
   _start = 0;
   _end = 0;
+  _prev = 0;
   confidence = 0;
 }
 
@@ -144,16 +148,17 @@ void run_sensor() {
 
   if (s1 == SENSOR_ERROR || s2 == SENSOR_ERROR) {
     // let's just skip this cycle and try again.
-    confidence = max(confidence - 1, 0);
+    confidence--;
     return;
   }
 
+  uint8_t closer_sensor;
   if (s1 == s2) {
     // either there is no activity or user is in the middle of both
     // sensors, so we know nothing about directional intent anyway.
     if (s1 == SENSOR_LOW) {
       // there's no LIDAR activity
-      if (confidence >= CONFIDENCE_THRESHOLD) {
+      if (_start && _end) {
         // activity just ended with enough data points.
         // _start and _end can be either 1 or 2 (see below)
         if (_start > _end) {
@@ -170,59 +175,68 @@ void run_sensor() {
     }
 
     // we are in the middle of both lasers
-    confidence++;
-    cyclesRemaining++;
-    if (sensor1_range != sensor2_range) {
-      // try to guess what direction we're moving
-      uint8_t closer_sensor = (sensor1_range < sensor2_range ? 1 : 2);
-      if (_start == 0) {
-        // somehow we didn't pick up a starting side, let's guess it
-        _start = closer_sensor;
-        Sprint("guessing start ");
-        Sprintln(_start);
-      } else {
-        // guess ending direction, in case we don't pick up the ending side
-        _end = closer_sensor;
-        Sprint("guessing direction ");
-        Sprintln(_end);
-      }
+    if (sensor1_range == sensor2_range) {
+      cyclesRemaining++;
+      return;
     }
-    return;
+
+    // try to guess what direction we're moving
+    closer_sensor = (sensor1_range < sensor2_range ? 1 : 2);
+    Sprint("guessing direction ");
+    Sprintln(closer_sensor);
+  } else {
+    // user is on one side or the other
+    closer_sensor = (s1 == SENSOR_HIGH ? 1 : 2);
   }
 
-  // user is on one side or the other
-  confidence++;
   cyclesRemaining++;
-  // there is activity on one side or the other
-  if (_start == 0) {
-    // activity is just starting.
-    _start = (s1 == 1 ? 1 : 2);
+  if (closer_sensor == _prev) {
+    confidence++;
   } else {
-    // activity is ongoing, track where it might end.
-    _end = (s1 == 1 ? 1 : 2);
+    _prev = closer_sensor;
+    confidence = 1;
+  }
+
+  if (confidence == CONFIDENCE_THRESHOLD) {
+    if (_start) {
+      _end = closer_sensor;
+      Sprint("## setting end ");
+      Sprintln(_end);
+    } else {
+      _start = closer_sensor;
+      Sprint("## setting start ");
+      Sprintln(_start);
+    }
   }
 }
 
 void loop() {
-  if (--cyclesRemaining == 0) {
-    reset_sensor();
-    sensor1.stopContinuous();
-    Sprintln("disabled sensor 1");
-    sensor2.stopContinuous();
-    Sprintln("disabled sensor 2");
-
-    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
-
-    sensor1.startContinuous();
-    Sprintln("enabled sensor 1");
-    sensor2.startContinuous();
-    Sprintln("enabled sensor 2");
+  if (motion_triggered) {
+    cyclesRemaining = WAKE_CYCLES;
+    motion_triggered = false;
   }
+
+//  if (--cyclesRemaining == 0) {
+//    reset_sensor();
+//    sensor1.stopContinuous();
+//    Sprintln("disabled sensor 1");
+//    sensor2.stopContinuous();
+//    Sprintln("disabled sensor 2");
+//
+//    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
+//
+//    sensor1.startContinuous();
+//    Sprintln("enabled sensor 1");
+//    sensor2.startContinuous();
+//    Sprintln("enabled sensor 2");
+//  }
 
   run_sensor();
 
+  // prevent an overflow
   if (confidence > 100) {
-    // prevent an overflow
     confidence = 10;
+  } else if (confidence < -20) {
+    confidence = -5;
   }
 }
