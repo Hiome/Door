@@ -27,12 +27,14 @@
 #include <RFM69_ATC.h>
 #include <LowPower.h>
 
-#if DEBUGGER
+#ifdef DEBUGGER
   #define Sprintln(a) (Serial.println(a))
   #define Sprint(a) (Serial.print(a))
+  #define Sflush() (Serial.flush())
 #else
   #define Sprintln(a)
   #define Sprint(a)
+  #define Sflush()
 #endif
 
 RFM69_ATC radio;
@@ -66,12 +68,11 @@ void publish(char* msg) {
     packetCount++;
   else
     packetCount = 1;
-  #if DEBUGGER
-    Sprint("published ");
-    Sprint(sendBuf);
-    Sprintln("\n\n");
-    Serial.flush();
-  #endif
+
+  Sprint("published ");
+  Sprint(sendBuf);
+  Sprintln("\n\n");
+  Sflush();
 }
 
 #if defined LIDAR
