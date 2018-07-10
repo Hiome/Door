@@ -1,6 +1,12 @@
-#define TIMEOUT_THRESHOLD    7000
-#define CONFIDENCE_THRESHOLD 3
+#define TIMEOUT_THRESHOLD    3000
+#define CONFIDENCE_THRESHOLD 4
 #define WAKE_CYCLES          500  // ~10 seconds
+#define ERROR_MARGIN         10
+
+// Learning rates
+#define POWER       256
+#define ALPHA       18UL    //  7% of 256
+#define PADDING     242UL   // 95% of 256
 
 #include <Wire.h>
 #include <VL53L0X.h>
@@ -8,15 +14,19 @@
 VL53L0X sensor1;
 VL53L0X sensor2;
 
-volatile boolean motion_triggered = false;
+volatile boolean motion = false;
 uint16_t cyclesRemaining = 1;
-uint16_t avg1 = 0;
-uint16_t avg2 = 0;
+uint16_t sensor1_average = 0;
+uint16_t sensor2_average = 0;
 uint16_t sensor1_range = 0;
 uint16_t sensor2_range = 0;
+uint16_t sensor1_prev = 0;
+uint16_t sensor2_prev = 0;
+uint8_t sensor1_timeouts = 0;
+uint8_t sensor2_timeouts = 0;
 
-void motion() {
-  motion_triggered = true;
+void motionISR() {
+  motion = true;
 }
 
 void calibrate() {
@@ -31,7 +41,8 @@ void calibrate() {
   uint16_t count2 = 0;
   sensor1.startContinuous();
   sensor2.startContinuous();
-  while (count1 < 500 || count2 < 500) {
+
+  for(uint16_t i = 0; i < 300; i++) {
     range = sensor1.readRangeContinuousMillimeters();
     if (range < TIMEOUT_THRESHOLD) {
       sum1 += range;
@@ -47,15 +58,17 @@ void calibrate() {
     delay(1); // needed to reset watchdog timer
   }
 
-  avg1 = sum1/count1;
-  avg2 = sum2/count2;
+  sensor1_average = count1 < 200 ? TIMEOUT_THRESHOLD : sum1/count1;
+  sensor2_average = count2 < 200 ? TIMEOUT_THRESHOLD : sum2/count2;
 
   Sprintln("done.");
+  Sprintln(sensor1_average);
+  Sprintln(sensor2_average);
 }
 
 void initialize() {
   pinMode(PIR0, INPUT);
-  attachInterrupt(digitalPinToInterrupt(PIR0), motion, RISING);
+  attachInterrupt(digitalPinToInterrupt(PIR0), motionISR, RISING);
 
   pinMode(xshut1, OUTPUT);
   pinMode(xshut2, OUTPUT);
@@ -78,8 +91,8 @@ void initialize() {
   delay(100);
   sensor2.setAddress((uint8_t)25);
 
-  sensor1.setMeasurementTimingBudget(20000);
-  sensor2.setMeasurementTimingBudget(20000);
+  sensor1.setMeasurementTimingBudget(30000);
+  sensor2.setMeasurementTimingBudget(30000);
 
   calibrate();
 }
@@ -89,45 +102,71 @@ void initialize() {
 #define SENSOR_ERROR 2
 
 uint8_t read_sensor1() {
-  static const uint16_t padded_avg = avg1 * 0.85;
-
+  sensor1_prev  = sensor1_range;
   sensor1_range = sensor1.readRangeContinuousMillimeters();
 
   if (sensor1_range > TIMEOUT_THRESHOLD) {
-    Sprintln("sensor 1 error");
-    return SENSOR_ERROR;
+    if (sensor1_average < TIMEOUT_THRESHOLD) {
+      if (++sensor1_timeouts > CONFIDENCE_THRESHOLD) {
+        sensor1_timeouts = 0;
+        sensor1_average = TIMEOUT_THRESHOLD;
+        return SENSOR_LOW;
+      }
+      Sprintln("sensor 1 error");
+      return SENSOR_ERROR;
+    }
+
+    // otherwise treat it as sensor low
+    return SENSOR_LOW;
   }
 
-  if (sensor1_range < padded_avg) {
+  sensor1_timeouts = 0;
+
+  if (sensor1_range < (PADDING * sensor1_average / POWER)) {
     Sprint("sensor1: ");
     Sprint(sensor1_range);
     Sprint("/");
-    Sprintln(avg1);
+    Sprintln(sensor1_average);
     return SENSOR_HIGH;
-  } else {
-    return SENSOR_LOW;
   }
+
+  int16_t diff = sensor1_range - sensor1_average;
+  sensor1_average += (ALPHA * diff / POWER);
+  return SENSOR_LOW;
 }
 
 uint8_t read_sensor2() {
-  static const uint16_t padded_avg = avg2 * 0.85;
-
+  sensor2_prev  = sensor2_range;
   sensor2_range = sensor2.readRangeContinuousMillimeters();
 
   if (sensor2_range > TIMEOUT_THRESHOLD) {
-    Sprintln("sensor 2 error");
-    return SENSOR_ERROR;
+    if (sensor2_average < TIMEOUT_THRESHOLD) {
+      if (++sensor2_timeouts > CONFIDENCE_THRESHOLD) {
+        sensor2_timeouts = 0;
+        sensor2_average = TIMEOUT_THRESHOLD;
+        return SENSOR_LOW;
+      }
+      Sprintln("sensor 2 error");
+      return SENSOR_ERROR;
+    }
+
+    // otherwise treat it as sensor low
+    return SENSOR_LOW;
   }
 
-  if (sensor2_range < padded_avg) {
+  sensor2_timeouts = 0;
+
+  if (sensor2_range < (PADDING * sensor2_average / POWER)) {
     Sprint("sensor2: ");
     Sprint(sensor2_range);
     Sprint("/");
-    Sprintln(avg2);
+    Sprintln(sensor2_average);
     return SENSOR_HIGH;
-  } else {
-    return SENSOR_LOW;
   }
+
+  int16_t diff = sensor2_range - sensor2_average;
+  sensor2_average += (ALPHA * diff / POWER);
+  return SENSOR_LOW;
 }
 
 uint8_t _start = 0;
@@ -136,6 +175,8 @@ uint8_t _prev = 0;
 int8_t confidence = 0;
 
 void reset_sensor() {
+  if (_prev) Sprintln("-----");
+
   _start = 0;
   _end = 0;
   _prev = 0;
@@ -153,11 +194,9 @@ void run_sensor() {
   }
 
   uint8_t closer_sensor;
-  if (s1 == s2) {
-    // either there is no activity or user is in the middle of both
-    // sensors, so we know nothing about directional intent anyway.
-    if (s1 == SENSOR_LOW) {
-      // there's no LIDAR activity
+  uint8_t extra_confident = 1;
+  if (s1 == s2) { // either no activity or in between both sensors
+    if (s1 == SENSOR_LOW) { // there's no LIDAR activity
       if (_start && _end) {
         // activity just ended with enough data points.
         // _start and _end can be either 1 or 2 (see below)
@@ -175,29 +214,45 @@ void run_sensor() {
     }
 
     // we are in the middle of both lasers
-    if (sensor1_range == sensor2_range) {
+    int16_t range_diff = sensor1_range - sensor2_range;
+    if (abs(range_diff) < ERROR_MARGIN) {
       cyclesRemaining++;
+      confidence = 0;
       return;
     }
 
     // try to guess what direction we're moving
     closer_sensor = (sensor1_range < sensor2_range ? 1 : 2);
+    if (abs(range_diff) > 75) extra_confident++;
     Sprint("guessing direction ");
     Sprintln(closer_sensor);
-  } else {
-    // user is on one side or the other
-    closer_sensor = (s1 == SENSOR_HIGH ? 1 : 2);
+  } else { // user is on one side or the other
+    int16_t change = 0;
+    if (s1) {
+      closer_sensor = 1;
+      if (sensor1_prev < TIMEOUT_THRESHOLD) {
+        change = sensor1_range - sensor1_prev;
+      }
+    } else {
+      closer_sensor = 2;
+      if (sensor2_prev < TIMEOUT_THRESHOLD) {
+        change = sensor2_range - sensor2_prev;
+      }
+    }
+    // if subject is not moving, burn down cyclesRemaining so
+    // we eventually go to sleep if subject continues to not move
+    abs(change) < ERROR_MARGIN ? cyclesRemaining-- : extra_confident++;
   }
 
   cyclesRemaining++;
   if (closer_sensor == _prev) {
-    confidence++;
+    confidence += extra_confident;
   } else {
     _prev = closer_sensor;
-    confidence = 1;
+    confidence = extra_confident;
   }
 
-  if (confidence == CONFIDENCE_THRESHOLD) {
+  if (confidence >= CONFIDENCE_THRESHOLD) {
     if (_start) {
       _end = closer_sensor;
       Sprint("## setting end ");
@@ -211,25 +266,25 @@ void run_sensor() {
 }
 
 void loop() {
-  if (motion_triggered) {
+  if (motion) {
     cyclesRemaining = WAKE_CYCLES;
-    motion_triggered = false;
+    motion = false;
   }
 
-//  if (--cyclesRemaining == 0) {
-//    reset_sensor();
-//    sensor1.stopContinuous();
-//    Sprintln("disabled sensor 1");
-//    sensor2.stopContinuous();
-//    Sprintln("disabled sensor 2");
-//
-//    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
-//
-//    sensor1.startContinuous();
-//    Sprintln("enabled sensor 1");
-//    sensor2.startContinuous();
-//    Sprintln("enabled sensor 2");
-//  }
+  if (--cyclesRemaining == 0) {
+    reset_sensor();
+    sensor1.stopContinuous();
+    Sprintln("disabled sensor 1");
+    sensor2.stopContinuous();
+    Sprintln("disabled sensor 2");
+
+    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
+
+    sensor1.startContinuous();
+    Sprintln("enabled sensor 1");
+    sensor2.startContinuous();
+    Sprintln("enabled sensor 2");
+  }
 
   run_sensor();
 
