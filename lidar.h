@@ -1,4 +1,4 @@
-#define TIMEOUT_THRESHOLD    3000
+#define TIMEOUT_THRESHOLD    10000
 #define CONFIDENCE_THRESHOLD 4
 #define WAKE_CYCLES          500  // ~10 seconds
 #define ERROR_MARGIN         10
@@ -295,3 +295,4 @@ void loop() {
     confidence = -5;
   }
 }
+
