@@ -1,4 +1,4 @@
-#define TIMEOUT_THRESHOLD    10000
+#define TIMEOUT_THRESHOLD    3000
 #define CONFIDENCE_THRESHOLD 4
 #define WAKE_CYCLES          500  // ~10 seconds
 #define ERROR_MARGIN         10
@@ -6,7 +6,7 @@
 // Learning rates
 #define POWER       256
 #define ALPHA       18UL    //  7% of 256
-#define PADDING     242UL   // 95% of 256
+#define PADDING     230UL   // 90% of 256
 
 #include <Wire.h>
 #include <VL53L0X.h>
@@ -189,7 +189,6 @@ void run_sensor() {
 
   if (s1 == SENSOR_ERROR || s2 == SENSOR_ERROR) {
     // let's just skip this cycle and try again.
-    confidence--;
     return;
   }
 
