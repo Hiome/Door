@@ -67,8 +67,8 @@ void calibrate() {
 }
 
 void initialize() {
-  pinMode(PIR0, INPUT);
-  attachInterrupt(digitalPinToInterrupt(PIR0), motionISR, RISING);
+  pinMode(PIR, INPUT);
+  attachInterrupt(digitalPinToInterrupt(PIR), motionISR, RISING);
 
   pinMode(xshut1, OUTPUT);
   pinMode(xshut2, OUTPUT);

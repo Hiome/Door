@@ -15,13 +15,10 @@
 #define SERIAL_BAUD   115200
 
 /* Pin Connections */
-#define PIR0   3
-#define PIR1   4
-#define PIR2   5
+#define PIR    3
 #define xshut1 6
 #define xshut2 7
 #define LED    9
-#define LUX    A6
 #define BATT   A7
 
 #include <RFM69_ATC.h>
