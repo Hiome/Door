@@ -22,8 +22,6 @@ uint16_t sensor1_range = 0;
 uint16_t sensor2_range = 0;
 uint16_t sensor1_prev = 0;
 uint16_t sensor2_prev = 0;
-uint8_t sensor1_timeouts = 0;
-uint8_t sensor2_timeouts = 0;
 
 void motionISR() {
   motion = true;
@@ -106,12 +104,8 @@ uint8_t read_sensor1() {
   sensor1_range = sensor1.readRangeContinuousMillimeters();
 
   if (sensor1_range > TIMEOUT_THRESHOLD) {
-    if (sensor1_average < TIMEOUT_THRESHOLD) {
-      if (++sensor1_timeouts > CONFIDENCE_THRESHOLD) {
-        sensor1_timeouts = 0;
-        sensor1_average = TIMEOUT_THRESHOLD;
-        return SENSOR_LOW;
-      }
+    if (sensor1_average < TIMEOUT_THRESHOLD &&
+        sensor1_prev < (PADDING * sensor1_average / POWER)) {
       Sprintln("sensor 1 error");
       return SENSOR_ERROR;
     }
@@ -119,8 +113,6 @@ uint8_t read_sensor1() {
     // otherwise treat it as sensor low
     return SENSOR_LOW;
   }
-
-  sensor1_timeouts = 0;
 
   if (sensor1_range < (PADDING * sensor1_average / POWER)) {
     Sprint("sensor1: ");
@@ -140,12 +132,8 @@ uint8_t read_sensor2() {
   sensor2_range = sensor2.readRangeContinuousMillimeters();
 
   if (sensor2_range > TIMEOUT_THRESHOLD) {
-    if (sensor2_average < TIMEOUT_THRESHOLD) {
-      if (++sensor2_timeouts > CONFIDENCE_THRESHOLD) {
-        sensor2_timeouts = 0;
-        sensor2_average = TIMEOUT_THRESHOLD;
-        return SENSOR_LOW;
-      }
+    if (sensor2_average < TIMEOUT_THRESHOLD &&
+        sensor2_prev < (PADDING * sensor2_average / POWER)) {
       Sprintln("sensor 2 error");
       return SENSOR_ERROR;
     }
@@ -153,8 +141,6 @@ uint8_t read_sensor2() {
     // otherwise treat it as sensor low
     return SENSOR_LOW;
   }
-
-  sensor2_timeouts = 0;
 
   if (sensor2_range < (PADDING * sensor2_average / POWER)) {
     Sprint("sensor2: ");
@@ -196,16 +182,16 @@ void run_sensor() {
   uint8_t extra_confident = 1;
   if (s1 == s2) { // either no activity or in between both sensors
     if (s1 == SENSOR_LOW) { // there's no LIDAR activity
-      if (_start && _end) {
+      if (_end) {
         // activity just ended with enough data points.
         // _start and _end can be either 1 or 2 (see below)
-        if (_start > _end) {
-          // moved from sensor 2 to sensor 1
-          publish("2-1");
-        } else if (_start < _end) {
-          // moved from sensor 1 to sensor 2
-          publish("1-2");
+        if (_start == _end) {
+          publish((char*)(_end == 1 ? "m1" : "m2"));
+        } else {
+          publish((char*)(_end == 1 ? "2-1" : "1-2"));
         }
+      } else if (_start) {
+        publish((char*)(_start == 1 ? "m1" : "m2"));
       }
 
       reset_sensor();
@@ -271,11 +257,11 @@ void loop() {
   }
 
   if (--cyclesRemaining == 0) {
-    reset_sensor();
     sensor1.stopContinuous();
     Sprintln("disabled sensor 1");
     sensor2.stopContinuous();
     Sprintln("disabled sensor 2");
+    reset_sensor();
 
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
 
