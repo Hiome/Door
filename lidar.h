@@ -22,6 +22,17 @@ uint16_t sensor1_range = 0;
 uint16_t sensor2_range = 0;
 uint16_t sensor1_prev = 0;
 uint16_t sensor2_prev = 0;
+uint8_t start = 0;
+uint8_t _prev = 0;
+uint8_t directions = 0;
+uint8_t confidence = 0;
+
+void reset_sensor() {
+  start = 0;
+  _prev = 0;
+  directions = 0;
+  confidence = 0;
+}
 
 void motionISR() {
   motion = true;
@@ -56,8 +67,8 @@ void calibrate() {
     delay(1); // needed to reset watchdog timer
   }
 
-  sensor1_average = count1 < 200 ? TIMEOUT_THRESHOLD : sum1/count1;
-  sensor2_average = count2 < 200 ? TIMEOUT_THRESHOLD : sum2/count2;
+  sensor1_average = count1 < 100 ? TIMEOUT_THRESHOLD : sum1/count1;
+  sensor2_average = count2 < 100 ? TIMEOUT_THRESHOLD : sum2/count2;
 
   Sprintln("done.");
   Sprintln(sensor1_average);
@@ -155,18 +166,23 @@ uint8_t read_sensor2() {
   return SENSOR_LOW;
 }
 
-uint8_t _start = 0;
-uint8_t _end = 0;
-uint8_t _prev = 0;
-int8_t confidence = 0;
-
-void reset_sensor() {
-  if (_prev) Sprintln("-----");
-
-  _start = 0;
-  _end = 0;
-  _prev = 0;
-  confidence = 0;
+void process_data() {
+  if (directions) {
+    if (directions % 2 == 0) {
+      // activity just ended with enough data points.
+      publish((char*)(start == 1 ? "1-2" : "2-1"));
+      if (directions > 3) {
+        // it's possible (albeit unlikely) multiple people went through,
+        // so send a motion alert too so Hiome knows something happened
+        publish((char*)(start == 1 ? "m2" : "m1"));
+      }
+    } else {
+      // we never made it to a different side,
+      // so send motion alert for starting side
+      publish((char*)(start == 1 ? "m1" : "m2"));
+    }
+  }
+  reset_sensor();
 }
 
 void run_sensor() {
@@ -182,25 +198,14 @@ void run_sensor() {
   uint8_t extra_confident = 1;
   if (s1 == s2) { // either no activity or in between both sensors
     if (s1 == SENSOR_LOW) { // there's no LIDAR activity
-      if (_end) {
-        // activity just ended with enough data points.
-        // _start and _end can be either 1 or 2 (see below)
-        if (_start == _end) {
-          publish((char*)(_end == 1 ? "m1" : "m2"));
-        } else {
-          publish((char*)(_end == 1 ? "2-1" : "1-2"));
-        }
-      } else if (_start) {
-        publish((char*)(_start == 1 ? "m1" : "m2"));
-      }
-
-      reset_sensor();
+      process_data();
       return;
     }
 
     // we are in the middle of both lasers
     int16_t range_diff = sensor1_range - sensor2_range;
-    if (abs(range_diff) < ERROR_MARGIN) {
+    range_diff = abs(range_diff);
+    if (range_diff < ERROR_MARGIN) {
       cyclesRemaining++;
       confidence = 0;
       return;
@@ -208,7 +213,7 @@ void run_sensor() {
 
     // try to guess what direction we're moving
     closer_sensor = (sensor1_range < sensor2_range ? 1 : 2);
-    if (abs(range_diff) > 75) extra_confident++;
+    if (range_diff > 75) extra_confident++;
     Sprint("guessing direction ");
     Sprintln(closer_sensor);
   } else { // user is on one side or the other
@@ -238,14 +243,18 @@ void run_sensor() {
   }
 
   if (confidence >= CONFIDENCE_THRESHOLD) {
-    if (_start) {
-      _end = closer_sensor;
-      Sprint("## setting end ");
-      Sprintln(_end);
+    if (start) {
+      if ((closer_sensor == start && directions % 2 == 0) ||
+          (closer_sensor != start && directions % 2 == 1)) {
+        directions++;
+        Sprint("## setting end ");
+        Sprintln(closer_sensor);
+      }
     } else {
-      _start = closer_sensor;
+      start = closer_sensor;
+      directions = 1;
       Sprint("## setting start ");
-      Sprintln(_start);
+      Sprintln(closer_sensor);
     }
   }
 }
@@ -261,7 +270,11 @@ void loop() {
     Sprintln("disabled sensor 1");
     sensor2.stopContinuous();
     Sprintln("disabled sensor 2");
-    reset_sensor();
+
+    // if we have any data here, it's because of a door.
+    // drop last direction and check data one last time
+    if (directions) directions--;
+    process_data();
 
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
 
@@ -272,12 +285,5 @@ void loop() {
   }
 
   run_sensor();
-
-  // prevent an overflow
-  if (confidence > 100) {
-    confidence = 10;
-  } else if (confidence < -20) {
-    confidence = -5;
-  }
 }
 
