@@ -1,3 +1,5 @@
+#define FIRMWARE_VERSION     "V0.1"
+
 void motionISR() {
   // do nothing
 }

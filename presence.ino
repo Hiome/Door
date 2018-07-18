@@ -54,7 +54,7 @@ void checkBattery() {
   dtostrf(batteryVolts, 3,2, BATstr);
 }
 
-char sendBuf[12];
+char sendBuf[15];
 uint8_t packetCount = 1;
 void publish(char* msg) {
   checkBattery();
@@ -92,7 +92,7 @@ void setup() {
 
   initialize();
 
-  publish("A");
+  publish(FIRMWARE_VERSION);
   digitalWrite(LED, LOW);
 }
 
