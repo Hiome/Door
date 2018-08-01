@@ -1,3 +1,4 @@
+#define FIRMWARE_VERSION     "V0.1"
 #define TIMEOUT_THRESHOLD    3000
 #define CONFIDENCE_THRESHOLD 4
 #define WAKE_CYCLES          500  // ~10 seconds
@@ -6,7 +7,7 @@
 // Learning rates
 #define POWER       256
 #define ALPHA       18UL    //  7% of 256
-#define PADDING     230UL   // 90% of 256
+#define PADDING     218UL   // 85% of 256
 
 #include <Wire.h>
 #include <VL53L0X.h>
@@ -71,7 +72,9 @@ void calibrate() {
   sensor2_average = count2 < 100 ? TIMEOUT_THRESHOLD : sum2/count2;
 
   Sprintln("done.");
+  Sprint("sensor 1 average: ");
   Sprintln(sensor1_average);
+  Sprint("sensor 2 average: ");
   Sprintln(sensor2_average);
 }
 
