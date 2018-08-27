@@ -1,4 +1,4 @@
-#define FIRMWARE_VERSION     "V0.1"
+#define FIRMWARE_VERSION     "V0.2"
 #define TIMEOUT_THRESHOLD    3000
 #define CONFIDENCE_THRESHOLD 3
 #define WAKE_CYCLES          500  // ~10 seconds
@@ -173,7 +173,7 @@ void process_data() {
   if (directions) {
     if (directions % 2 == 0) {
       // activity just ended with enough data points.
-      publish((char*)(start == 1 ? "1-2" : "2-1"));
+      publish((char*)(start == 1 ? "2" : "1"));
       if (directions > 3) {
         // it's possible (albeit unlikely) multiple people went through,
         // so send a motion alert too so Hiome knows something happened
