@@ -1,6 +1,6 @@
 #define FIRMWARE_VERSION     "V0.1"
 #define TIMEOUT_THRESHOLD    3000
-#define CONFIDENCE_THRESHOLD 4
+#define CONFIDENCE_THRESHOLD 3
 #define WAKE_CYCLES          500  // ~10 seconds
 #define ERROR_MARGIN         10
 
@@ -193,8 +193,15 @@ void run_sensor() {
   uint8_t s2 = read_sensor2();
 
   if (s1 == SENSOR_ERROR || s2 == SENSOR_ERROR) {
-    // let's just skip this cycle and try again.
-    return;
+    if (s1 == s2) return; // both are errors, give up
+    if (s1 == SENSOR_ERROR && (_prev == 1 || s2 == SENSOR_LOW)) {
+      // give up if the current direction sensor failed or if other one is known low
+      return;
+    }
+    if (s2 == SENSOR_ERROR && (_prev == 2 || s1 == SENSOR_LOW)) {
+      // give up if the current direction sensor failed or if other one is known low
+      return;
+    }
   }
 
   uint8_t closer_sensor;
@@ -210,7 +217,6 @@ void run_sensor() {
     range_diff = abs(range_diff);
     if (range_diff < ERROR_MARGIN) {
       cyclesRemaining++;
-      confidence = 0;
       return;
     }
 
@@ -221,16 +227,18 @@ void run_sensor() {
     Sprintln(closer_sensor);
   } else { // user is on one side or the other
     int16_t change = 0;
-    if (s1) {
+    if (s1 == SENSOR_HIGH) {
       closer_sensor = 1;
       if (sensor1_prev < TIMEOUT_THRESHOLD) {
         change = sensor1_range - sensor1_prev;
       }
-    } else {
+      if (s2 == SENSOR_ERROR) extra_confident--;
+    } else if (s2 == SENSOR_HIGH) {
       closer_sensor = 2;
       if (sensor2_prev < TIMEOUT_THRESHOLD) {
         change = sensor2_range - sensor2_prev;
       }
+      if (s1 == SENSOR_ERROR) extra_confident--;
     }
     // if subject is not moving, burn down cyclesRemaining so
     // we eventually go to sleep if subject continues to not move
