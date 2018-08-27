@@ -48,17 +48,15 @@ void blink(uint8_t times) {
   }
 }
 
-char BATstr[5];
-void checkBattery() {
-  float batteryVolts = analogRead(BATT) * 0.00644;
-  dtostrf(batteryVolts, 3,2, BATstr);
+float batteryLevel() {
+  return analogRead(BATT) * 0.00644;
 }
 
 char sendBuf[15];
 uint8_t packetCount = 1;
 void publish(char* msg) {
-  checkBattery();
-  uint8_t len = sprintf(sendBuf, "%s;%s%d", msg, BATstr, packetCount);
+  int batt = analogRead(BATT);
+  uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, batt, packetCount);
   radio.sendWithRetry(GATEWAYID, sendBuf, len, 5);
   radio.sleep();
   if (packetCount < 9)
