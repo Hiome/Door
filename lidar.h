@@ -232,17 +232,20 @@ void run_sensor() {
       if (sensor1_prev < TIMEOUT_THRESHOLD) {
         change = sensor1_range - sensor1_prev;
       }
-      if (s2 == SENSOR_ERROR) extra_confident--;
     } else if (s2 == SENSOR_HIGH) {
       closer_sensor = 2;
       if (sensor2_prev < TIMEOUT_THRESHOLD) {
         change = sensor2_range - sensor2_prev;
       }
-      if (s1 == SENSOR_ERROR) extra_confident--;
     }
     // if subject is not moving, burn down cyclesRemaining so
     // we eventually go to sleep if subject continues to not move
-    abs(change) < ERROR_MARGIN ? cyclesRemaining-- : extra_confident++;
+    if (abs(change) < ERROR_MARGIN) {
+      cyclesRemaining--;
+    } else if (s1 != SENSOR_ERROR && s2 != SENSOR_ERROR) {
+      // add confidence if the other sensor was legitimately low
+      extra_confident++;
+    }
   }
 
   cyclesRemaining++;
