@@ -74,6 +74,8 @@ void publish(char* msg) {
 #include "lidar.h"
 #elif defined MOTION
 #include "motion.h"
+#elif defined DOOR
+#include "door.h"
 #else
 #error Missing node type
 #endif
