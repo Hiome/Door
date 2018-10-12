@@ -1,6 +1,7 @@
-#define FIRMWARE_VERSION     "V0.2"
+#define FIRMWARE_VERSION     "V0.3"
 #define TIMEOUT_THRESHOLD    3000
-#define CONFIDENCE_THRESHOLD 3
+#define CONFIDENCE_THRESHOLD 2
+#define TOTAL_CONFIDENCE     6
 #define WAKE_CYCLES          500  // ~10 seconds
 #define ERROR_MARGIN         10
 
@@ -27,12 +28,14 @@ uint8_t start = 0;
 uint8_t _prev = 0;
 uint8_t directions = 0;
 uint8_t confidence = 0;
+uint16_t total_conf = 0;
 
 void reset_sensor() {
   start = 0;
   _prev = 0;
   directions = 0;
   confidence = 0;
+  total_conf = 0;
 }
 
 void motionISR() {
@@ -170,7 +173,7 @@ uint8_t read_sensor2() {
 }
 
 void process_data() {
-  if (directions) {
+  if (total_conf >= TOTAL_CONFIDENCE) {
     if (directions % 2 == 0) {
       // activity just ended with enough data points.
       publish((char*)(start == 1 ? "2" : "1"));
@@ -194,14 +197,8 @@ void run_sensor() {
 
   if (s1 == SENSOR_ERROR || s2 == SENSOR_ERROR) {
     if (s1 == s2) return; // both are errors, give up
-    if (s1 == SENSOR_ERROR && (_prev == 1 || s2 == SENSOR_LOW)) {
-      // give up if the current direction sensor failed or if other one is known low
-      return;
-    }
-    if (s2 == SENSOR_ERROR && (_prev == 2 || s1 == SENSOR_LOW)) {
-      // give up if the current direction sensor failed or if other one is known low
-      return;
-    }
+    if (s1 == SENSOR_ERROR && s2 == SENSOR_LOW) return;
+    if (s2 == SENSOR_ERROR && s1 == SENSOR_LOW) return;
   }
 
   uint8_t closer_sensor;
@@ -242,19 +239,22 @@ void run_sensor() {
     // we eventually go to sleep if subject continues to not move
     if (abs(change) < ERROR_MARGIN) {
       cyclesRemaining--;
-    } else if (s1 != SENSOR_ERROR && s2 != SENSOR_ERROR) {
-      // add confidence if the other sensor was legitimately low
-      extra_confident++;
     }
+    // add confidence if the other sensor was legitimately low
+    extra_confident++;
   }
 
   cyclesRemaining++;
+  if (total_conf == 0) {
+    extra_confident++;
+  }
   if (closer_sensor == _prev) {
     confidence += extra_confident;
   } else {
     _prev = closer_sensor;
     confidence = extra_confident;
   }
+  total_conf += extra_confident;
 
   if (confidence >= CONFIDENCE_THRESHOLD) {
     if (start) {
