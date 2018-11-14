@@ -104,7 +104,7 @@ void loop() {
     uint8_t idx = ordered_indexes[i];
     bool distinct = true;
     for (uint8_t j=0; j<i; j++) {
-      if (distanceBetween(ordered_indexes[j], idx) < 2) {
+      if (distanceBetween(ordered_indexes[j], idx) <= 3) {
         distinct = false;
         break;
       }
