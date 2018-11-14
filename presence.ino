@@ -76,6 +76,8 @@ void publish(char* msg) {
 #include "motion.h"
 #elif defined DOOR
 #include "door.h"
+#elif defined THERMAL
+#include "thermal.h"
 #else
 #error Missing node type
 #endif

@@ -1,8 +1,9 @@
 // Choose one:
-#define LIDAR
+//#define LIDAR
 //#define MOTION
 //#define DOOR
+#define THERMAL
 
-#define NODEID        7   // unique for each node on same network
+#define NODEID        13   // unique for each node on same network
 #define DEBUGGER
 
