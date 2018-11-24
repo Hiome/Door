@@ -2,6 +2,7 @@
 #define GRID_EXTENT          8
 #define TEMP_BUFFER          2
 #define MAX_DISTANCE         3
+#define UNDEF_POINT          70
 
 #include <Wire.h>
 #include <Adafruit_AMG88xx.h>
@@ -11,8 +12,8 @@ Adafruit_AMG88xx amg;
 float calibrated_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 
-uint8_t past_left = 0;
-uint8_t past_right = 0;
+uint8_t past_points[5] = {UNDEF_POINT, UNDEF_POINT, UNDEF_POINT, UNDEF_POINT, UNDEF_POINT};
+uint8_t starting_points[5];
 
 volatile boolean motion = false;
 void motionISR() {
@@ -25,7 +26,7 @@ void initialize() {
 
   amg.begin();
 
-  delay(100); // let sensor boot up
+  delay(500); // let sensor boot up
   amg.readPixels(calibrated_pixels);
 }
 
@@ -59,6 +60,11 @@ uint8_t distance(uint8_t p1, uint8_t p2) {
 }
 
 void loop() {
+  if(motion) {
+    Sprintln("motion!");
+    motion = false;
+  }
+
   amg.readPixels(pixels);
 
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
@@ -132,46 +138,76 @@ void loop() {
     }
   }
 
-  uint8_t left_bucket = 0;
-  uint8_t right_bucket = 0;
-  for (int i=0; i<total_masses; i++) {
-    if (xcoordinates[points[i]] <= (GRID_EXTENT/2)) {
-      left_bucket++;
-    } else {
-      right_bucket++;
+  bool updated_points[5] = {false, false, false, false, false};
+  for (uint8_t i=0; i<total_masses; i++) {
+    uint8_t empty_index = UNDEF_POINT;
+    bool matched = false;
+    for (uint8_t j=0; j<5; j++) {
+      if (past_points[j] == UNDEF_POINT) {
+        if (empty_index == UNDEF_POINT) empty_index = j;
+      } else if (!updated_points[j]) {
+        if (distance(points[i], past_points[j]) <= MAX_DISTANCE) {
+          past_points[j] = points[i];
+          updated_points[j] = true;
+          matched = true;
+          break;
+        }
+      }
+    }
+    if (!matched && empty_index != UNDEF_POINT) {
+      // must be a new point
+      starting_points[empty_index] = points[i];
+      past_points[empty_index] = points[i];
+      updated_points[empty_index] = true;
     }
   }
 
-  if (left_bucket > past_left && right_bucket < past_right) {
-    Sprint(left_bucket - past_left);
-    Sprintln(" entered");
-  }
-  if (right_bucket > past_right && left_bucket < past_left) {
-    Sprint(right_bucket - past_right);
-    Sprintln(" exited");
+  for (uint8_t i=0; i<5; i++) {
+    if (past_points[i] != UNDEF_POINT) {
+      uint8_t starting_pos = ycoordinates[starting_points[i]];
+      uint8_t ending_pos = ycoordinates[past_points[i]];
+      int diff = starting_pos - ending_pos;
+      if (abs(diff) >= (GRID_EXTENT/2)) {
+        if (starting_pos > ending_pos) {
+          Sprintln("1 entered");
+          int s = past_points[i] - (2*GRID_EXTENT);
+          starting_points[i] = max(s, 0);
+        } else {
+          Sprintln("1 exited");
+          int s = past_points[i] + (2*GRID_EXTENT);
+          starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
+        }
+      }
+      if (!updated_points[i]) {
+        // must be a point that left
+        // TODO delay turning lights off until now somehow
+        past_points[i] = UNDEF_POINT;
+      }
+    }
   }
 
-  past_left = left_bucket;
-  past_right = right_bucket;
-
-//  for(int i = 0; i<total_masses; i++) {
-//    Serial.print(points[i]);
-//    Serial.print(", ");
-//  }
-//  Serial.println();
-//
-//  Serial.print("[");
-//  for(int i=1; i<=AMG88xx_PIXEL_ARRAY_SIZE; i++){
-//    float curr = pixels[i-1];
-//    float last = calibrated_pixels[i-1];
-//    if (curr - last > TEMP_BUFFER) {
-//      Serial.print(curr);
-//    } else
-//      Serial.print("-----");
-//    Serial.print(", ");
-//    if( i%8 == 0 ) Serial.println();
-//  }
-//  Serial.println("]");
-//  Serial.println();
+  #ifdef DEBUGGER
+    if (total_masses > 0) {
+      for(uint8_t i = 0; i<total_masses; i++) {
+        Serial.print(points[i]);
+        Serial.print(", ");
+      }
+      Serial.println();
+    
+      Serial.print("[");
+      for(uint8_t i=1; i<=AMG88xx_PIXEL_ARRAY_SIZE; i++){
+        float curr = pixels[i-1];
+        float last = calibrated_pixels[i-1];
+        if (curr - last > TEMP_BUFFER) {
+          Serial.print(curr);
+        } else
+          Serial.print("-----");
+        Serial.print(", ");
+        if( i%8 == 0 ) Serial.println();
+      }
+      Serial.println("]");
+      Serial.println();
+    }
+  #endif
 }
 
