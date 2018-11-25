@@ -1,7 +1,10 @@
+//#define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
+
 #define FIRMWARE_VERSION     "V0.1"
 #define GRID_EXTENT          8
 #define TEMP_BUFFER          2
 #define MAX_DISTANCE         3
+#define MAX_PEOPLE           5
 #define UNDEF_POINT          70
 
 #include <Wire.h>
@@ -12,8 +15,9 @@ Adafruit_AMG88xx amg;
 float calibrated_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 
-uint8_t past_points[5] = {UNDEF_POINT, UNDEF_POINT, UNDEF_POINT, UNDEF_POINT, UNDEF_POINT};
-uint8_t starting_points[5];
+uint8_t past_points[MAX_PEOPLE] = {UNDEF_POINT, UNDEF_POINT, UNDEF_POINT, UNDEF_POINT, UNDEF_POINT};
+uint8_t starting_points[MAX_PEOPLE];
+uint16_t histories[MAX_PEOPLE] = {0,0,0,0,0};
 
 volatile boolean motion = false;
 void motionISR() {
@@ -118,7 +122,7 @@ void loop() {
   #define BOTTOM_RIGHT  ( NOT_BOTTOM_EDGE && CHECK_PIXEL(BR_IDX) )
 
   uint8_t total_masses = 0;
-  uint8_t points[5]; // assuming we'll never see more than 5 people at once in a frame
+  uint8_t points[MAX_PEOPLE];
   for(uint8_t i=0; i<count; i++){
     uint8_t idx = ordered_indexes[i];
     bool distinct = true;
@@ -138,31 +142,75 @@ void loop() {
     }
   }
 
-  bool updated_points[5] = {false, false, false, false, false};
+  uint16_t ordered_histories[MAX_PEOPLE];
+  uint8_t ordered_points[MAX_PEOPLE];
+  uint8_t point_count = 0;
+  for(uint8_t i=0; i<MAX_PEOPLE; i++){
+    uint16_t h = histories[i];
+    if (h > 0) {
+      bool added = false;
+      for (uint8_t j=0; j<point_count; j++) {
+        if (h > ordered_histories[j]) {
+          for (uint8_t x=point_count; x>j; x--) {
+            ordered_histories[x] = ordered_histories[x-1];
+            ordered_points[x] = ordered_points[x-1];
+          }
+          ordered_histories[j] = h;
+          ordered_points[j] = i;
+          added = true;
+          break;
+        }
+      }
+      if (!added) {
+        ordered_histories[point_count] = h;
+        ordered_points[point_count] = i;
+      }
+      point_count++;
+    }
+  }
+
+  bool taken[MAX_PEOPLE] = {false, false, false, false, false};
+  for (uint8_t i=0; i<point_count; i++) {
+    uint8_t idx = ordered_points[i];
+    uint8_t p = past_points[idx];
+    uint8_t min_distance = (MAX_DISTANCE + 1);
+    uint8_t min_index = UNDEF_POINT;
+    for (uint8_t j=0; j<total_masses; j++) {
+      if (!taken[j]) {
+        uint8_t d = distance(p, points[j]);
+        if (d < min_distance) {
+          min_distance = d;
+          min_index = j;
+        }
+      }
+    }
+    if (min_index == UNDEF_POINT) {
+      // point disappeared, stop tracking it
+      past_points[idx] = UNDEF_POINT;
+      histories[idx] = 0;
+    } else {
+      // closest point matched, update trackers
+      past_points[idx] = points[min_index];
+      histories[idx]++;
+      taken[min_index] = true;
+    }
+  }
+
   for (uint8_t i=0; i<total_masses; i++) {
-    uint8_t empty_index = UNDEF_POINT;
-    bool matched = false;
-    for (uint8_t j=0; j<5; j++) {
-      if (past_points[j] == UNDEF_POINT) {
-        if (empty_index == UNDEF_POINT) empty_index = j;
-      } else if (!updated_points[j]) {
-        if (distance(points[i], past_points[j]) <= MAX_DISTANCE) {
+    if (!taken[i]) {
+      // new point appeared
+      for (uint8_t j=0; j<MAX_PEOPLE; j++) {
+        if (past_points[j] == UNDEF_POINT) {
+          starting_points[j] = points[i];
           past_points[j] = points[i];
-          updated_points[j] = true;
-          matched = true;
+          histories[j] = 1;
           break;
         }
       }
     }
-    if (!matched && empty_index != UNDEF_POINT) {
-      // must be a new point
-      starting_points[empty_index] = points[i];
-      past_points[empty_index] = points[i];
-      updated_points[empty_index] = true;
-    }
   }
 
-  for (uint8_t i=0; i<5; i++) {
+  for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     if (past_points[i] != UNDEF_POINT) {
       uint8_t starting_pos = ycoordinates[starting_points[i]];
       uint8_t ending_pos = ycoordinates[past_points[i]];
@@ -178,15 +226,10 @@ void loop() {
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
       }
-      if (!updated_points[i]) {
-        // must be a point that left
-        // TODO delay turning lights off until now somehow
-        past_points[i] = UNDEF_POINT;
-      }
     }
   }
 
-  #ifdef DEBUGGER
+  #if defined(DEBUGGER) && defined(PRINT_RAW_DATA)
     if (total_masses > 0) {
       for(uint8_t i = 0; i<total_masses; i++) {
         Serial.print(points[i]);
