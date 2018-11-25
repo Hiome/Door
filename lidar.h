@@ -46,7 +46,7 @@ void calibrate() {
   blink(4); // give the user 2 seconds to get out of the way
   digitalWrite(LED, HIGH);
 
-  Sprint("Calibrating... ");
+  SERIAL_PRINT("Calibrating... ");
   uint16_t range = 0;
   uint32_t sum1 = 0;
   uint32_t sum2 = 0;
@@ -74,11 +74,11 @@ void calibrate() {
   sensor1_average = count1 < 100 ? TIMEOUT_THRESHOLD : sum1/count1;
   sensor2_average = count2 < 100 ? TIMEOUT_THRESHOLD : sum2/count2;
 
-  Sprintln("done.");
-  Sprint("sensor 1 average: ");
-  Sprintln(sensor1_average);
-  Sprint("sensor 2 average: ");
-  Sprintln(sensor2_average);
+  SERIAL_PRINTLN("done.");
+  SERIAL_PRINT("sensor 1 average: ");
+  SERIAL_PRINTLN(sensor1_average);
+  SERIAL_PRINT("sensor 2 average: ");
+  SERIAL_PRINTLN(sensor2_average);
 }
 
 void initialize() {
@@ -92,14 +92,14 @@ void initialize() {
 
   Wire.begin();
 
-  Sprintln("Initializing Sensor 1...");
+  SERIAL_PRINTLN("Initializing Sensor 1...");
   pinMode(xshut1, INPUT);
   delay(150);
   sensor1.init();
   delay(100);
   sensor1.setAddress((uint8_t)22);
   
-  Sprintln("Initializing Sensor 2...");
+  SERIAL_PRINTLN("Initializing Sensor 2...");
   pinMode(xshut2, INPUT);
   delay(150);
   sensor2.init();
@@ -123,7 +123,7 @@ uint8_t read_sensor1() {
   if (sensor1_range > TIMEOUT_THRESHOLD) {
     if (sensor1_average < TIMEOUT_THRESHOLD &&
         sensor1_prev < (PADDING * sensor1_average / POWER)) {
-      Sprintln("sensor 1 error");
+      SERIAL_PRINTLN("sensor 1 error");
       return SENSOR_ERROR;
     }
 
@@ -132,10 +132,10 @@ uint8_t read_sensor1() {
   }
 
   if (sensor1_range < (PADDING * sensor1_average / POWER)) {
-    Sprint("sensor1: ");
-    Sprint(sensor1_range);
-    Sprint("/");
-    Sprintln(sensor1_average);
+    SERIAL_PRINT("sensor1: ");
+    SERIAL_PRINT(sensor1_range);
+    SERIAL_PRINT("/");
+    SERIAL_PRINTLN(sensor1_average);
     return SENSOR_HIGH;
   }
 
@@ -151,7 +151,7 @@ uint8_t read_sensor2() {
   if (sensor2_range > TIMEOUT_THRESHOLD) {
     if (sensor2_average < TIMEOUT_THRESHOLD &&
         sensor2_prev < (PADDING * sensor2_average / POWER)) {
-      Sprintln("sensor 2 error");
+      SERIAL_PRINTLN("sensor 2 error");
       return SENSOR_ERROR;
     }
 
@@ -160,10 +160,10 @@ uint8_t read_sensor2() {
   }
 
   if (sensor2_range < (PADDING * sensor2_average / POWER)) {
-    Sprint("sensor2: ");
-    Sprint(sensor2_range);
-    Sprint("/");
-    Sprintln(sensor2_average);
+    SERIAL_PRINT("sensor2: ");
+    SERIAL_PRINT(sensor2_range);
+    SERIAL_PRINT("/");
+    SERIAL_PRINTLN(sensor2_average);
     return SENSOR_HIGH;
   }
 
@@ -220,8 +220,8 @@ void run_sensor() {
     // try to guess what direction we're moving
     closer_sensor = (sensor1_range < sensor2_range ? 1 : 2);
     if (range_diff > 75) extra_confident++;
-    Sprint("guessing direction ");
-    Sprintln(closer_sensor);
+    SERIAL_PRINT("guessing direction ");
+    SERIAL_PRINTLN(closer_sensor);
   } else { // user is on one side or the other
     int16_t change = 0;
     if (s1 == SENSOR_HIGH) {
@@ -261,14 +261,14 @@ void run_sensor() {
       if ((closer_sensor == start && directions % 2 == 0) ||
           (closer_sensor != start && directions % 2 == 1)) {
         directions++;
-        Sprint("## setting end ");
-        Sprintln(closer_sensor);
+        SERIAL_PRINT("## setting end ");
+        SERIAL_PRINTLN(closer_sensor);
       }
     } else {
       start = closer_sensor;
       directions = 1;
-      Sprint("## setting start ");
-      Sprintln(closer_sensor);
+      SERIAL_PRINT("## setting start ");
+      SERIAL_PRINTLN(closer_sensor);
     }
   }
 }
@@ -281,9 +281,9 @@ void loop() {
 
   if (--cyclesRemaining == 0) {
     sensor1.stopContinuous();
-    Sprintln("disabled sensor 1");
+    SERIAL_PRINTLN("disabled sensor 1");
     sensor2.stopContinuous();
-    Sprintln("disabled sensor 2");
+    SERIAL_PRINTLN("disabled sensor 2");
 
     // if we have any data here, it's because of a door.
     // drop last direction and check data one last time
@@ -293,9 +293,9 @@ void loop() {
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
 
     sensor1.startContinuous();
-    Sprintln("enabled sensor 1");
+    SERIAL_PRINTLN("enabled sensor 1");
     sensor2.startContinuous();
-    Sprintln("enabled sensor 2");
+    SERIAL_PRINTLN("enabled sensor 2");
   }
 
   run_sensor();

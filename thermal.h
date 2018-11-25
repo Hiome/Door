@@ -65,7 +65,7 @@ uint8_t distance(uint8_t p1, uint8_t p2) {
 
 void loop() {
   if(motion) {
-    Sprintln("motion!");
+    SERIAL_PRINTLN("motion!");
     motion = false;
   }
 
@@ -217,11 +217,11 @@ void loop() {
       int diff = starting_pos - ending_pos;
       if (abs(diff) >= (GRID_EXTENT/2)) {
         if (starting_pos > ending_pos) {
-          Sprintln("1 entered");
+          SERIAL_PRINTLN("1 entered");
           int s = past_points[i] - (2*GRID_EXTENT);
           starting_points[i] = max(s, 0);
         } else {
-          Sprintln("1 exited");
+          SERIAL_PRINTLN("1 exited");
           int s = past_points[i] + (2*GRID_EXTENT);
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
@@ -229,7 +229,7 @@ void loop() {
     }
   }
 
-  #if defined(DEBUGGER) && defined(PRINT_RAW_DATA)
+  #if defined(ENABLE_SERIAL) && defined(PRINT_RAW_DATA)
     if (total_masses > 0) {
       for(uint8_t i = 0; i<total_masses; i++) {
         Serial.print(points[i]);

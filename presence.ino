@@ -24,14 +24,16 @@
 #include <RFM69_ATC.h>
 #include <LowPower.h>
 
-#ifdef DEBUGGER
-  #define Sprintln(a) (Serial.println(a))
-  #define Sprint(a) (Serial.print(a))
-  #define Sflush() (Serial.flush())
+#ifdef ENABLE_SERIAL
+  #define SERIAL_START      ( Serial.begin(SERIAL_BAUD) )
+  #define SERIAL_FLUSH      ( Serial.flush() )
+  #define SERIAL_PRINT(a)   ( Serial.print(a) )
+  #define SERIAL_PRINTLN(a) ( Serial.println(a) )
 #else
-  #define Sprintln(a)
-  #define Sprint(a)
-  #define Sflush()
+  #define SERIAL_START
+  #define SERIAL_FLUSH
+  #define SERIAL_PRINT(a)
+  #define SERIAL_PRINTLN(a)
 #endif
 
 RFM69_ATC radio;
@@ -64,10 +66,10 @@ void publish(char* msg) {
   else
     packetCount = 1;
 
-  Sprint("published ");
-  Sprint(sendBuf);
-  Sprintln("\n\n");
-  Sflush();
+  SERIAL_PRINT("published ");
+  SERIAL_PRINT(sendBuf);
+  SERIAL_PRINTLN("\n\n");
+  SERIAL_FLUSH;
 }
 
 #if defined LIDAR
@@ -83,7 +85,7 @@ void publish(char* msg) {
 #endif
 
 void setup() {
-  Serial.begin(SERIAL_BAUD);
+  SERIAL_START;
 
   pinMode(LED, OUTPUT);
   digitalWrite(LED, HIGH);

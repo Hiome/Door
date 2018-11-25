@@ -5,5 +5,5 @@
 #define THERMAL
 
 #define NODEID        13   // unique for each node on same network
-#define DEBUGGER
+#define ENABLE_SERIAL
 
