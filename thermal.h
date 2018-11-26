@@ -1,4 +1,4 @@
-//#define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
+#define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
 #define FIRMWARE_VERSION     "V0.1"
 #define GRID_EXTENT          8
@@ -231,25 +231,35 @@ void loop() {
 
   #if defined(ENABLE_SERIAL) && defined(PRINT_RAW_DATA)
     if (total_masses > 0) {
+      SERIAL_PRINT("Detected masses: ");
       for(uint8_t i = 0; i<total_masses; i++) {
-        Serial.print(points[i]);
-        Serial.print(", ");
+        SERIAL_PRINT(points[i]);
+        SERIAL_PRINT(", ");
       }
-      Serial.println();
-    
-      Serial.print("[");
+      SERIAL_PRINTLN();
+
+      uint8_t next_point = points[0];
+      uint8_t seen_points = 1;
       for(uint8_t i=1; i<=AMG88xx_PIXEL_ARRAY_SIZE; i++){
         float curr = pixels[i-1];
         float last = calibrated_pixels[i-1];
         if (curr - last > TEMP_BUFFER) {
-          Serial.print(curr);
+          i-1 == next_point ? SERIAL_PRINT("[") : SERIAL_PRINT(" ");
+          SERIAL_PRINT(curr);
+          if (i-1 == next_point) {
+            SERIAL_PRINT("]");
+            if (total_masses > seen_points) {
+              next_point = points[seen_points];
+              seen_points++;
+            }
+          } else {
+            SERIAL_PRINT(" ");
+          }
         } else
-          Serial.print("-----");
-        Serial.print(", ");
-        if( i%8 == 0 ) Serial.println();
+          SERIAL_PRINT(" ----- ");
+        if( i%8 == 0 ) SERIAL_PRINTLN();
       }
-      Serial.println("]");
-      Serial.println();
+      SERIAL_PRINTLN();
     }
   #endif
 }
