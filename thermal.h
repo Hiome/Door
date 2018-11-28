@@ -174,13 +174,12 @@ void processSensor() {
   bool taken[MAX_PEOPLE] = {false, false, false, false, false};
   for (uint8_t i=0; i<point_count; i++) {
     uint8_t idx = ordered_points[i];
-    uint8_t p = past_points[idx];
     uint8_t min_distance = MIN_DISTANCE;
     uint8_t min_index = UNDEF_POINT;
     for (uint8_t j=0; j<total_masses; j++) {
       if (!taken[j]) {
         // match with closest point
-        uint8_t d = distance(p, points[j]);
+        uint8_t d = distance(past_points[idx], points[j]);
         if (d < min_distance) {
           min_distance = d;
           min_index = j;
@@ -188,7 +187,7 @@ void processSensor() {
       }
     }
     if (min_index == UNDEF_POINT) {
-      // point disappeared, stop tracking it
+      // point disappeared (no new point found), stop tracking it
       past_points[idx] = UNDEF_POINT;
       histories[idx] = 0;
     } else {
@@ -199,10 +198,13 @@ void processSensor() {
     }
   }
 
+  // look for any new points in this frame that did not match with past points
+
   for (uint8_t i=0; i<total_masses; i++) {
     if (!taken[i]) {
-      // new point appeared, start tracking it
+      // new point appeared (no past point found), start tracking it
       for (uint8_t j=0; j<MAX_PEOPLE; j++) {
+        // look for first empty slot in past_points to use
         if (past_points[j] == UNDEF_POINT) {
           starting_points[j] = points[i];
           past_points[j] = points[i];
@@ -220,9 +222,11 @@ void processSensor() {
       uint8_t starting_pos = ycoordinates[starting_points[i]];
       uint8_t ending_pos = ycoordinates[past_points[i]];
       int diff = starting_pos - ending_pos;
-      if (abs(diff) >= (GRID_EXTENT/2)) {
+      if (abs(diff) >= (GRID_EXTENT/2)) { // person traversed at least half the grid
         if (starting_pos > ending_pos) {
           SERIAL_PRINTLN("1 entered");
+          // artificially shift starting point ahead 2 rows so that
+          // if user turns around now, algorithm considers it an exit
           int s = past_points[i] - (2*GRID_EXTENT);
           starting_points[i] = max(s, 0);
         } else {
