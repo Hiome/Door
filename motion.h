@@ -13,6 +13,6 @@ void initialize() {
 void loop() {
   publish("1");
   blink(1);
-  LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
+  LOWPOWER_DELAY(SLEEP_FOREVER);
 }
 

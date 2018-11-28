@@ -13,12 +13,11 @@ void initialize() {
 }
 
 void loop() {
-  delay(500);
   int newState = digitalRead(PIR);
   if (state != newState) {
     state = newState;
     publish(state);
   }
-  LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
+  LOWPOWER_DELAY(SLEEP_FOREVER);
 }
 

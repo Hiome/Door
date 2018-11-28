@@ -36,16 +36,18 @@
   #define SERIAL_PRINTLN(a)
 #endif
 
+#define LOWPOWER_DELAY(d) ( LowPower.powerDown(d, ADC_OFF, BOD_ON) )
+
 RFM69_ATC radio;
 
 void blink(uint8_t times) {
   while (times > 0) {
     digitalWrite(LED, LOW);
-    delay(125);
+    LOWPOWER_DELAY(SLEEP_120MS);
     digitalWrite(LED, HIGH);
-    delay(250);
+    LOWPOWER_DELAY(SLEEP_250MS);
     digitalWrite(LED, LOW);
-    delay(125);
+    LOWPOWER_DELAY(SLEEP_120MS);
     times--;
   }
 }
@@ -93,6 +95,7 @@ void setup() {
   radio.initialize(RF69_915MHZ, NODEID, NETWORKID);
   radio.encrypt(ENCRYPTKEY);
   radio.enableAutoPower(ATC_RSSI);
+  radio.sleep();
 
   initialize();
 

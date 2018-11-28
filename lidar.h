@@ -94,16 +94,16 @@ void initialize() {
 
   SERIAL_PRINTLN("Initializing Sensor 1...");
   pinMode(xshut1, INPUT);
-  delay(150);
+  LOWPOWER_DELAY(SLEEP_120MS);
   sensor1.init();
-  delay(100);
+  LOWPOWER_DELAY(SLEEP_120MS);
   sensor1.setAddress((uint8_t)22);
   
   SERIAL_PRINTLN("Initializing Sensor 2...");
   pinMode(xshut2, INPUT);
-  delay(150);
+  LOWPOWER_DELAY(SLEEP_120MS);
   sensor2.init();
-  delay(100);
+  LOWPOWER_DELAY(SLEEP_120MS);
   sensor2.setAddress((uint8_t)25);
 
   sensor1.setMeasurementTimingBudget(30000);
@@ -290,7 +290,7 @@ void loop() {
     if (directions) directions--;
     process_data();
 
-    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_ON);
+    LOWPOWER_DELAY(SLEEP_FOREVER);
 
     sensor1.startContinuous();
     SERIAL_PRINTLN("enabled sensor 1");

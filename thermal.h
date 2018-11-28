@@ -1,4 +1,4 @@
-#define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
+//#define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
 #define FIRMWARE_VERSION     "V0.1"
 #define GRID_EXTENT          8
@@ -30,7 +30,7 @@ void initialize() {
 
   amg.begin();
 
-  delay(500); // let sensor boot up
+  LOWPOWER_DELAY(SLEEP_500MS); // let sensor boot up
   amg.readPixels(calibrated_pixels);
 }
 
@@ -61,6 +61,16 @@ uint8_t distance(uint8_t p1, uint8_t p2) {
   int8_t yd = ycoordinates[p2] - ycoordinates[p1];
   int8_t xd = xcoordinates[p2] - xcoordinates[p1];
   return abs(yd) + abs(xd);
+}
+
+void goodNight() {
+  _pctl.PCTL = AMG88xx_SLEEP_MODE;
+  write8(AMG88xx_PCTL, _pctl.get());
+}
+
+void goodMorning() {
+  _pctl.PCTL = AMG88xx_NORMAL_MODE;
+  write8(AMG88xx_PCTL, _pctl.get());
 }
 
 void loop() {

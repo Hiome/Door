@@ -37,6 +37,6 @@ void loop() {
     }
     cycles = 0;
   }
-  LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_ON);
+  LOWPOWER_DELAY(SLEEP_8S);
 }
 
