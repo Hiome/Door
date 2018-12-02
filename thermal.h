@@ -4,7 +4,7 @@
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define TEMP_BUFFER             2    // min increase in temp needed to register person
 #define MIN_DISTANCE            3    // min distance for 2 peaks to be separate people
-#define MIN_HISTORY             6    // min number of times a point needs to be seen
+#define MIN_HISTORY             5    // min number of times a point needs to be seen
 #define MAX_PEOPLE              5    // most people we support in a single frame
 #define MAX_CALIBRATION_CYCLES  8000 // each cycle is roughly 16ms, 8000 cycles ~= 2min
 
