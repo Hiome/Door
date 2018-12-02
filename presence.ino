@@ -70,9 +70,9 @@ void blink(uint8_t times) {
   #define BATTERY_LEVEL ( 0 )
 #endif
 
-char sendBuf[15];
 uint8_t packetCount = 1;
 void publish(char* msg) {
+  char sendBuf[15];
   uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, BATTERY_LEVEL, packetCount);
   radio.sendWithRetry(GATEWAYID, sendBuf, len, 5);
   radio.sleep();

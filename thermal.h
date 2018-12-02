@@ -3,11 +3,10 @@
 #define FIRMWARE_VERSION        "V0.1"
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define TEMP_BUFFER             2    // min increase in temp needed to register person
-#define MIN_DISTANCE            4    // min distance for 2 peaks to be separate people
+#define MIN_DISTANCE            3    // min distance for 2 peaks to be separate people
+#define MIN_HISTORY             6    // min number of times a point needs to be seen
 #define MAX_PEOPLE              5    // most people we support in a single frame
-#define MAX_WAKE_CYCLES         150  // each cycle is roughly 100ms, so 15s
-#define MAX_CALIBRATION_CYCLES  150  // each cycle is 8s, so 150*8 = 20min
-#define MIN_MOTION_BLOCK        ( MAX_CALIBRATION_CYCLES / 2 )
+#define MAX_CALIBRATION_CYCLES  8000 // each cycle is roughly 16ms, 8000 cycles ~= 2min
 
 #include <Wire.h>
 #include <Adafruit_AMG88xx.h>
@@ -17,17 +16,18 @@ Adafruit_AMG88xx amg;
 float calibrated_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 
-#define UNDEF_POINT             ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
-uint8_t past_points[MAX_PEOPLE] = {UNDEF_POINT, UNDEF_POINT, UNDEF_POINT, UNDEF_POINT, UNDEF_POINT};
+uint8_t past_points[MAX_PEOPLE];
+uint8_t archived_past_points[MAX_PEOPLE];
 uint8_t starting_points[MAX_PEOPLE];
-uint16_t histories[MAX_PEOPLE] = {0,0,0,0,0};
+uint16_t histories[MAX_PEOPLE];
 
-uint8_t calibration_cycles = 0;
-uint8_t wake_cycles = 0;
-volatile boolean motion = false;
+uint16_t calibration_cycles = 0;
+
+#define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
+#define PIXEL_ACTIVE(i) ( pixels[(i)] > (calibrated_pixels[(i)] + TEMP_BUFFER) )
 
 // store in-memory so we don't have to do math every time
-const uint8_t xcoordinates[64] = {
+const uint8_t xcoordinates[64] PROGMEM = {
   1,  2,  3,  4,  5,  6,  7,  8,
   1,  2,  3,  4,  5,  6,  7,  8,
   1,  2,  3,  4,  5,  6,  7,  8,
@@ -37,7 +37,7 @@ const uint8_t xcoordinates[64] = {
   1,  2,  3,  4,  5,  6,  7,  8,
   1,  2,  3,  4,  5,  6,  7,  8
 };
-const uint8_t ycoordinates[64] = {
+const uint8_t ycoordinates[64] PROGMEM = {
   1,  1,  1,  1,  1,  1,  1,  1,
   2,  2,  2,  2,  2,  2,  2,  2,
   3,  3,  3,  3,  3,  3,  3,  3,
@@ -48,64 +48,95 @@ const uint8_t ycoordinates[64] = {
   8,  8,  8,  8,  8,  8,  8,  8
 };
 
+#define x(p) ( pgm_read_byte_near(xcoordinates + p) )
+#define y(p) ( pgm_read_byte_near(ycoordinates + p) )
+
 // calculate manhattan distance between 2 indices
 uint8_t distance(uint8_t p1, uint8_t p2) {
-  int8_t yd = ycoordinates[p2] - ycoordinates[p1];
-  int8_t xd = xcoordinates[p2] - xcoordinates[p1];
+  int8_t yd = y(p2) - y(p1);
+  int8_t xd = x(p2) - x(p1);
   return abs(yd) + abs(xd);
 }
 
+// used only by qsort in debugging section (compiled out otherwise)
 int sort_asc(const void *cmp1, const void *cmp2) {
   uint8_t a = *((uint8_t *)cmp1);
   uint8_t b = *((uint8_t *)cmp2);
   return a - b;
 }
 
-#define PIXEL_ACTIVE(i) ( pixels[(i)] > (calibrated_pixels[(i)] + TEMP_BUFFER) )
+// This macro sorts array indexes based on their corresponding values.
+// For example, given an array {4, 2, 0}, SORT_ARRAY(a, (a[i] > 0), 3)
+// will return 2, ordered_indexes will be {1, 0}, and ordered_values
+// will be {2, 4}. The third element does not pass the cmp condition.
+#define SORT_ARRAY(src, cmp, sze) ({                                 \
+  uint8_t count = 0;                                                 \
+  for(uint8_t i=0; i<(sze); i++){                                    \
+    if ((cmp)) {                                                     \
+      bool added = false;                                            \
+      for (uint8_t j=0; j<count; j++) {                              \
+        if ((src)[i] > ordered_values[j]) {                          \
+          for (uint8_t x=count; x>j; x--) {                          \
+            ordered_values[x] = ordered_values[x-1];                 \
+            ordered_indexes[x] = ordered_indexes[x-1];               \
+          }                                                          \
+          ordered_values[j] = (src)[i];                              \
+          ordered_indexes[j] = i;                                    \
+          added = true;                                              \
+          break;                                                     \
+        }                                                            \
+      }                                                              \
+      if (!added) {                                                  \
+        ordered_values[count] = (src)[i];                            \
+        ordered_indexes[count] = i;                                  \
+      }                                                              \
+      count++;                                                       \
+    }                                                                \
+  }                                                                  \
+  return count;                                                      \
+})
+//////////////////////////////////////////////////////////////////////
+
+uint8_t sortPixelsByTemp(uint8_t *ordered_indexes) {
+  float ordered_values[AMG88xx_PIXEL_ARRAY_SIZE];
+  SORT_ARRAY(pixels, (PIXEL_ACTIVE(i)), AMG88xx_PIXEL_ARRAY_SIZE);
+}
+
+uint8_t sortPointsByHistory(uint8_t *ordered_indexes) {
+  uint16_t ordered_values[MAX_PEOPLE];
+  SORT_ARRAY(histories, (histories[i] > 0), MAX_PEOPLE);
+}
+
+bool readPixels() {
+  float past_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
+  memcpy(past_pixels, pixels, AMG88xx_PIXEL_ARRAY_SIZE);
+
+  amg.readPixels(pixels);
+
+  // return true if pixels changed
+  return (memcmp(past_pixels, pixels, AMG88xx_PIXEL_ARRAY_SIZE) != 0);
+}
 
 void processSensor() {
-  amg.readPixels(pixels);
+  if (!readPixels()) return;
 
   // sort pixels by temperature to find peaks
 
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
-  float ordered_temps[AMG88xx_PIXEL_ARRAY_SIZE];
-  uint8_t active_pixel_count = 0;
-  for(uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++){
-    if (PIXEL_ACTIVE(i)) {
-      bool added = false;
-      for (uint8_t j=0; j<active_pixel_count; j++) {
-        if (pixels[i] > ordered_temps[j]) {
-          for (uint8_t x=active_pixel_count; x>j; x--) {
-            ordered_temps[x] = ordered_temps[x-1];
-            ordered_indexes[x] = ordered_indexes[x-1];
-          }
-          ordered_temps[j] = pixels[i];
-          ordered_indexes[j] = i;
-          added = true;
-          break;
-        }
-      }
-      if (!added) {
-        ordered_temps[active_pixel_count] = pixels[i];
-        ordered_indexes[active_pixel_count] = i;
-      }
-      active_pixel_count++;
-    }
-  }
+  uint8_t active_pixel_count = sortPixelsByTemp(ordered_indexes);
 
   // determine which points are people by comparing peaks with neighboring cells
 
-  #define TL_IDX ( idx - (GRID_EXTENT+1) )
-  #define TM_IDX ( idx - GRID_EXTENT )
-  #define TR_IDX ( idx - (GRID_EXTENT-1) )
-  #define ML_IDX ( idx - 1 )
-  #define MR_IDX ( idx + 1 )
-  #define BL_IDX ( idx + (GRID_EXTENT-1) )
-  #define BM_IDX ( idx + GRID_EXTENT )
-  #define BR_IDX ( idx + (GRID_EXTENT+1) )
-  #define NOT_LEFT_EDGE   ( xcoordinates[idx] > 1 )
-  #define NOT_RIGHT_EDGE  ( xcoordinates[idx] < GRID_EXTENT )
+  #define TL_IDX          ( idx - (GRID_EXTENT+1) )
+  #define TM_IDX          ( idx - GRID_EXTENT )
+  #define TR_IDX          ( idx - (GRID_EXTENT-1) )
+  #define ML_IDX          ( idx - 1 )
+  #define MR_IDX          ( idx + 1 )
+  #define BL_IDX          ( idx + (GRID_EXTENT-1) )
+  #define BM_IDX          ( idx + GRID_EXTENT )
+  #define BR_IDX          ( idx + (GRID_EXTENT+1) )
+  #define NOT_LEFT_EDGE   ( x(idx) > 1 )
+  #define NOT_RIGHT_EDGE  ( x(idx) < GRID_EXTENT )
   #define NOT_TOP_EDGE    ( idx >= GRID_EXTENT )
   #define NOT_BOTTOM_EDGE ( idx < (AMG88xx_PIXEL_ARRAY_SIZE - GRID_EXTENT) )
   #define MIDDLE_LEFT     ( PIXEL_ACTIVE(ML_IDX) )
@@ -142,39 +173,17 @@ void processSensor() {
   // sort list of previously seen people by how many frames we've seen them
   // to prioritize finding people who have been in frame longest (reduces impact of noisy data)
 
-  uint16_t ordered_histories[MAX_PEOPLE];
-  uint8_t ordered_points[MAX_PEOPLE];
-  uint8_t point_count = 0;
-  for(uint8_t i=0; i<MAX_PEOPLE; i++){
-    uint16_t h = histories[i];
-    if (h > 0) {
-      bool added = false;
-      for (uint8_t j=0; j<point_count; j++) {
-        if (h > ordered_histories[j]) {
-          for (uint8_t x=point_count; x>j; x--) {
-            ordered_histories[x] = ordered_histories[x-1];
-            ordered_points[x] = ordered_points[x-1];
-          }
-          ordered_histories[j] = h;
-          ordered_points[j] = i;
-          added = true;
-          break;
-        }
-      }
-      if (!added) {
-        ordered_histories[point_count] = h;
-        ordered_points[point_count] = i;
-      }
-      point_count++;
-    }
-  }
+  uint8_t ordered_past_points[MAX_PEOPLE];
+  uint8_t past_total_masses = sortPointsByHistory(ordered_past_points);
 
   // pair previously seen points with new points to determine where people moved
 
-  bool taken[MAX_PEOPLE] = {false, false, false, false, false};
-  for (uint8_t i=0; i<point_count; i++) {
-    uint8_t idx = ordered_points[i];
-    uint8_t min_distance = MIN_DISTANCE;
+  bool taken[total_masses];
+  memset(taken, false, total_masses);
+
+  for (uint8_t i=0; i<past_total_masses; i++) {
+    uint8_t idx = ordered_past_points[i];
+    uint8_t min_distance = (MIN_DISTANCE + 2);
     uint8_t min_index = UNDEF_POINT;
     for (uint8_t j=0; j<total_masses; j++) {
       if (!taken[j]) {
@@ -218,12 +227,10 @@ void processSensor() {
   // publish event if any people moved through doorway yet
 
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
-    if (past_points[i] != UNDEF_POINT) {
-      uint8_t starting_pos = ycoordinates[starting_points[i]];
-      uint8_t ending_pos = ycoordinates[past_points[i]];
-      int diff = starting_pos - ending_pos;
+    if (past_points[i] != UNDEF_POINT && histories[i] > MIN_HISTORY) {
+      int diff = y(starting_points[i]) - y(past_points[i]);
       if (abs(diff) >= (GRID_EXTENT/2)) { // person traversed at least half the grid
-        if (starting_pos > ending_pos) {
+        if (diff > 0) {
           SERIAL_PRINTLN("1 entered");
           // artificially shift starting point ahead 2 rows so that
           // if user turns around now, algorithm considers it an exit
@@ -236,6 +243,22 @@ void processSensor() {
         }
       }
     }
+  }
+
+  // reset calibration timer if people moved
+
+  if (total_masses > 0) {
+    bool rst = false;
+    for (uint8_t i=0; i<MAX_PEOPLE; i++) {
+      if (past_points[i] != archived_past_points[i] && (
+            past_points[i] == UNDEF_POINT || archived_past_points[i] == UNDEF_POINT ||
+            distance(past_points[i], archived_past_points[i]) > 1)) {
+        rst = true;
+        break;
+      }
+    }
+    if (rst) calibration_cycles = 0;
+    memcpy(archived_past_points, past_points, MAX_PEOPLE);
   }
 
   // wrap up with debugging output
@@ -251,9 +274,7 @@ void processSensor() {
 
       // sort points so we can print them in chart easily
       uint8_t sorted_points[total_masses];
-      for (uint8_t i=0; i<total_masses; i++) {
-        sorted_points[i] = points[i];
-      }
+      memcpy(sorted_points, points, total_masses);
       qsort(sorted_points, total_masses, 1, sort_asc);
 
       // print chart of what sensor saw in 8x8 grid
@@ -282,61 +303,33 @@ void processSensor() {
   #endif
 }
 
-void sleepAmg() {
-  if (amg.getPowerMode() != AMG88xx_SLEEP_MODE) {
-    amg.setSleepMode();
-  }
-}
-
-void wakeAMG() {
-  if (amg.getPowerMode() != AMG88xx_NORMAL_MODE) {
-    amg.setNormalMode();
-  }
+void clearTrackers() {
+  memset(histories, 0, MAX_PEOPLE);
+  memset(past_points, UNDEF_POINT, MAX_PEOPLE);
+  memset(archived_past_points, UNDEF_POINT, MAX_PEOPLE);
 }
 
 void calibrateSensor() {
-  wakeAMG();
-  LOWPOWER_DELAY(SLEEP_500MS);
   amg.readPixels(calibrated_pixels);
   calibration_cycles = 0;
-}
-
-void sleepSensor() {
-  if (calibration_cycles == MAX_CALIBRATION_CYCLES) {
-    calibrateSensor();
-  } else {
-    calibration_cycles++;
-  }
-  sleepAmg();
-  LOWPOWER_DELAY(SLEEP_8S);
-}
-
-void motionISR() {
-  motion = true;
+  SERIAL_PRINTLN("calibrated");
 }
 
 void initialize() {
-  pinMode(PIR, INPUT);
-  attachInterrupt(digitalPinToInterrupt(PIR), motionISR, RISING);
-
   amg.begin();
+  clearTrackers();
+  blink(4);
+  digitalWrite(LED, HIGH);
+  LOWPOWER_DELAY(SLEEP_500MS);
   calibrateSensor();
 }
 
 void loop() {
-  if (motion) {
-    wakeAMG();
-    SERIAL_PRINTLN("motion!");
-    motion = false;
-    wake_cycles = MAX_WAKE_CYCLES;
-    // ensure a wait before trying to calibrate after motion
-    calibration_cycles = min(calibration_cycles, MIN_MOTION_BLOCK);
-  }
-  if (wake_cycles == 0) {
-    sleepSensor();
+  if (calibration_cycles == MAX_CALIBRATION_CYCLES) {
+    calibrateSensor();
   } else {
     processSensor();
-    wake_cycles--;
+    calibration_cycles++;
   }
 }
 
