@@ -170,8 +170,8 @@ void processSensor() {
     }
   }
 
-  // sort list of previously seen people by how many frames we've seen them
-  // to prioritize finding people who have been in frame longest (reduces impact of noisy data)
+  // sort list of previously seen people by how many frames we've seen them to prioritize
+  // finding people who have been in frame longest (reduces impact of noisy data)
 
   uint8_t ordered_past_points[MAX_PEOPLE];
   uint8_t past_total_masses = sortPointsByHistory(ordered_past_points);
@@ -250,9 +250,9 @@ void processSensor() {
   if (total_masses > 0) {
     bool rst = false;
     for (uint8_t i=0; i<MAX_PEOPLE; i++) {
-      if (past_points[i] != archived_past_points[i] && (
-            past_points[i] == UNDEF_POINT || archived_past_points[i] == UNDEF_POINT ||
-            distance(past_points[i], archived_past_points[i]) > 1)) {
+      if (past_points[i] != UNDEF_POINT && past_points[i] != archived_past_points[i] &&
+          (archived_past_points[i] == UNDEF_POINT ||
+            distance(past_points[i], archived_past_points[i]) > 2)) {
         rst = true;
         break;
       }
