@@ -1,4 +1,5 @@
 #define FIRMWARE_VERSION     "V0.1"
+#define BATTERY_POWERED
 
 int state = LOW;
 

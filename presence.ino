@@ -52,15 +52,28 @@ void blink(uint8_t times) {
   }
 }
 
-float batteryLevel() {
-  return analogRead(BATT) * 0.00644;
-}
+#if defined LIDAR
+#include "lidar.h"
+#elif defined MOTION
+#include "motion.h"
+#elif defined DOOR
+#include "door.h"
+#elif defined THERMAL
+#include "thermal.h"
+#else
+#error Missing node type
+#endif
+
+#ifdef BATTERY_POWERED
+  #define BATTERY_LEVEL ( analogRead(BATT) )
+#else
+  #define BATTERY_LEVEL ( 0 )
+#endif
 
 char sendBuf[15];
 uint8_t packetCount = 1;
 void publish(char* msg) {
-  int batt = analogRead(BATT);
-  uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, batt, packetCount);
+  uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, BATTERY_LEVEL, packetCount);
   radio.sendWithRetry(GATEWAYID, sendBuf, len, 5);
   radio.sleep();
   if (packetCount < 9)
@@ -73,18 +86,6 @@ void publish(char* msg) {
   SERIAL_PRINTLN("\n\n");
   SERIAL_FLUSH;
 }
-
-#if defined LIDAR
-#include "lidar.h"
-#elif defined MOTION
-#include "motion.h"
-#elif defined DOOR
-#include "door.h"
-#elif defined THERMAL
-#include "thermal.h"
-#else
-#error Missing node type
-#endif
 
 void setup() {
   SERIAL_START;
