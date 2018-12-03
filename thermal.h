@@ -7,6 +7,9 @@
 #define MIN_HISTORY             5    // min number of times a point needs to be seen
 #define MAX_PEOPLE              5    // most people we support in a single frame
 #define MAX_CALIBRATION_CYCLES  8000 // each cycle is roughly 16ms, 8000 cycles ~= 2min
+#define AXIS                    x    // axis along which we expect points to move (x or y)
+#define LOWER_BOUND             0
+#define UPPER_BOUND             GRID_EXTENT
 
 #include <Wire.h>
 #include <Adafruit_AMG88xx.h>
@@ -18,8 +21,12 @@ float pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 
 uint8_t past_points[MAX_PEOPLE];
 uint8_t archived_past_points[MAX_PEOPLE];
+uint8_t forgotten_past_points[MAX_PEOPLE];
 uint8_t starting_points[MAX_PEOPLE];
+uint8_t forgotten_starting_points[MAX_PEOPLE];
 uint16_t histories[MAX_PEOPLE];
+uint16_t forgotten_histories[MAX_PEOPLE];
+uint8_t forgotten_count = 0;
 
 uint16_t calibration_cycles = 0;
 
@@ -71,7 +78,7 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 // will be {2, 4}. The third element does not pass the cmp condition.
 #define SORT_ARRAY(src, cmp, sze) ({                                 \
   uint8_t count = 0;                                                 \
-  for(uint8_t i=0; i<(sze); i++){                                    \
+  for (uint8_t i=0; i<(sze); i++) {                                  \
     if ((cmp)) {                                                     \
       bool added = false;                                            \
       for (uint8_t j=0; j<count; j++) {                              \
@@ -150,7 +157,7 @@ void processSensor() {
 
   uint8_t total_masses = 0;
   uint8_t points[MAX_PEOPLE];
-  for(uint8_t i=0; i<active_pixel_count; i++){
+  for (uint8_t i=0; i<active_pixel_count; i++) {
     uint8_t idx = ordered_indexes[i];
     bool distinct = true;
     for (uint8_t j=0; j<i; j++) {
@@ -167,6 +174,7 @@ void processSensor() {
       TOP_MIDDLE || BOTTOM_MIDDLE)) {
       points[total_masses] = idx;
       total_masses++;
+      if (total_masses == MAX_PEOPLE) break;  // we've hit our cap, stop looking
     }
   }
 
@@ -180,6 +188,12 @@ void processSensor() {
 
   bool taken[total_masses];
   memset(taken, false, total_masses);
+
+  uint8_t temp_forgotten_points[MAX_PEOPLE];
+  memset(temp_forgotten_points, UNDEF_POINT, MAX_PEOPLE);
+  uint8_t temp_forgotten_starting_points[MAX_PEOPLE];
+  uint16_t temp_forgotten_histories[MAX_PEOPLE];
+  uint8_t temp_forgotten_count = 0;
 
   for (uint8_t i=0; i<past_total_masses; i++) {
     uint8_t idx = ordered_past_points[i];
@@ -195,8 +209,24 @@ void processSensor() {
         }
       }
     }
+    if (min_index != UNDEF_POINT && total_masses < past_total_masses &&
+        ((AXIS(past_points[idx]) - LOWER_BOUND) <= min_distance ||
+         (UPPER_BOUND - AXIS(past_points[idx])) <= min_distance)) {
+      // a point disappeared in this frame, looks like it could be this one
+      min_index = UNDEF_POINT;
+    }
     if (min_index == UNDEF_POINT) {
       // point disappeared (no new point found), stop tracking it
+      if (AXIS(past_points[idx]) > (LOWER_BOUND + 2) &&
+          AXIS(past_points[idx]) < (UPPER_BOUND - 2)) {
+        // point disappeared in middle of grid, track it separately for
+        // one frame so that if a new point appears in middle of grid,
+        // we can pair them together below
+        temp_forgotten_points[temp_forgotten_count] = past_points[idx];
+        temp_forgotten_starting_points[temp_forgotten_count] = starting_points[idx];
+        temp_forgotten_histories[temp_forgotten_count] = histories[idx];
+        temp_forgotten_count++;
+      }
       past_points[idx] = UNDEF_POINT;
       histories[idx] = 0;
     } else {
@@ -211,24 +241,44 @@ void processSensor() {
 
   for (uint8_t i=0; i<total_masses; i++) {
     if (!taken[i]) {
+      uint16_t h = 1;
+      uint8_t sp = points[i];
       // new point appeared (no past point found), start tracking it
+      if (AXIS(points[i]) > (LOWER_BOUND + 2) &&
+          AXIS(points[i]) < (UPPER_BOUND - 2)) {
+        // this point appeared in middle of grid, let's check forgotten points for match
+        for (uint8_t j=0; j<forgotten_count; j++) {
+          if (forgotten_past_points[j] != UNDEF_POINT &&
+              distance(forgotten_past_points[j], points[i]) < MIN_DISTANCE) {
+            h = forgotten_histories[j];
+            sp = forgotten_starting_points[j];
+            forgotten_past_points[j] = UNDEF_POINT;
+            break;
+          }
+        }
+      }
       for (uint8_t j=0; j<MAX_PEOPLE; j++) {
         // look for first empty slot in past_points to use
         if (past_points[j] == UNDEF_POINT) {
-          starting_points[j] = points[i];
           past_points[j] = points[i];
-          histories[j] = 1;
+          starting_points[j] = sp;
+          histories[j] = h;
           break;
         }
       }
     }
   }
 
+  memcpy(forgotten_past_points, temp_forgotten_points, MAX_PEOPLE);
+  memcpy(forgotten_starting_points, temp_forgotten_starting_points, MAX_PEOPLE);
+  memcpy(forgotten_histories, temp_forgotten_histories, MAX_PEOPLE);
+  forgotten_count = temp_forgotten_count;
+
   // publish event if any people moved through doorway yet
 
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     if (past_points[i] != UNDEF_POINT && histories[i] > MIN_HISTORY) {
-      int diff = y(starting_points[i]) - y(past_points[i]);
+      int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
       if (abs(diff) >= (GRID_EXTENT/2)) { // person traversed at least half the grid
         if (diff > 0) {
           SERIAL_PRINTLN("1 entered");
@@ -266,7 +316,7 @@ void processSensor() {
   #if defined(ENABLE_SERIAL) && defined(PRINT_RAW_DATA)
     if (total_masses > 0) {
       SERIAL_PRINT("Detected people at ");
-      for(uint8_t i = 0; i<total_masses; i++) {
+      for (uint8_t i = 0; i<total_masses; i++) {
         SERIAL_PRINT(points[i]);
         SERIAL_PRINT(", ");
       }
@@ -280,7 +330,7 @@ void processSensor() {
       // print chart of what sensor saw in 8x8 grid
       uint8_t next_point = sorted_points[0];
       uint8_t seen_points = 1;
-      for(uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++){
+      for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
         if (PIXEL_ACTIVE(idx)) {
           idx == next_point ? SERIAL_PRINT("[") : SERIAL_PRINT(" ");
           SERIAL_PRINT(pixels[idx]);
@@ -307,6 +357,7 @@ void clearTrackers() {
   memset(histories, 0, MAX_PEOPLE);
   memset(past_points, UNDEF_POINT, MAX_PEOPLE);
   memset(archived_past_points, UNDEF_POINT, MAX_PEOPLE);
+  memset(forgotten_past_points, UNDEF_POINT, MAX_PEOPLE);
 }
 
 void calibrateSensor() {
