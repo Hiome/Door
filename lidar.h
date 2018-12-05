@@ -174,7 +174,7 @@ uint8_t read_sensor2() {
 }
 
 void process_data() {
-  if (total_conf >= TOTAL_CONFIDENCE) {
+  if (directions > 0 && total_conf >= TOTAL_CONFIDENCE) {
     if (directions % 2 == 0) {
       // activity just ended with enough data points.
       publish((char*)(start == 1 ? "2" : "1"));
