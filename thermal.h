@@ -324,6 +324,9 @@ void processSensor() {
   // wrap up with debugging output
 
   #if defined(ENABLE_SERIAL) && defined(PRINT_RAW_DATA)
+    if (total_masses == 0 && past_total_masses > 0) {
+      SERIAL_PRINTLN("cleared board");
+    }
     if (total_masses > 0) {
       SERIAL_PRINT("Detected people at ");
       for (uint8_t i = 0; i<total_masses; i++) {
