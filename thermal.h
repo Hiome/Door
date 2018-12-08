@@ -4,12 +4,13 @@
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define TEMP_BUFFER             2    // min increase in temp needed to register person
 #define MIN_DISTANCE            3    // min distance for 2 peaks to be separate people
-#define MIN_HISTORY             5    // min number of times a point needs to be seen
+#define MIN_HISTORY             4    // min number of times a point needs to be seen
 #define MAX_PEOPLE              5    // most people we support in a single frame
 #define MAX_CALIBRATION_CYCLES  8000 // each cycle is roughly 16ms, 8000 cycles ~= 2min
 #define AXIS                    x    // axis along which we expect points to move (x or y)
 #define LOWER_BOUND             0
-#define UPPER_BOUND             GRID_EXTENT
+#define UPPER_BOUND             (GRID_EXTENT+1)
+#define BORDER_PADDING          (GRID_EXTENT/4)
 
 #include <Wire.h>
 #include <Adafruit_AMG88xx.h>
@@ -119,7 +120,7 @@ void resetCalibrationTimer() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     if (past_points[i] != UNDEF_POINT && past_points[i] != archived_past_points[i] &&
         (archived_past_points[i] == UNDEF_POINT ||
-          distance(past_points[i], archived_past_points[i]) > 2)) {
+          distance(past_points[i], archived_past_points[i]) >= MIN_DISTANCE)) {
       rst = true;
       break;
     }
@@ -229,10 +230,11 @@ void processSensor() {
   uint8_t temp_forgotten_starting_points[MAX_PEOPLE];
   uint16_t temp_forgotten_histories[MAX_PEOPLE];
   uint8_t temp_forgotten_count = 0;
+  uint8_t dropped_points = 0;
 
   for (uint8_t i=0; i<past_total_masses; i++) {
     uint8_t idx = ordered_past_points[i];
-    uint8_t min_distance = (MIN_DISTANCE + 2);
+    uint8_t min_distance = (MIN_DISTANCE + BORDER_PADDING);
     uint8_t min_index = UNDEF_POINT;
     for (uint8_t j=0; j<total_masses; j++) {
       if (!taken[j]) {
@@ -244,16 +246,17 @@ void processSensor() {
         }
       }
     }
-    if (min_index != UNDEF_POINT && total_masses < past_total_masses &&
-        ((AXIS(past_points[idx]) - LOWER_BOUND) <= min_distance ||
-         (UPPER_BOUND - AXIS(past_points[idx])) <= min_distance)) {
+    if (min_index != UNDEF_POINT && (total_masses + dropped_points) < past_total_masses &&
+        ((AXIS(past_points[idx]) - LOWER_BOUND) <= min(min_distance, BORDER_PADDING) ||
+         (UPPER_BOUND - AXIS(past_points[idx])) <= min(min_distance, BORDER_PADDING))) {
       // a point disappeared in this frame, looks like it could be this one
       min_index = UNDEF_POINT;
+      dropped_points++;
     }
     if (min_index == UNDEF_POINT) {
       // point disappeared (no new point found), stop tracking it
-      if (AXIS(past_points[idx]) > (LOWER_BOUND + 2) &&
-          AXIS(past_points[idx]) < (UPPER_BOUND - 2)) {
+      if (AXIS(past_points[idx]) > (LOWER_BOUND + BORDER_PADDING) &&
+          AXIS(past_points[idx]) < (UPPER_BOUND - BORDER_PADDING)) {
         // point disappeared in middle of grid, track it separately for
         // one frame so that if a new point appears in middle of grid,
         // we can pair them together below
@@ -279,8 +282,8 @@ void processSensor() {
       uint16_t h = 1;
       uint8_t sp = points[i];
       // new point appeared (no past point found), start tracking it
-      if (AXIS(points[i]) > (LOWER_BOUND + 2) &&
-          AXIS(points[i]) < (UPPER_BOUND - 2)) {
+      if (AXIS(points[i]) > (LOWER_BOUND + BORDER_PADDING) &&
+          AXIS(points[i]) < (UPPER_BOUND - BORDER_PADDING)) {
         // this point appeared in middle of grid, let's check forgotten points for match
         for (uint8_t j=0; j<forgotten_count; j++) {
           if (forgotten_past_points[j] != UNDEF_POINT &&
