@@ -183,7 +183,7 @@ void process_data() {
         // so send a motion alert too so Hiome knows something happened
         publish((char*)(start == 1 ? "m2" : "m1"));
       }
-    } else {
+    } else if (directions > 2) {
       // we never made it to a different side,
       // so send motion alert for starting side
       publish((char*)(start == 1 ? "m1" : "m2"));
