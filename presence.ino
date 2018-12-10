@@ -53,15 +53,17 @@ void blink(uint8_t times) {
 }
 
 #if defined LIDAR
-#include "lidar.h"
+  #include "lidar.h"
 #elif defined MOTION
-#include "motion.h"
+  #include "motion.h"
 #elif defined DOOR
-#include "door.h"
+  #include "door.h"
 #elif defined THERMAL
-#include "thermal.h"
+  #include "thermal.h"
+#elif defined BED
+  #include "bed.h"
 #else
-#error Missing node type
+  #error Missing node type
 #endif
 
 #ifdef BATTERY_POWERED
