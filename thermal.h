@@ -59,11 +59,11 @@ const uint8_t ycoordinates[64] PROGMEM = {
 #define x(p) ( pgm_read_byte_near(xcoordinates + (p)) )
 #define y(p) ( pgm_read_byte_near(ycoordinates + (p)) )
 
-// calculate manhattan distance between 2 indices
+// calculate euclidian distance between 2 indices
 uint8_t distance(uint8_t p1, uint8_t p2) {
   int8_t yd = y(p2) - y(p1);
   int8_t xd = x(p2) - x(p1);
-  return abs(yd) + abs(xd);
+  return floor(sqrt(sq(yd) + sq(xd)));
 }
 
 // used only by qsort in debugging section (compiled out otherwise)
