@@ -7,7 +7,7 @@
 #define MIN_HISTORY             4    // min number of times a point needs to be seen
 #define MAX_PEOPLE              5    // most people we support in a single frame
 #define MAX_CALIBRATION_CYCLES  8000 // each cycle is roughly 16ms, 8000 cycles ~= 2min
-#define AXIS                    x    // axis along which we expect points to move (x or y)
+#define AXIS                    y    // axis along which we expect points to move (x or y)
 #define LOWER_BOUND             0
 #define UPPER_BOUND             (GRID_EXTENT+1)
 #define BORDER_PADDING          (GRID_EXTENT/4)
@@ -385,9 +385,8 @@ void calibrateSensor() {
 void initialize() {
   amg.begin();
 
-  blink(4);
+  blink(8);
   digitalWrite(LED, HIGH);
-  LOWPOWER_DELAY(SLEEP_500MS);
 
   clearTrackers();
   calibrateSensor();
