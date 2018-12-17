@@ -19,20 +19,25 @@ Adafruit_AMG88xx amg;
 
 float calibrated_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float pixels[AMG88xx_PIXEL_ARRAY_SIZE];
+float avg;
 
 uint8_t past_points[MAX_PEOPLE];
 uint8_t archived_past_points[MAX_PEOPLE];
 uint8_t forgotten_past_points[MAX_PEOPLE];
 uint8_t starting_points[MAX_PEOPLE];
 uint8_t forgotten_starting_points[MAX_PEOPLE];
+uint8_t reset_timers[MAX_PEOPLE];
+uint8_t forgotten_reset_timers[MAX_PEOPLE];
 uint16_t histories[MAX_PEOPLE];
 uint16_t forgotten_histories[MAX_PEOPLE];
 uint8_t forgotten_count = 0;
 
 uint16_t calibration_cycles = 0;
 
-#define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
-#define PIXEL_ACTIVE(i) ( pixels[(i)] > (calibrated_pixels[(i)] + TEMP_BUFFER) )
+#define UNDEF_POINT          ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
+#define CHECK_CALIBRATION(i) ( pixels[(i)] > calibrated_pixels[(i)] + TEMP_BUFFER )
+#define CHECK_AVERAGE(i)     ( pixels[(i)] > avg )
+#define PIXEL_ACTIVE(i)      ( CHECK_CALIBRATION(i) && CHECK_AVERAGE(i) )
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -116,16 +121,14 @@ uint8_t sortPointsByHistory(uint8_t *ordered_indexes) {
 }
 
 void resetCalibrationTimer() {
-  bool rst = false;
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     if (past_points[i] != UNDEF_POINT && past_points[i] != archived_past_points[i] &&
         (archived_past_points[i] == UNDEF_POINT ||
           distance(past_points[i], archived_past_points[i]) >= MIN_DISTANCE)) {
-      rst = true;
+      calibration_cycles = 0;
       break;
     }
   }
-  if (rst) calibration_cycles = 0;
   memcpy(archived_past_points, past_points, MAX_PEOPLE);
 }
 
@@ -135,13 +138,13 @@ void publishEvents() {
       int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
       if (abs(diff) >= (GRID_EXTENT/2)) { // person traversed at least half the grid
         if (diff > 0) {
-          SERIAL_PRINTLN("1 entered");
+          publish("2");
           // artificially shift starting point ahead 2 rows so that
           // if user turns around now, algorithm considers it an exit
           int s = past_points[i] - (2*GRID_EXTENT);
           starting_points[i] = max(s, 0);
         } else {
-          SERIAL_PRINTLN("1 exited");
+          publish("1");
           int s = past_points[i] + (2*GRID_EXTENT);
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
@@ -155,6 +158,12 @@ bool readPixels() {
   memcpy(past_pixels, pixels, AMG88xx_PIXEL_ARRAY_SIZE);
 
   amg.readPixels(pixels);
+
+  avg = 0;
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    avg += pixels[i];
+  }
+  avg /= AMG88xx_PIXEL_ARRAY_SIZE;
 
   // return true if pixels changed
   return (memcmp(past_pixels, pixels, AMG88xx_PIXEL_ARRAY_SIZE) != 0);
@@ -228,6 +237,7 @@ void processSensor() {
   uint8_t temp_forgotten_points[MAX_PEOPLE];
   memset(temp_forgotten_points, UNDEF_POINT, MAX_PEOPLE);
   uint8_t temp_forgotten_starting_points[MAX_PEOPLE];
+  uint8_t temp_forgotten_reset_timers[MAX_PEOPLE];
   uint16_t temp_forgotten_histories[MAX_PEOPLE];
   uint8_t temp_forgotten_count = 0;
   uint8_t dropped_points = 0;
@@ -263,15 +273,30 @@ void processSensor() {
         temp_forgotten_points[temp_forgotten_count] = past_points[idx];
         temp_forgotten_starting_points[temp_forgotten_count] = starting_points[idx];
         temp_forgotten_histories[temp_forgotten_count] = histories[idx];
+        temp_forgotten_reset_timers[temp_forgotten_count] = reset_timers[idx];
         temp_forgotten_count++;
       }
       past_points[idx] = UNDEF_POINT;
       histories[idx] = 0;
+      reset_timers[idx] = 0;
     } else {
       // closest point matched, update trackers
-      past_points[idx] = points[min_index];
-      histories[idx]++;
-      taken[min_index] = true;
+      if (past_points[idx] == points[min_index]) {
+        // don't increment history if point didn't move
+        reset_timers[idx]++;
+      } else {
+        past_points[idx] = points[min_index];
+        histories[idx]++;
+        reset_timers[idx] = 0;
+      }
+      if (reset_timers[idx] > 10) {
+        // if point hasn't moved for 10 frames (1 sec), drop it
+        past_points[idx] = UNDEF_POINT;
+        histories[idx] = 0;
+        reset_timers[idx] = 0;
+      } else {
+        taken[min_index] = true;
+      }
     }
   }
 
@@ -312,6 +337,7 @@ void processSensor() {
   memcpy(forgotten_past_points, temp_forgotten_points, MAX_PEOPLE);
   memcpy(forgotten_starting_points, temp_forgotten_starting_points, MAX_PEOPLE);
   memcpy(forgotten_histories, temp_forgotten_histories, MAX_PEOPLE);
+  memcpy(forgotten_reset_timers, temp_forgotten_reset_timers, MAX_PEOPLE);
   forgotten_count = temp_forgotten_count;
 
   // publish event if any people moved through doorway yet
@@ -337,6 +363,7 @@ void processSensor() {
         SERIAL_PRINT(", ");
       }
       SERIAL_PRINTLN();
+      SERIAL_PRINTLN(avg);
 
       // sort points so we can print them in chart easily
       uint8_t sorted_points[total_masses];
@@ -360,8 +387,9 @@ void processSensor() {
           } else {
             SERIAL_PRINT(" ");
           }
-        } else
+        } else {
           SERIAL_PRINT(" ----- ");
+        }
         if (!(NOT_RIGHT_EDGE)) SERIAL_PRINTLN();
       }
       SERIAL_PRINTLN();
@@ -372,8 +400,10 @@ void processSensor() {
 void clearTrackers() {
   memset(histories, 0, MAX_PEOPLE);
   memset(past_points, UNDEF_POINT, MAX_PEOPLE);
+  memset(reset_timers, 0, MAX_PEOPLE);
   memset(archived_past_points, UNDEF_POINT, MAX_PEOPLE);
   memset(forgotten_past_points, UNDEF_POINT, MAX_PEOPLE);
+  memset(forgotten_reset_timers, 0, MAX_PEOPLE);
 }
 
 void calibrateSensor() {
