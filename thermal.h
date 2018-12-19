@@ -119,13 +119,13 @@ void publishEvents() {
       int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
       if (abs(diff) >= (GRID_EXTENT/2)) { // person traversed at least half the grid
         if (diff > 0) {
-          publish("2");
+          publish("1");
           // artificially shift starting point ahead 2 rows so that
           // if user turns around now, algorithm considers it an exit
           int s = past_points[i] - (2*GRID_EXTENT);
           starting_points[i] = max(s, 0);
         } else {
-          publish("1");
+          publish("2");
           int s = past_points[i] + (2*GRID_EXTENT);
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
