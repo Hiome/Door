@@ -29,8 +29,9 @@ uint16_t forgotten_histories[MAX_PEOPLE];
 uint8_t forgotten_count = 0;
 uint8_t cycles_since_forgotten = 0;
 
-#define UNDEF_POINT          ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
-#define PIXEL_ACTIVE(i)      ( cur_pixels[(i)] > avg_pixels[(i)] + TEMP_BUFFER )
+#define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
+#define BORDER_PAD(i)   ( x(i) == 1 || x(i) == GRID_EXTENT ? TEMP_BUFFER : 0 )
+#define PIXEL_ACTIVE(i) ( cur_pixels[(i)] > avg_pixels[(i)] + TEMP_BUFFER + (BORDER_PAD(i)) )
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -150,6 +151,12 @@ void updateAverages() {
   }
 }
 
+void clearTrackers() {
+  memset(histories, 0, MAX_PEOPLE);
+  memset(past_points, UNDEF_POINT, MAX_PEOPLE);
+  memset(forgotten_past_points, UNDEF_POINT, MAX_PEOPLE);
+}
+
 void processSensor() {
   if (!readPixels()) return;
 
@@ -157,6 +164,11 @@ void processSensor() {
 
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
   uint8_t active_pixel_count = sortPixelsByTemp(ordered_indexes);
+
+  if (active_pixel_count > 56) {
+    clearTrackers();
+    return;
+  }
 
   // determine which points are people by comparing peaks with neighboring cells
 
@@ -314,6 +326,9 @@ void processSensor() {
         }
       }
     }
+    if (cycles_since_forgotten == 5) {
+      memset(forgotten_past_points, UNDEF_POINT, MAX_PEOPLE);
+    }
     if (cycles_since_forgotten < 100) {
       cycles_since_forgotten++;
     }
@@ -369,12 +384,6 @@ void processSensor() {
   #endif
 
   updateAverages();
-}
-
-void clearTrackers() {
-  memset(histories, 0, MAX_PEOPLE);
-  memset(past_points, UNDEF_POINT, MAX_PEOPLE);
-  memset(forgotten_past_points, UNDEF_POINT, MAX_PEOPLE);
 }
 
 void initialize() {
