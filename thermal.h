@@ -1,6 +1,7 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
 #define FIRMWARE_VERSION        "V0.1"
+#define REED_PIN                3
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define TEMP_BUFFER             1    // min increase in temp needed to register person
 #define MIN_DISTANCE            3    // min distance for 2 peaks to be separate people
@@ -31,6 +32,9 @@ uint16_t forgotten_histories[MAX_PEOPLE];
 uint8_t forgotten_count = 0;
 uint8_t cycles_since_forgotten = 0;
 
+int door_state;
+uint8_t cycles_since_door_changed = 0;
+
 #if AXIS == y
   #define NOT_AXIS      x
 #else
@@ -38,7 +42,9 @@ uint8_t cycles_since_forgotten = 0;
 #endif
 #define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
 #define BORDER_PAD(i)   ( x(i) == 1 || x(i) == GRID_EXTENT ? TEMP_BUFFER : 0 )
-#define PIXEL_ACTIVE(i) ( cur_pixels[(i)] > avg_pixels[(i)] + TEMP_BUFFER + (BORDER_PAD(i)) )
+#define CHECK_TEMP(i)   ( cur_pixels[(i)] > avg_pixels[(i)] + TEMP_BUFFER + (BORDER_PAD(i)) )
+#define CHECK_DOOR(i)   ( door_state == HIGH || AXIS(i) <= (GRID_EXTENT/2) )
+#define PIXEL_ACTIVE(i) ( CHECK_TEMP(i) && CHECK_DOOR(i) )
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -122,6 +128,8 @@ uint8_t sortPointsByHistory(uint8_t *ordered_indexes) {
 }
 
 void publishEvents() {
+  if (door_state == LOW) return; // nothing happened if door is closed
+
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     if (past_points[i] != UNDEF_POINT && histories[i] > MIN_HISTORY) {
       // do not consider trajectories that end in border of middle 2 rows
@@ -414,11 +422,23 @@ void initialize() {
   blink(4);
   digitalWrite(LED, HIGH);
 
+  pinMode(REED_PIN, INPUT_PULLUP);
+  door_state = digitalRead(REED_PIN);
+
   clearTrackers();
   amg.readPixels(avg_pixels);
 }
 
 void loop() {
+  if (door_state != digitalRead(REED_PIN)) {
+    door_state = digitalRead(REED_PIN);
+    cycles_since_door_changed = 0;
+    SERIAL_PRINT("door is ");
+    SERIAL_PRINTLN(door_state);
+  } else if (cycles_since_door_changed < 100) {
+    cycles_since_door_changed++;
+  }
+
   processSensor();
 }
 
