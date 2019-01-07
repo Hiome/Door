@@ -1,4 +1,4 @@
-//#define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
+#define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
 #define FIRMWARE_VERSION        "V0.1"
 #define GRID_EXTENT             8    // size of grid (8x8)
@@ -11,6 +11,8 @@
 #define LOWER_BOUND             0
 #define UPPER_BOUND             (GRID_EXTENT+1)
 #define BORDER_PADDING          (GRID_EXTENT/4)
+#define STRICT_BORDER_PADDING   (BORDER_PADDING-1)
+#define LENIENT_BORDER_PADDING  (BORDER_PADDING+1)
 
 #include <Wire.h>
 #include <Adafruit_AMG88xx.h>
@@ -29,6 +31,11 @@ uint16_t forgotten_histories[MAX_PEOPLE];
 uint8_t forgotten_count = 0;
 uint8_t cycles_since_forgotten = 0;
 
+#if AXIS == y
+  #define NOT_AXIS      x
+#else
+  #define NOT_AXIS      y
+#endif
 #define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
 #define BORDER_PAD(i)   ( x(i) == 1 || x(i) == GRID_EXTENT ? TEMP_BUFFER : 0 )
 #define PIXEL_ACTIVE(i) ( cur_pixels[(i)] > avg_pixels[(i)] + TEMP_BUFFER + (BORDER_PAD(i)) )
@@ -117,18 +124,26 @@ uint8_t sortPointsByHistory(uint8_t *ordered_indexes) {
 void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     if (past_points[i] != UNDEF_POINT && histories[i] > MIN_HISTORY) {
-      int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
-      if (abs(diff) >= (GRID_EXTENT/2)) { // person traversed at least half the grid
-        if (diff > 0) {
-          publish("1");
-          // artificially shift starting point ahead 2 rows so that
-          // if user turns around now, algorithm considers it an exit
-          int s = past_points[i] - (2*GRID_EXTENT);
-          starting_points[i] = max(s, 0);
-        } else {
-          publish("2");
-          int s = past_points[i] + (2*GRID_EXTENT);
-          starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
+      // do not consider trajectories that end in border of middle 2 rows
+      if ((NOT_AXIS(past_points[i]) > (LOWER_BOUND + STRICT_BORDER_PADDING) &&
+           NOT_AXIS(past_points[i]) < (UPPER_BOUND - STRICT_BORDER_PADDING)) ||
+          AXIS(past_points[i]) <= (LOWER_BOUND + LENIENT_BORDER_PADDING) ||
+          AXIS(past_points[i]) >= (UPPER_BOUND - LENIENT_BORDER_PADDING)) {
+        int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
+        if (abs(diff) >= (GRID_EXTENT/2)) { // person traversed at least half the grid
+          if (diff > 0) {
+            publish("1");
+            // artificially shift starting point ahead 1 row so that
+            // if user turns around now, algorithm considers it an exit
+            int s = past_points[i] - GRID_EXTENT;
+            starting_points[i] = max(s, 0);
+            histories[i] -= 2;
+          } else {
+            publish("2");
+            int s = past_points[i] + GRID_EXTENT;
+            starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
+            histories[i] -= 2;
+          }
         }
       }
     }
@@ -296,13 +311,18 @@ void processSensor() {
           }
         }
       }
-      for (uint8_t j=0; j<MAX_PEOPLE; j++) {
-        // look for first empty slot in past_points to use
-        if (past_points[j] == UNDEF_POINT) {
-          past_points[j] = points[i];
-          starting_points[j] = sp;
-          histories[j] = h;
-          break;
+      // ignore new points that showed up in middle 2 rows of grid
+      if (h > 1 || // unless we found a matching forgotten point
+          AXIS(points[i]) <= (LOWER_BOUND + LENIENT_BORDER_PADDING) ||
+          AXIS(points[i]) >= (UPPER_BOUND - LENIENT_BORDER_PADDING)) {
+        for (uint8_t j=0; j<MAX_PEOPLE; j++) {
+          // look for first empty slot in past_points to use
+          if (past_points[j] == UNDEF_POINT) {
+            past_points[j] = points[i];
+            starting_points[j] = sp;
+            histories[j] = h;
+            break;
+          }
         }
       }
     }
@@ -320,7 +340,9 @@ void processSensor() {
     if (cycles_since_forgotten == 1) {
       for (uint8_t i=0; i<forgotten_count; i++) {
         if (AXIS(forgotten_past_points[i]) <= (LOWER_BOUND + BORDER_PADDING) ||
-            AXIS(forgotten_past_points[i]) >= (UPPER_BOUND - BORDER_PADDING)) {
+            AXIS(forgotten_past_points[i]) >= (UPPER_BOUND - BORDER_PADDING) ||
+            NOT_AXIS(forgotten_past_points[i]) <= (LOWER_BOUND + STRICT_BORDER_PADDING) ||
+            NOT_AXIS(forgotten_past_points[i]) >= (UPPER_BOUND - STRICT_BORDER_PADDING)) {
           // this point exists on the outer edge of grid, forget it after 1 frame        
           forgotten_past_points[i] = UNDEF_POINT;
         }
