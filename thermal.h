@@ -45,6 +45,7 @@ uint8_t cycles_since_door_changed = 0;
 #define CHECK_TEMP(i)   ( cur_pixels[(i)] > avg_pixels[(i)] + TEMP_BUFFER + (BORDER_PAD(i)) )
 #define CHECK_DOOR(i)   ( door_state == HIGH || AXIS(i) <= (GRID_EXTENT/2) )
 #define PIXEL_ACTIVE(i) ( CHECK_TEMP(i) && CHECK_DOOR(i) )
+#define DOOR_OPENED(n)  ( door_state == HIGH && cycles_since_door_changed <= (n) )
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -318,6 +319,10 @@ void processSensor() {
             break;
           }
         }
+      }
+      if (DOOR_OPENED(1) && h == 1 && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
+        // if door just opened and point is starting in row 5, move it back to row 6
+        sp += GRID_EXTENT;
       }
       // ignore new points that showed up in middle 2 rows of grid
       if (h > 1 || // unless we found a matching forgotten point
