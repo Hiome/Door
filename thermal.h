@@ -32,7 +32,7 @@ uint16_t forgotten_histories[MAX_PEOPLE];
 uint8_t forgotten_count = 0;
 uint8_t cycles_since_forgotten = 0;
 
-int door_state;
+uint8_t door_state;
 uint8_t cycles_since_door_changed = 0;
 
 #if AXIS == y
@@ -378,7 +378,11 @@ void processSensor() {
       SERIAL_PRINT("Detected people at ");
       for (uint8_t i = 0; i<total_masses; i++) {
         SERIAL_PRINT(points[i]);
-        SERIAL_PRINT(", ");
+        SERIAL_PRINT(" (");
+        SERIAL_PRINT(starting_points[i]);
+        SERIAL_PRINT("->");
+        SERIAL_PRINT(histories[i]);
+        SERIAL_PRINT("), ");
       }
       SERIAL_PRINTLN();
 
@@ -416,6 +420,20 @@ void processSensor() {
   updateAverages();
 }
 
+void checkDoorState() {
+  if (door_state != digitalRead(REED_PIN)) {
+    door_state = digitalRead(REED_PIN);
+    cycles_since_door_changed = 0;
+    if (door_state == HIGH) {
+      publish("d1");
+    } else {
+      publish("d0");
+    }
+  } else if (cycles_since_door_changed < 50) {
+    cycles_since_door_changed++;
+  }
+}
+
 void initialize() {
   amg.begin();
 
@@ -423,22 +441,14 @@ void initialize() {
   digitalWrite(LED, HIGH);
 
   pinMode(REED_PIN, INPUT_PULLUP);
-  door_state = digitalRead(REED_PIN);
+  door_state = 3;
 
   clearTrackers();
   amg.readPixels(avg_pixels);
 }
 
 void loop() {
-  if (door_state != digitalRead(REED_PIN)) {
-    door_state = digitalRead(REED_PIN);
-    cycles_since_door_changed = 0;
-    SERIAL_PRINT("door is ");
-    SERIAL_PRINTLN(door_state);
-  } else if (cycles_since_door_changed < 100) {
-    cycles_since_door_changed++;
-  }
-
+  checkDoorState();
   processSensor();
 }
 
