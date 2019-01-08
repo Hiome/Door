@@ -381,13 +381,15 @@ void processSensor() {
     }
     if (total_masses > 0) {
       SERIAL_PRINT("Detected people at ");
-      for (uint8_t i = 0; i<total_masses; i++) {
-        SERIAL_PRINT(points[i]);
-        SERIAL_PRINT(" (");
-        SERIAL_PRINT(starting_points[i]);
-        SERIAL_PRINT("->");
-        SERIAL_PRINT(histories[i]);
-        SERIAL_PRINT("), ");
+      for (uint8_t i = 0; i<MAX_PEOPLE; i++) {
+        if (past_points[i] != UNDEF_POINT) {
+          SERIAL_PRINT(past_points[i]);
+          SERIAL_PRINT(" (");
+          SERIAL_PRINT(starting_points[i]);
+          SERIAL_PRINT("->");
+          SERIAL_PRINT(histories[i]);
+          SERIAL_PRINT("), ");
+        }
       }
       SERIAL_PRINTLN();
 
@@ -434,7 +436,7 @@ void checkDoorState() {
     } else {
       publish("d0");
     }
-  } else if (cycles_since_door_changed < 50) {
+  } else if (cycles_since_door_changed < 5) {
     cycles_since_door_changed++;
   }
 }
