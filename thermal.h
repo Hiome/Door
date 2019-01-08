@@ -184,6 +184,31 @@ void clearTrackers() {
 void processSensor() {
   if (!readPixels()) return;
 
+  // sort list of previously seen people by how many frames we've seen them to prioritize
+  // finding people who have been in frame longest (reduces impact of noisy data)
+
+  uint8_t ordered_past_points[MAX_PEOPLE];
+  uint8_t past_total_masses = sortPointsByHistory(ordered_past_points);
+
+  // If door just opened and there are no active points or only new points,
+  // average heat of bottom half of grid and apply it as baseline to entire grid.
+  // This should help mitigate affect of warm air rushing into room.
+  if (DOOR_OPENED(1) && (past_total_masses == 0 || histories[ordered_past_points[0]] == 1)) {
+    float avg = 0;
+    #if AXIS == y
+      for (uint8_t i=(AMG88xx_PIXEL_ARRAY_SIZE/2); i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    #else
+      for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+        if (AXIS(i) > (GRID_EXTENT/2))
+    #endif
+          avg += cur_pixels[i];
+    }
+    avg /= (AMG88xx_PIXEL_ARRAY_SIZE/2);
+    for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+      avg_pixels[i] = avg;
+    }
+  }
+
   // sort pixels by temperature to find peaks
 
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
@@ -240,12 +265,6 @@ void processSensor() {
     }
   }
 
-  // sort list of previously seen people by how many frames we've seen them to prioritize
-  // finding people who have been in frame longest (reduces impact of noisy data)
-
-  uint8_t ordered_past_points[MAX_PEOPLE];
-  uint8_t past_total_masses = sortPointsByHistory(ordered_past_points);
-
   // pair previously seen points with new points to determine where people moved
 
   bool taken[total_masses];
@@ -260,7 +279,7 @@ void processSensor() {
 
   for (uint8_t i=0; i<past_total_masses; i++) {
     uint8_t idx = ordered_past_points[i];
-    uint8_t min_distance = (MIN_DISTANCE + BORDER_PADDING);
+    uint8_t min_distance = (MIN_DISTANCE + 1); // max distance a point can travel
     uint8_t min_index = UNDEF_POINT;
     for (uint8_t j=0; j<total_masses; j++) {
       if (!taken[j]) {
