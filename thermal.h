@@ -40,6 +40,7 @@ uint8_t cycles_since_door_changed = 0;
 #else
   #define NOT_AXIS      y
 #endif
+#define SIDE(p)         ( (AXIS(p) <= 4 ? 1 : 2) )
 #define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
 #define BORDER_PAD(i)   ( x(i) == 1 || x(i) == GRID_EXTENT ? TEMP_BUFFER : 0 )
 #define CHECK_TEMP(i)   ( cur_pixels[(i)] > avg_pixels[(i)] + TEMP_BUFFER + (BORDER_PAD(i)) )
@@ -311,8 +312,14 @@ void processSensor() {
     } else {
       // closest point matched, update trackers
       if (past_points[idx] != points[min_index]) {
+        if (SIDE(points[min_index]) != SIDE(past_points[idx])) {
+          // point just crossed threshold, let's reduce its history to force
+          // it to spend another cycle on this side before we count the event
+          histories[idx] = min(histories[idx], MIN_HISTORY);
+        } else {
+          histories[idx]++;
+        }
         past_points[idx] = points[min_index];
-        histories[idx]++;
       }
       taken[min_index] = true;
     }
