@@ -279,7 +279,7 @@ void processSensor() {
 
   for (uint8_t i=0; i<past_total_masses; i++) {
     uint8_t idx = ordered_past_points[i];
-    uint8_t min_distance = (MIN_DISTANCE + 1); // max distance a point can travel
+    uint8_t min_distance = (MIN_DISTANCE + BORDER_PADDING); // max distance a point can travel
     uint8_t min_index = UNDEF_POINT;
     for (uint8_t j=0; j<total_masses; j++) {
       if (!taken[j]) {
