@@ -1,10 +1,10 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
 #define FIRMWARE_VERSION        "V0.1"
-#define REED_PIN                3
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define TEMP_BUFFER             1    // min increase in temp needed to register person
+#define TEMP_BUFFER             2    // min increase in temp needed to register person
 #define MIN_DISTANCE            3    // min distance for 2 peaks to be separate people
+#define MAX_DISTANCE            5    // max distance that a point is allowed to move
 #define MIN_HISTORY             4    // min number of times a point needs to be seen
 #define MAX_PEOPLE              5    // most people we support in a single frame
 #define AXIS                    y    // axis along which we expect points to move (x or y)
@@ -15,6 +15,7 @@
 #define STRICT_BORDER_PADDING   (BORDER_PADDING-1)
 #define LENIENT_BORDER_PADDING  (BORDER_PADDING+1)
 
+#define REED_PIN                3
 #include <Wire.h>
 #include <Adafruit_AMG88xx.h>
 
@@ -34,19 +35,6 @@ uint8_t cycles_since_forgotten = 0;
 
 uint8_t door_state;
 uint8_t cycles_since_door_changed = 0;
-
-#if AXIS == y
-  #define NOT_AXIS      x
-#else
-  #define NOT_AXIS      y
-#endif
-#define SIDE(p)         ( (AXIS(p) <= 4 ? 1 : 2) )
-#define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
-#define BORDER_PAD(i)   ( x(i) == 1 || x(i) == GRID_EXTENT ? TEMP_BUFFER : 0 )
-#define CHECK_TEMP(i)   ( cur_pixels[(i)] > avg_pixels[(i)] + TEMP_BUFFER + (BORDER_PAD(i)) )
-#define CHECK_DOOR(i)   ( door_state == HIGH || AXIS(i) <= (GRID_EXTENT/2) )
-#define PIXEL_ACTIVE(i) ( CHECK_TEMP(i) && CHECK_DOOR(i) )
-#define DOOR_OPENED(n)  ( door_state == HIGH && cycles_since_door_changed <= (n) )
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -73,8 +61,17 @@ const uint8_t ycoordinates[64] PROGMEM = {
 #define x(p) ( pgm_read_byte_near(xcoordinates + (p)) )
 #define y(p) ( pgm_read_byte_near(ycoordinates + (p)) )
 
-// calculate euclidian distance between 2 indices
+uint8_t manhattan_distance(uint8_t p1, uint8_t p2) {
+  int8_t yd = y(p2) - y(p1);
+  int8_t xd = x(p2) - x(p1);
+  return abs(yd) + abs(xd);
+}
+
 uint8_t distance(uint8_t p1, uint8_t p2) {
+  uint8_t md = manhattan_distance(p1, p2);
+  if (md >= MAX_DISTANCE) return md;
+
+  // calculate euclidean distance instead
   int8_t yd = y(p2) - y(p1);
   int8_t xd = x(p2) - x(p1);
   return floor(sqrt(sq(yd) + sq(xd)));
@@ -86,6 +83,20 @@ int sort_asc(const void *cmp1, const void *cmp2) {
   uint8_t b = *((uint8_t *)cmp2);
   return a - b;
 }
+
+#if AXIS == y
+  #define NOT_AXIS      x
+  #define SIDE(p)       ( (p) < (AMG88xx_PIXEL_ARRAY_SIZE/2) ? 1 : 2 )
+#else
+  #define NOT_AXIS      y
+  #define SIDE(p)       ( (AXIS(p)) <= (GRID_EXTENT/2) ? 1 : 2 )
+#endif
+#define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
+#define BORDER_PAD(i)   ( NOT_AXIS(i) == 1 || NOT_AXIS(i) == GRID_EXTENT ? 1 : 0 )
+#define CHECK_TEMP(i)   ( cur_pixels[(i)] > avg_pixels[(i)] + TEMP_BUFFER + (BORDER_PAD(i)) )
+#define CHECK_DOOR(i)   ( door_state == HIGH || AXIS(i) <= (GRID_EXTENT/2) )
+#define PIXEL_ACTIVE(i) ( (CHECK_TEMP(i)) && (CHECK_DOOR(i)) )
+#define DOOR_OPENED(n)  ( door_state == HIGH && cycles_since_door_changed <= (n) )
 
 // This macro sorts array indexes based on their corresponding values.
 // For example, given an array {4, 2, 0}, SORT_ARRAY(a, (a[i] > 0), 3)
@@ -171,8 +182,29 @@ bool readPixels() {
 }
 
 void updateAverages() {
-  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    avg_pixels[i] += ALPHA * (cur_pixels[i] - avg_pixels[i]);
+  // If door just opened, average both sides of grid and apply
+  // higher avg as baseline to entire grid. This should help
+  // mitigate affect of warm air rushing into or out of room.
+  if (DOOR_OPENED(1)) {
+    float avg1 = 0;
+    float avg2 = 0;
+    for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+      if (SIDE(i) == 1) {
+        avg1 += cur_pixels[i];
+      } else {
+        avg2 += cur_pixels[i];
+      }
+    }
+    avg1 /= (AMG88xx_PIXEL_ARRAY_SIZE/2);
+    avg2 /= (AMG88xx_PIXEL_ARRAY_SIZE/2);
+    float mavg = max(avg1, avg2);
+    for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+      avg_pixels[i] = max(mavg, avg_pixels[i]);
+    }
+  } else {
+    for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+      avg_pixels[i] += ALPHA * (cur_pixels[i] - avg_pixels[i]);
+    }
   }
 }
 
@@ -184,41 +216,12 @@ void clearTrackers() {
 
 void processSensor() {
   if (!readPixels()) return;
-
-  // sort list of previously seen people by how many frames we've seen them to prioritize
-  // finding people who have been in frame longest (reduces impact of noisy data)
-
-  uint8_t ordered_past_points[MAX_PEOPLE];
-  uint8_t past_total_masses = sortPointsByHistory(ordered_past_points);
-
-  // If door just opened and there are no active points or only new points,
-  // average heat of bottom half of grid and apply it as baseline to entire grid.
-  // This should help mitigate affect of warm air rushing into room.
-  if (DOOR_OPENED(1) && (past_total_masses == 0 || histories[ordered_past_points[0]] == 1)) {
-    float avg = 0;
-    #if AXIS == y
-      for (uint8_t i=(AMG88xx_PIXEL_ARRAY_SIZE/2); i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    #else
-      for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-        if (AXIS(i) > (GRID_EXTENT/2))
-    #endif
-          avg += cur_pixels[i];
-    }
-    avg /= (AMG88xx_PIXEL_ARRAY_SIZE/2);
-    for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-      avg_pixels[i] = avg;
-    }
-  }
+  updateAverages();
 
   // sort pixels by temperature to find peaks
 
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
   uint8_t active_pixel_count = sortPixelsByTemp(ordered_indexes);
-
-  if (active_pixel_count > 56) {
-    clearTrackers();
-    return;
-  }
 
   // determine which points are people by comparing peaks with neighboring cells
 
@@ -266,6 +269,12 @@ void processSensor() {
     }
   }
 
+  // sort list of previously seen people by how many frames we've seen them to prioritize
+  // finding people who have been in frame longest (reduces impact of noisy data)
+
+  uint8_t ordered_past_points[MAX_PEOPLE];
+  uint8_t past_total_masses = sortPointsByHistory(ordered_past_points);
+
   // pair previously seen points with new points to determine where people moved
 
   bool taken[total_masses];
@@ -280,7 +289,7 @@ void processSensor() {
 
   for (uint8_t i=0; i<past_total_masses; i++) {
     uint8_t idx = ordered_past_points[i];
-    uint8_t min_distance = (MIN_DISTANCE + BORDER_PADDING); // max distance a point can travel
+    uint8_t min_distance = MAX_DISTANCE;
     uint8_t min_index = UNDEF_POINT;
     for (uint8_t j=0; j<total_masses; j++) {
       if (!taken[j]) {
@@ -398,6 +407,12 @@ void processSensor() {
   // publish event if any people moved through doorway yet
 
   publishEvents();
+  
+  // increment door cycle counter
+  
+  if (cycles_since_door_changed < 5) {
+    cycles_since_door_changed++;
+  }
 
   // wrap up with debugging output
 
@@ -449,8 +464,6 @@ void processSensor() {
       SERIAL_PRINTLN();
     }
   #endif
-
-  updateAverages();
 }
 
 void checkDoorState() {
@@ -462,8 +475,6 @@ void checkDoorState() {
     } else {
       publish("d0");
     }
-  } else if (cycles_since_door_changed < 5) {
-    cycles_since_door_changed++;
   }
 }
 
