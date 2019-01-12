@@ -34,7 +34,6 @@ uint8_t forgotten_count = 0;
 uint8_t cycles_since_forgotten = 0;
 
 uint8_t door_state;
-uint8_t cycles_since_door_changed = 0;
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -96,7 +95,6 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 #define CHECK_TEMP(i)   ( cur_pixels[(i)] > (avg_pixels[(i)] + TEMP_BUFFER + (SIDE1_PAD(i))) )
 #define CHECK_DOOR(i)   ( door_state == HIGH || AXIS(i) <= (GRID_EXTENT/2) )
 #define PIXEL_ACTIVE(i) ( (CHECK_TEMP(i)) && (CHECK_DOOR(i)) )
-#define DOOR_OPENED(n)  ( door_state == HIGH && cycles_since_door_changed <= (n) )
 
 // This macro sorts array indexes based on their corresponding values.
 // For example, given an array {4, 2, 0}, SORT_ARRAY(a, (a[i] > 0), 3)
@@ -411,12 +409,6 @@ void processSensor() {
   // publish event if any people moved through doorway yet
 
   publishEvents();
-  
-  // increment door cycle counter
-  
-  if (cycles_since_door_changed < 20) {
-    cycles_since_door_changed++;
-  }
 
   // wrap up with debugging output
 
@@ -475,7 +467,6 @@ void processSensor() {
 void checkDoorState() {
   if (door_state != digitalRead(REED_PIN)) {
     door_state = digitalRead(REED_PIN);
-    cycles_since_door_changed = 0;
     if (door_state == HIGH) {
       publish("d1");
     } else {
