@@ -400,8 +400,7 @@ void processSensor() {
     }
     if (cycles_since_forgotten == 5) {
       memset(forgotten_past_points, UNDEF_POINT, MAX_PEOPLE);
-    }
-    if (cycles_since_forgotten < 100) {
+    } else if (cycles_since_forgotten < 5) {
       cycles_since_forgotten++;
     }
   }
