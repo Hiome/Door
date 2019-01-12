@@ -2,11 +2,11 @@
 
 #define FIRMWARE_VERSION        "V0.1"
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define TEMP_BUFFER             2    // min increase in temp needed to register person
+#define TEMP_BUFFER             1    // min increase in temp needed to register person
 #define MIN_DISTANCE            3    // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            5    // max distance that a point is allowed to move
 #define MIN_HISTORY             4    // min number of times a point needs to be seen
-#define MAX_PEOPLE              5    // most people we support in a single frame
+#define MAX_PEOPLE              3    // most people we support in a single frame
 #define AXIS                    y    // axis along which we expect points to move (x or y)
 #define ALPHA                   0.01 // learning rate for background temp
 #define LOWER_BOUND             0
@@ -69,7 +69,7 @@ uint8_t manhattan_distance(uint8_t p1, uint8_t p2) {
 
 uint8_t distance(uint8_t p1, uint8_t p2) {
   uint8_t md = manhattan_distance(p1, p2);
-  if (md >= MAX_DISTANCE) return md;
+  if (md > MAX_DISTANCE) return md;
 
   // calculate euclidean distance instead
   int8_t yd = y(p2) - y(p1);
@@ -92,8 +92,8 @@ int sort_asc(const void *cmp1, const void *cmp2) {
   #define SIDE(p)       ( (AXIS(p)) <= (GRID_EXTENT/2) ? 1 : 2 )
 #endif
 #define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
-#define BORDER_PAD(i)   ( NOT_AXIS(i) == 1 || NOT_AXIS(i) == GRID_EXTENT ? 1 : 0 )
-#define CHECK_TEMP(i)   ( cur_pixels[(i)] > avg_pixels[(i)] + TEMP_BUFFER + (BORDER_PAD(i)) )
+#define SIDE1_PAD(i)    ( SIDE(i) == 1 ? TEMP_BUFFER : 0 )
+#define CHECK_TEMP(i)   ( cur_pixels[(i)] > (avg_pixels[(i)] + TEMP_BUFFER + (SIDE1_PAD(i))) )
 #define CHECK_DOOR(i)   ( door_state == HIGH || AXIS(i) <= (GRID_EXTENT/2) )
 #define PIXEL_ACTIVE(i) ( (CHECK_TEMP(i)) && (CHECK_DOOR(i)) )
 #define DOOR_OPENED(n)  ( door_state == HIGH && cycles_since_door_changed <= (n) )
@@ -181,30 +181,31 @@ bool readPixels() {
   return (memcmp(past_pixels, cur_pixels, AMG88xx_PIXEL_ARRAY_SIZE) != 0);
 }
 
-void updateAverages() {
-  // If door just opened, average both sides of grid and apply
-  // higher avg as baseline to entire grid. This should help
-  // mitigate affect of warm air rushing into or out of room.
-  if (DOOR_OPENED(1)) {
-    float avg1 = 0;
-    float avg2 = 0;
+// if we see spikes in lots active pixels, massage readings by subtracting out
+// the difference between the current average and historical average to hopefully
+// eliminate noise but still keep peaks from people visible.
+void equalizeValues() {
+  float cur_avg = 0;
+  float avg_avg = 0;
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    cur_avg += cur_pixels[i];
+    avg_avg += avg_pixels[i];
+  }
+  float dif_avg = cur_avg - avg_avg;
+  if (dif_avg > 0) {
+    dif_avg /= AMG88xx_PIXEL_ARRAY_SIZE;
     for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-      if (SIDE(i) == 1) {
-        avg1 += cur_pixels[i];
-      } else {
-        avg2 += cur_pixels[i];
+      if (CHECK_TEMP(i)) {
+        float d = cur_pixels[i] - dif_avg;
+        cur_pixels[i] = max(d, avg_pixels[i]);
       }
     }
-    avg1 /= (AMG88xx_PIXEL_ARRAY_SIZE/2);
-    avg2 /= (AMG88xx_PIXEL_ARRAY_SIZE/2);
-    float mavg = max(avg1, avg2);
-    for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-      avg_pixels[i] = max(mavg, avg_pixels[i]);
-    }
-  } else {
-    for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-      avg_pixels[i] += ALPHA * (cur_pixels[i] - avg_pixels[i]);
-    }
+  }
+}
+
+void updateAverages() {
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    avg_pixels[i] += ALPHA * (cur_pixels[i] - avg_pixels[i]);
   }
 }
 
@@ -216,7 +217,7 @@ void clearTrackers() {
 
 void processSensor() {
   if (!readPixels()) return;
-  updateAverages();
+  equalizeValues();
 
   // sort pixels by temperature to find peaks
 
@@ -355,12 +356,15 @@ void processSensor() {
           }
         }
       }
-      if (DOOR_OPENED(1) && h == 1 && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
-        // if door just opened and point is starting in row 5, move it back to row 6
+      bool row5 = false;
+      if (h == 1 && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
+        // if point is starting in row 5, move it back to row 6
         sp += GRID_EXTENT;
+        row5 = true;
       }
       // ignore new points that showed up in middle 2 rows of grid
-      if (h > 1 || // unless we found a matching forgotten point
+      // unless we found a matching forgotten point or started in row 5
+      if (h > 1 || row5 ||
           AXIS(points[i]) <= (LOWER_BOUND + LENIENT_BORDER_PADDING) ||
           AXIS(points[i]) >= (UPPER_BOUND - LENIENT_BORDER_PADDING)) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
@@ -410,7 +414,7 @@ void processSensor() {
   
   // increment door cycle counter
   
-  if (cycles_since_door_changed < 5) {
+  if (cycles_since_door_changed < 20) {
     cycles_since_door_changed++;
   }
 
@@ -464,6 +468,8 @@ void processSensor() {
       SERIAL_PRINTLN();
     }
   #endif
+
+  updateAverages();
 }
 
 void checkDoorState() {
