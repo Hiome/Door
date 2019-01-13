@@ -1,13 +1,13 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
 #define FIRMWARE_VERSION        "V0.1"
+#define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define TEMP_BUFFER             1    // min increase in temp needed to register person
 #define MIN_DISTANCE            3    // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            5    // max distance that a point is allowed to move
 #define MIN_HISTORY             4    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
-#define AXIS                    y    // axis along which we expect points to move (x or y)
 #define ALPHA                   0.01 // learning rate for background temp
 #define LOWER_BOUND             0
 #define UPPER_BOUND             (GRID_EXTENT+1)
@@ -23,6 +23,7 @@ Adafruit_AMG88xx amg;
 
 float avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float cur_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
+float raw_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 
 uint8_t past_points[MAX_PEOPLE];
 uint8_t starting_points[MAX_PEOPLE];
@@ -66,14 +67,14 @@ uint8_t manhattan_distance(uint8_t p1, uint8_t p2) {
   return abs(yd) + abs(xd);
 }
 
-uint8_t distance(uint8_t p1, uint8_t p2) {
+float euclidean_distance(uint8_t p1, uint8_t p2) {
   uint8_t md = manhattan_distance(p1, p2);
-  if (md > MAX_DISTANCE) return md;
+  if (md > MAX_DISTANCE) return (float)md;
 
   // calculate euclidean distance instead
   int8_t yd = y(p2) - y(p1);
   int8_t xd = x(p2) - x(p1);
-  return floor(sqrt(sq(yd) + sq(xd)));
+  return sqrt(sq(yd) + sq(xd));
 }
 
 // used only by qsort in debugging section (compiled out otherwise)
@@ -83,12 +84,15 @@ int sort_asc(const void *cmp1, const void *cmp2) {
   return a - b;
 }
 
-#if AXIS == y
+#ifdef YAXIS
+  #define AXIS          y
   #define NOT_AXIS      x
   #define SIDE(p)       ( (p) < (AMG88xx_PIXEL_ARRAY_SIZE/2) ? 1 : 2 )
 #else
+  #define AXIS          x
   #define NOT_AXIS      y
   #define SIDE(p)       ( (AXIS(p)) <= (GRID_EXTENT/2) ? 1 : 2 )
+  #error Double check all your code, this is untested
 #endif
 #define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
 #define SIDE1_PAD(i)    ( SIDE(i) == 1 ? TEMP_BUFFER : 0 )
@@ -171,39 +175,42 @@ void publishEvents() {
 
 bool readPixels() {
   float past_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
-  memcpy(past_pixels, cur_pixels, AMG88xx_PIXEL_ARRAY_SIZE);
+  memcpy(past_pixels, raw_pixels, AMG88xx_PIXEL_ARRAY_SIZE);
 
-  amg.readPixels(cur_pixels);
+  amg.readPixels(raw_pixels);
 
   // return true if pixels changed
-  return (memcmp(past_pixels, cur_pixels, AMG88xx_PIXEL_ARRAY_SIZE) != 0);
+  return (memcmp(past_pixels, raw_pixels, AMG88xx_PIXEL_ARRAY_SIZE) != 0);
 }
 
 // if we see spikes in lots active pixels, massage readings by subtracting out
 // the difference between the current average and historical average to hopefully
 // eliminate noise but still keep peaks from people visible.
 void equalizeValues() {
-  float cur_avg = 0;
-  float avg_avg = 0;
+  memcpy(cur_pixels, raw_pixels, AMG88xx_PIXEL_ARRAY_SIZE);
+  float cur_avg1 = 0;
+  float avg_avg1 = 0;
+  float cur_avg2 = 0;
+  float avg_avg2 = 0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    cur_avg += cur_pixels[i];
-    avg_avg += avg_pixels[i];
-  }
-  float dif_avg = cur_avg - avg_avg;
-  if (dif_avg > 0) {
-    dif_avg /= AMG88xx_PIXEL_ARRAY_SIZE;
-    for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-      if (CHECK_TEMP(i)) {
-        float d = cur_pixels[i] - dif_avg;
-        cur_pixels[i] = max(d, avg_pixels[i]);
-      }
+    if (SIDE(i) == 1) {
+      cur_avg1 += cur_pixels[i];
+      avg_avg1 += avg_pixels[i];
+    } else {
+      cur_avg2 += cur_pixels[i];
+      avg_avg2 += avg_pixels[i];
     }
+  }
+  float dif_avg1 = (cur_avg1 - avg_avg1)/(AMG88xx_PIXEL_ARRAY_SIZE/2);
+  float dif_avg2 = (cur_avg2 - avg_avg2)/(AMG88xx_PIXEL_ARRAY_SIZE/2);
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    cur_pixels[i] -= (SIDE(i) == 1 ? dif_avg1 : dif_avg2);
   }
 }
 
 void updateAverages() {
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    avg_pixels[i] += ALPHA * (cur_pixels[i] - avg_pixels[i]);
+    avg_pixels[i] += ALPHA * (raw_pixels[i] - avg_pixels[i]);
   }
 }
 
@@ -252,7 +259,7 @@ void processSensor() {
     bool distinct = true;
     for (uint8_t j=0; j<i; j++) {
       // make sure this point isn't close to another peak we already considered
-      if (distance(ordered_indexes[j], idx) < MIN_DISTANCE) {
+      if (euclidean_distance(ordered_indexes[j], idx) < MIN_DISTANCE) {
         distinct = false;
         break;
       }
@@ -288,12 +295,12 @@ void processSensor() {
 
   for (uint8_t i=0; i<past_total_masses; i++) {
     uint8_t idx = ordered_past_points[i];
-    uint8_t min_distance = MAX_DISTANCE;
+    float min_distance = MAX_DISTANCE;
     uint8_t min_index = UNDEF_POINT;
     for (uint8_t j=0; j<total_masses; j++) {
       if (!taken[j]) {
         // match with closest point
-        uint8_t d = distance(past_points[idx], points[j]);
+        float d = euclidean_distance(past_points[idx], points[j]);
         if (d < min_distance) {
           min_distance = d;
           min_index = j;
@@ -346,7 +353,7 @@ void processSensor() {
         // this point appeared in middle of grid, let's check forgotten points for match
         for (uint8_t j=0; j<forgotten_count; j++) {
           if (forgotten_past_points[j] != UNDEF_POINT &&
-              distance(forgotten_past_points[j], points[i]) < MIN_DISTANCE) {
+              euclidean_distance(forgotten_past_points[j], points[i]) < MIN_DISTANCE) {
             h = forgotten_histories[j];
             sp = forgotten_starting_points[j];
             forgotten_past_points[j] = UNDEF_POINT;
@@ -397,10 +404,10 @@ void processSensor() {
           forgotten_past_points[i] = UNDEF_POINT;
         }
       }
-    }
-    if (cycles_since_forgotten == 5) {
+    } else if (cycles_since_forgotten == 5) {
       memset(forgotten_past_points, UNDEF_POINT, MAX_PEOPLE);
-    } else if (cycles_since_forgotten < 5) {
+    }
+    if (cycles_since_forgotten < 6) {
       cycles_since_forgotten++;
     }
   }
@@ -435,8 +442,17 @@ void processSensor() {
       qsort(sorted_points, total_masses, 1, sort_asc);
 
       // print chart of what sensor saw in 8x8 grid
+      SERIAL_PRINTLN("Raw data:");
+      for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
+        SERIAL_PRINT(raw_pixels[idx]);
+        SERIAL_PRINT("  ");
+        if (!(NOT_RIGHT_EDGE)) SERIAL_PRINTLN();
+      }
+
+      // print chart of what we saw in 8x8 grid
       uint8_t next_point = sorted_points[0];
       uint8_t seen_points = 1;
+      SERIAL_PRINTLN("Massaged data:");
       for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
         if (PIXEL_ACTIVE(idx)) {
           idx == next_point ? SERIAL_PRINT("[") : SERIAL_PRINT(" ");
