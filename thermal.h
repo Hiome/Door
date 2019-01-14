@@ -74,7 +74,7 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
   // calculate euclidean distance instead
   int8_t yd = y(p2) - y(p1);
   int8_t xd = x(p2) - x(p1);
-  return sqrt(sq(yd) + sq(xd));
+  return (float)sqrt(sq(yd) + sq(xd));
 }
 
 // used only by qsort in debugging section (compiled out otherwise)
@@ -95,8 +95,7 @@ int sort_asc(const void *cmp1, const void *cmp2) {
   #error Double check all your code, this is untested
 #endif
 #define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
-#define SIDE1_PAD(i)    ( SIDE(i) == 1 ? TEMP_BUFFER : 0 )
-#define CHECK_TEMP(i)   ( cur_pixels[(i)] > (avg_pixels[(i)] + TEMP_BUFFER + (SIDE1_PAD(i))) )
+#define CHECK_TEMP(i)   ( cur_pixels[(i)] > (avg_pixels[(i)] + TEMP_BUFFER) )
 #define CHECK_DOOR(i)   ( door_state == HIGH || AXIS(i) <= (GRID_EXTENT/2) )
 #define PIXEL_ACTIVE(i) ( (CHECK_TEMP(i)) && (CHECK_DOOR(i)) )
 
@@ -347,10 +346,8 @@ void processSensor() {
       uint16_t h = 1;
       uint8_t sp = points[i];
       // new point appeared (no past point found), start tracking it
-      if ((AXIS(points[i]) > (LOWER_BOUND + BORDER_PADDING) &&
-          AXIS(points[i]) < (UPPER_BOUND - BORDER_PADDING)) ||
-          cycles_since_forgotten < 3) {
-        // this point appeared in middle of grid, let's check forgotten points for match
+      if (cycles_since_forgotten < 5) {
+        // first let's check forgotten points for a match
         for (uint8_t j=0; j<forgotten_count; j++) {
           if (forgotten_past_points[j] != UNDEF_POINT &&
               euclidean_distance(forgotten_past_points[j], points[i]) < MIN_DISTANCE) {
@@ -395,7 +392,7 @@ void processSensor() {
     forgotten_count = temp_forgotten_count;
     cycles_since_forgotten = 0;
   } else {
-    if (cycles_since_forgotten == 1) {
+    if (cycles_since_forgotten == 2) {
       for (uint8_t i=0; i<forgotten_count; i++) {
         if (AXIS(forgotten_past_points[i]) <= (LOWER_BOUND + BORDER_PADDING) ||
             AXIS(forgotten_past_points[i]) >= (UPPER_BOUND - BORDER_PADDING) ||
@@ -442,18 +439,9 @@ void processSensor() {
       memcpy(sorted_points, points, (total_masses*sizeof(uint8_t)));
       qsort(sorted_points, total_masses, sizeof(uint8_t), sort_asc);
 
-      // print chart of what sensor saw in 8x8 grid
-//      SERIAL_PRINTLN("Raw data:");
-//      for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
-//        SERIAL_PRINT(raw_pixels[idx]);
-//        SERIAL_PRINT("  ");
-//        if (!(NOT_RIGHT_EDGE)) SERIAL_PRINTLN();
-//      }
-
       // print chart of what we saw in 8x8 grid
       uint8_t next_point = sorted_points[0];
       uint8_t seen_points = 1;
-//      SERIAL_PRINTLN("Massaged data:");
       for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
         if (PIXEL_ACTIVE(idx)) {
           idx == next_point ? SERIAL_PRINT("[") : SERIAL_PRINT(" ");
