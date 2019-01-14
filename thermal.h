@@ -175,19 +175,19 @@ void publishEvents() {
 
 bool readPixels() {
   float past_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
-  memcpy(past_pixels, raw_pixels, AMG88xx_PIXEL_ARRAY_SIZE);
+  memcpy(past_pixels, raw_pixels, (AMG88xx_PIXEL_ARRAY_SIZE*sizeof(float)));
 
   amg.readPixels(raw_pixels);
 
   // return true if pixels changed
-  return (memcmp(past_pixels, raw_pixels, AMG88xx_PIXEL_ARRAY_SIZE) != 0);
+  return (memcmp(past_pixels, raw_pixels, (AMG88xx_PIXEL_ARRAY_SIZE*sizeof(float))) != 0);
 }
 
 // if we see spikes in lots active pixels, massage readings by subtracting out
 // the difference between the current average and historical average to hopefully
 // eliminate noise but still keep peaks from people visible.
 void equalizeValues() {
-  memcpy(cur_pixels, raw_pixels, AMG88xx_PIXEL_ARRAY_SIZE);
+  memcpy(cur_pixels, raw_pixels, (AMG88xx_PIXEL_ARRAY_SIZE*sizeof(float)));
   float cur_avg1 = 0;
   float avg_avg1 = 0;
   float cur_avg2 = 0;
@@ -215,9 +215,9 @@ void updateAverages() {
 }
 
 void clearTrackers() {
-  memset(histories, 0, MAX_PEOPLE);
-  memset(past_points, UNDEF_POINT, MAX_PEOPLE);
-  memset(forgotten_past_points, UNDEF_POINT, MAX_PEOPLE);
+  memset(histories, 0, (MAX_PEOPLE*sizeof(uint16_t)));
+  memset(past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
+  memset(forgotten_past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
 }
 
 void processSensor() {
@@ -284,10 +284,10 @@ void processSensor() {
   // pair previously seen points with new points to determine where people moved
 
   bool taken[total_masses];
-  memset(taken, false, total_masses);
+  memset(taken, false, (total_masses*sizeof(bool)));
 
   uint8_t temp_forgotten_points[MAX_PEOPLE];
-  memset(temp_forgotten_points, UNDEF_POINT, MAX_PEOPLE);
+  memset(temp_forgotten_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
   uint8_t temp_forgotten_starting_points[MAX_PEOPLE];
   uint16_t temp_forgotten_histories[MAX_PEOPLE];
   uint8_t temp_forgotten_count = 0;
@@ -388,9 +388,10 @@ void processSensor() {
   // copy forgotten data points for this frame to global scope
 
   if (total_masses > 0 || past_total_masses > 0) {
-    memcpy(forgotten_past_points, temp_forgotten_points, MAX_PEOPLE);
-    memcpy(forgotten_starting_points, temp_forgotten_starting_points, MAX_PEOPLE);
-    memcpy(forgotten_histories, temp_forgotten_histories, MAX_PEOPLE);
+    memcpy(forgotten_past_points, temp_forgotten_points, (MAX_PEOPLE*sizeof(uint8_t)));
+    memcpy(forgotten_starting_points, temp_forgotten_starting_points,
+                                                         (MAX_PEOPLE*sizeof(uint8_t)));
+    memcpy(forgotten_histories, temp_forgotten_histories, (MAX_PEOPLE*sizeof(uint16_t)));
     forgotten_count = temp_forgotten_count;
     cycles_since_forgotten = 0;
   } else {
@@ -405,7 +406,7 @@ void processSensor() {
         }
       }
     } else if (cycles_since_forgotten == 5) {
-      memset(forgotten_past_points, UNDEF_POINT, MAX_PEOPLE);
+      memset(forgotten_past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
     }
     if (cycles_since_forgotten < 6) {
       cycles_since_forgotten++;
@@ -438,21 +439,21 @@ void processSensor() {
 
       // sort points so we can print them in chart easily
       uint8_t sorted_points[total_masses];
-      memcpy(sorted_points, points, total_masses);
-      qsort(sorted_points, total_masses, 1, sort_asc);
+      memcpy(sorted_points, points, (total_masses*sizeof(uint8_t)));
+      qsort(sorted_points, total_masses, sizeof(uint8_t), sort_asc);
 
       // print chart of what sensor saw in 8x8 grid
-      SERIAL_PRINTLN("Raw data:");
-      for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
-        SERIAL_PRINT(raw_pixels[idx]);
-        SERIAL_PRINT("  ");
-        if (!(NOT_RIGHT_EDGE)) SERIAL_PRINTLN();
-      }
+//      SERIAL_PRINTLN("Raw data:");
+//      for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
+//        SERIAL_PRINT(raw_pixels[idx]);
+//        SERIAL_PRINT("  ");
+//        if (!(NOT_RIGHT_EDGE)) SERIAL_PRINTLN();
+//      }
 
       // print chart of what we saw in 8x8 grid
       uint8_t next_point = sorted_points[0];
       uint8_t seen_points = 1;
-      SERIAL_PRINTLN("Massaged data:");
+//      SERIAL_PRINTLN("Massaged data:");
       for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
         if (PIXEL_ACTIVE(idx)) {
           idx == next_point ? SERIAL_PRINT("[") : SERIAL_PRINT(" ");
