@@ -9,7 +9,7 @@
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MIN_PIXEL_NEIGHBORS     2    // a cell must have at least 2 active neighbors
-#define SIMILAR_TEMP_DIFF       1    // treat 2 cells within 1º of each other as the same
+#define SIMILAR_TEMP_DIFF       1.0  // treat 2 cells within 1º of each other as the same
 #define ALPHA                   0.01 // learning rate for background temp
 #define LOWER_BOUND             0
 #define UPPER_BOUND             (GRID_EXTENT+1)
@@ -147,28 +147,28 @@ uint8_t sortPixelsByTemp(uint8_t *ordered_indexes) {
 
   uint8_t active[AMG88xx_PIXEL_ARRAY_SIZE];
   for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
-    uint8_t active_borders = 0;
+    active[idx] = 0;
     // a cell has up to 8 neighbors. check each one to see if it's active.
     // xxx
     // xox
     // xxx
-    if (NOT_LEFT_EDGE) {
-      if (PIXEL_ACTIVE(MIDDLE_LEFT)) active_borders++;
-      if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_LEFT)) active_borders++;
-      if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_LEFT)) active_borders++;
+    if (PIXEL_ACTIVE(idx)) {
+      if (NOT_LEFT_EDGE) {
+        if (PIXEL_ACTIVE(MIDDLE_LEFT)) active[idx]++;
+        if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_LEFT)) active[idx]++;
+        if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_LEFT)) active[idx]++;
+      }
+      if (NOT_RIGHT_EDGE) {
+        if (PIXEL_ACTIVE(MIDDLE_RIGHT)) active[idx]++;
+        if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_RIGHT)) active[idx]++;
+        if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_RIGHT)) active[idx]++;
+      }
+      if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_MIDDLE)) active[idx]++;
+      if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_MIDDLE)) active[idx]++;
     }
-    if (NOT_RIGHT_EDGE) {
-      if (PIXEL_ACTIVE(MIDDLE_RIGHT)) active_borders++;
-      if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_RIGHT)) active_borders++;
-      if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_RIGHT)) active_borders++;
-    }
-    if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_MIDDLE)) active_borders++;
-    if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_MIDDLE)) active_borders++;
-
-    active[idx] = active_borders;
   }
 
-  SORT_ARRAY(cur_pixels, (PIXEL_ACTIVE(i) && active[i] >= MIN_PIXEL_NEIGHBORS),
+  SORT_ARRAY(cur_pixels, (active[i] >= MIN_PIXEL_NEIGHBORS),
     ((abs(cur_pixels[i] - cur_pixels[ordered_indexes[j]]) <= SIMILAR_TEMP_DIFF &&
       active[i] > active[ordered_indexes[j]]) ||
     (cur_pixels[i] - cur_pixels[ordered_indexes[j]]) > SIMILAR_TEMP_DIFF ||
@@ -298,9 +298,13 @@ void processSensor() {
 
   // pair previously seen points with new points to determine where people moved
 
+  // "I don't know who you are or what you want, but you should know that I have a
+  // very particular set of skills that make me a nightmare for people like you.
+  // I will find you, I will track you, and I will turn the lights on for you."
   bool taken[total_masses];
   memset(taken, false, (total_masses*sizeof(bool)));
 
+  // "Good luck."
   uint8_t temp_forgotten_points[MAX_PEOPLE];
   memset(temp_forgotten_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
   uint8_t temp_forgotten_starting_points[MAX_PEOPLE];
