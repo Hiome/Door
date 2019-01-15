@@ -3,11 +3,13 @@
 #define FIRMWARE_VERSION        "V0.1"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define TEMP_BUFFER             1    // min increase in temp needed to register person
-#define MIN_DISTANCE            3    // min distance for 2 peaks to be separate people
-#define MAX_DISTANCE            5    // max distance that a point is allowed to move
-#define MIN_HISTORY             4    // min number of times a point needs to be seen
+#define TEMP_BUFFER             1.0  // min increase in temp needed to register person
+#define MIN_DISTANCE            3.0  // min distance for 2 peaks to be separate people
+#define MAX_DISTANCE            5.0  // max distance that a point is allowed to move
+#define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
+#define MIN_PIXEL_NEIGHBORS     2    // a cell must have at least 2 active neighbors
+#define SIMILAR_TEMP_DIFF       1    // treat 2 cells within 1º of each other as the same
 #define ALPHA                   0.01 // learning rate for background temp
 #define LOWER_BOUND             0
 #define UPPER_BOUND             (GRID_EXTENT+1)
@@ -103,25 +105,22 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 // For example, given an array {4, 2, 0}, SORT_ARRAY(a, (a[i] > 0), 3)
 // will return 2, ordered_indexes will be {1, 0}, and ordered_values
 // will be {2, 4}. The third element does not pass the cmp condition.
-#define SORT_ARRAY(src, cmp, sze) ({                                 \
+#define SORT_ARRAY(src, cnd, cmp, sze) ({                            \
   uint8_t count = 0;                                                 \
   for (uint8_t i=0; i<(sze); i++) {                                  \
-    if ((cmp)) {                                                     \
+    if ((cnd)) {                                                     \
       bool added = false;                                            \
       for (uint8_t j=0; j<count; j++) {                              \
-        if ((src)[i] > ordered_values[j]) {                          \
+        if ((cmp)) {                                                 \
           for (uint8_t x=count; x>j; x--) {                          \
-            ordered_values[x] = ordered_values[x-1];                 \
             ordered_indexes[x] = ordered_indexes[x-1];               \
           }                                                          \
-          ordered_values[j] = (src)[i];                              \
           ordered_indexes[j] = i;                                    \
           added = true;                                              \
           break;                                                     \
         }                                                            \
       }                                                              \
       if (!added) {                                                  \
-        ordered_values[count] = (src)[i];                            \
         ordered_indexes[count] = i;                                  \
       }                                                              \
       count++;                                                       \
@@ -132,13 +131,55 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 //////////////////////////////////////////////////////////////////////
 
 uint8_t sortPixelsByTemp(uint8_t *ordered_indexes) {
-  float ordered_values[AMG88xx_PIXEL_ARRAY_SIZE];
-  SORT_ARRAY(cur_pixels, (PIXEL_ACTIVE(i)), AMG88xx_PIXEL_ARRAY_SIZE);
+  // determine which points are centers of clusters by looking for neighboring cells
+  #define TOP_LEFT        ( idx - (GRID_EXTENT+1) )
+  #define TOP_MIDDLE      ( idx - GRID_EXTENT )
+  #define TOP_RIGHT       ( idx - (GRID_EXTENT-1) )
+  #define MIDDLE_LEFT     ( idx - 1 )
+  #define MIDDLE_RIGHT    ( idx + 1 )
+  #define BOTTOM_LEFT     ( idx + (GRID_EXTENT-1) )
+  #define BOTTOM_MIDDLE   ( idx + GRID_EXTENT )
+  #define BOTTOM_RIGHT    ( idx + (GRID_EXTENT+1) )
+  #define NOT_LEFT_EDGE   ( x(idx) > 1 )
+  #define NOT_RIGHT_EDGE  ( x(idx) < GRID_EXTENT )
+  #define NOT_TOP_EDGE    ( idx >= GRID_EXTENT )
+  #define NOT_BOTTOM_EDGE ( idx < (AMG88xx_PIXEL_ARRAY_SIZE - GRID_EXTENT) )
+
+  uint8_t active[AMG88xx_PIXEL_ARRAY_SIZE];
+  for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
+    uint8_t active_borders = 0;
+    // a cell has up to 8 neighbors. check each one to see if it's active.
+    // xxx
+    // xox
+    // xxx
+    if (NOT_LEFT_EDGE) {
+      if (PIXEL_ACTIVE(MIDDLE_LEFT)) active_borders++;
+      if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_LEFT)) active_borders++;
+      if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_LEFT)) active_borders++;
+    }
+    if (NOT_RIGHT_EDGE) {
+      if (PIXEL_ACTIVE(MIDDLE_RIGHT)) active_borders++;
+      if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_RIGHT)) active_borders++;
+      if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_RIGHT)) active_borders++;
+    }
+    if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_MIDDLE)) active_borders++;
+    if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_MIDDLE)) active_borders++;
+
+    active[idx] = active_borders;
+  }
+
+  SORT_ARRAY(cur_pixels, (PIXEL_ACTIVE(i) && active[i] >= MIN_PIXEL_NEIGHBORS),
+    ((abs(cur_pixels[i] - cur_pixels[ordered_indexes[j]]) <= SIMILAR_TEMP_DIFF &&
+      active[i] > active[ordered_indexes[j]]) ||
+    (cur_pixels[i] - cur_pixels[ordered_indexes[j]]) > SIMILAR_TEMP_DIFF ||
+    (cur_pixels[i] > cur_pixels[ordered_indexes[j]] &&
+      active[i] == active[ordered_indexes[j]])),
+    AMG88xx_PIXEL_ARRAY_SIZE);
 }
 
 uint8_t sortPointsByHistory(uint8_t *ordered_indexes) {
-  uint16_t ordered_values[MAX_PEOPLE];
-  SORT_ARRAY(histories, (histories[i] > 0), MAX_PEOPLE);
+  SORT_ARRAY(histories, (histories[i] > 0),
+    (histories[i] > histories[ordered_indexes[j]]), MAX_PEOPLE);
 }
 
 void publishEvents() {
@@ -228,28 +269,7 @@ void processSensor() {
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
   uint8_t active_pixel_count = sortPixelsByTemp(ordered_indexes);
 
-  // determine which points are people by comparing peaks with neighboring cells
-
-  #define TL_IDX          ( idx - (GRID_EXTENT+1) )
-  #define TM_IDX          ( idx - GRID_EXTENT )
-  #define TR_IDX          ( idx - (GRID_EXTENT-1) )
-  #define ML_IDX          ( idx - 1 )
-  #define MR_IDX          ( idx + 1 )
-  #define BL_IDX          ( idx + (GRID_EXTENT-1) )
-  #define BM_IDX          ( idx + GRID_EXTENT )
-  #define BR_IDX          ( idx + (GRID_EXTENT+1) )
-  #define NOT_LEFT_EDGE   ( x(idx) > 1 )
-  #define NOT_RIGHT_EDGE  ( x(idx) < GRID_EXTENT )
-  #define NOT_TOP_EDGE    ( idx >= GRID_EXTENT )
-  #define NOT_BOTTOM_EDGE ( idx < (AMG88xx_PIXEL_ARRAY_SIZE - GRID_EXTENT) )
-  #define MIDDLE_LEFT     ( PIXEL_ACTIVE(ML_IDX) )
-  #define MIDDLE_RIGHT    ( PIXEL_ACTIVE(MR_IDX) )
-  #define TOP_LEFT        ( NOT_TOP_EDGE && PIXEL_ACTIVE(TL_IDX) )
-  #define TOP_MIDDLE      ( NOT_TOP_EDGE && PIXEL_ACTIVE(TM_IDX) )
-  #define TOP_RIGHT       ( NOT_TOP_EDGE && PIXEL_ACTIVE(TR_IDX) )
-  #define BOTTOM_LEFT     ( NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BL_IDX) )
-  #define BOTTOM_MIDDLE   ( NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BM_IDX) )
-  #define BOTTOM_RIGHT    ( NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BR_IDX) )
+  // determine which peaks are distinct people by making sure they are far enough apart
 
   uint8_t total_masses = 0;
   uint8_t points[MAX_PEOPLE];
@@ -258,16 +278,12 @@ void processSensor() {
     bool distinct = true;
     for (uint8_t j=0; j<i; j++) {
       // make sure this point isn't close to another peak we already considered
-      if (euclidean_distance(ordered_indexes[j], idx) < MIN_DISTANCE) {
+      if (euclidean_distance(ordered_indexes[j], idx) <= MIN_DISTANCE) {
         distinct = false;
         break;
       }
     }
-    if (distinct && (
-      // has at least one neighboring pixel (ignore stray temp readings)
-      (NOT_LEFT_EDGE && (MIDDLE_LEFT || TOP_LEFT || BOTTOM_LEFT)) ||
-      (NOT_RIGHT_EDGE && (MIDDLE_RIGHT || TOP_RIGHT || BOTTOM_RIGHT)) ||
-      TOP_MIDDLE || BOTTOM_MIDDLE)) {
+    if (distinct) {
       points[total_masses] = idx;
       total_masses++;
       if (total_masses == MAX_PEOPLE) break;  // we've hit our cap, stop looking
@@ -290,7 +306,6 @@ void processSensor() {
   uint8_t temp_forgotten_starting_points[MAX_PEOPLE];
   uint16_t temp_forgotten_histories[MAX_PEOPLE];
   uint8_t temp_forgotten_count = 0;
-  uint8_t dropped_points = 0;
 
   for (uint8_t i=0; i<past_total_masses; i++) {
     uint8_t idx = ordered_past_points[i];
@@ -306,12 +321,12 @@ void processSensor() {
         }
       }
     }
-    if (min_index != UNDEF_POINT && (total_masses + dropped_points) < past_total_masses &&
+    if (min_index != UNDEF_POINT &&
+        (total_masses + temp_forgotten_count) < past_total_masses &&
         ((AXIS(past_points[idx]) - LOWER_BOUND) <= min(min_distance, BORDER_PADDING) ||
          (UPPER_BOUND - AXIS(past_points[idx])) <= min(min_distance, BORDER_PADDING))) {
       // a point disappeared in this frame, looks like it could be this one
       min_index = UNDEF_POINT;
-      dropped_points++;
     }
     if (min_index == UNDEF_POINT) {
       // point disappeared (no new point found), stop tracking it
@@ -351,8 +366,11 @@ void processSensor() {
         for (uint8_t j=0; j<forgotten_count; j++) {
           if (forgotten_past_points[j] != UNDEF_POINT &&
               euclidean_distance(forgotten_past_points[j], points[i]) < MIN_DISTANCE) {
-            h = forgotten_histories[j];
             sp = forgotten_starting_points[j];
+            h = forgotten_histories[j];
+            if (SIDE(forgotten_past_points[j]) != SIDE(points[i])) {
+              h = min(h, MIN_HISTORY);
+            }
             forgotten_past_points[j] = UNDEF_POINT;
             break;
           }
@@ -462,6 +480,7 @@ void processSensor() {
         if (!(NOT_RIGHT_EDGE)) SERIAL_PRINTLN();
       }
       SERIAL_PRINTLN();
+      SERIAL_FLUSH;
     }
   #endif
 
