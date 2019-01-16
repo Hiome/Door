@@ -30,9 +30,11 @@ float raw_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 uint8_t past_points[MAX_PEOPLE];
 uint8_t starting_points[MAX_PEOPLE];
 uint16_t histories[MAX_PEOPLE];
+bool crossed[MAX_PEOPLE];
 uint8_t forgotten_past_points[MAX_PEOPLE];
 uint8_t forgotten_starting_points[MAX_PEOPLE];
 uint16_t forgotten_histories[MAX_PEOPLE];
+bool forgotten_crossed[MAX_PEOPLE];
 uint8_t forgotten_count = 0;
 uint8_t cycles_since_forgotten = 0;
 
@@ -101,10 +103,48 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 #define CHECK_DOOR(i)   ( door_state == HIGH || AXIS(i) <= (GRID_EXTENT/2) )
 #define PIXEL_ACTIVE(i) ( (CHECK_TEMP(i)) && (CHECK_DOOR(i)) )
 
-// This macro sorts array indexes based on their corresponding values.
-// For example, given an array {4, 2, 0}, SORT_ARRAY(a, (a[i] > 0), 3)
-// will return 2, ordered_indexes will be {1, 0}, and ordered_values
-// will be {2, 4}. The third element does not pass the cmp condition.
+// count how many neighboring cells are active for any given cell in the current frame
+uint8_t neighborsForPixel(uint8_t idx) {
+  #define TOP_LEFT        ( idx - (GRID_EXTENT+1) )
+  #define TOP_MIDDLE      ( idx - GRID_EXTENT )
+  #define TOP_RIGHT       ( idx - (GRID_EXTENT-1) )
+  #define MIDDLE_LEFT     ( idx - 1 )
+  #define MIDDLE_RIGHT    ( idx + 1 )
+  #define BOTTOM_LEFT     ( idx + (GRID_EXTENT-1) )
+  #define BOTTOM_MIDDLE   ( idx + GRID_EXTENT )
+  #define BOTTOM_RIGHT    ( idx + (GRID_EXTENT+1) )
+  #define NOT_LEFT_EDGE   ( x(idx) > 1 )
+  #define NOT_RIGHT_EDGE  ( x(idx) < GRID_EXTENT )
+  #define NOT_TOP_EDGE    ( idx >= GRID_EXTENT )
+  #define NOT_BOTTOM_EDGE ( idx < (AMG88xx_PIXEL_ARRAY_SIZE - GRID_EXTENT) )
+
+  // a cell has up to 8 neighbors. check each one to see if it's relevant and active.
+  // xxx
+  // xox
+  // xxx
+  uint8_t count = 0;
+  if (PIXEL_ACTIVE(idx)) {
+    if (NOT_LEFT_EDGE) {
+      if (PIXEL_ACTIVE(MIDDLE_LEFT)) count++;
+      if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_LEFT)) count++;
+      if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_LEFT)) count++;
+    }
+    if (NOT_RIGHT_EDGE) {
+      if (PIXEL_ACTIVE(MIDDLE_RIGHT)) count++;
+      if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_RIGHT)) count++;
+      if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_RIGHT)) count++;
+    }
+    if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_MIDDLE)) count++;
+    if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_MIDDLE)) count++;
+  }
+
+  return count;
+}
+
+// This macro sorts array indexes based on their corresponding values
+// in desc order. For example, given an array {2, 4, 1, 0},
+//   SORT_ARRAY(a, (a[i] > 0), (a[i] > a[ordered_indexes[i]]), 4)
+// will return 3 and ordered_indexes will be {1, 0, 2}. I'm sorry...
 #define SORT_ARRAY(src, cnd, cmp, sze) ({                            \
   uint8_t count = 0;                                                 \
   for (uint8_t i=0; i<(sze); i++) {                                  \
@@ -131,41 +171,9 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 //////////////////////////////////////////////////////////////////////
 
 uint8_t sortPixelsByTemp(uint8_t *ordered_indexes) {
-  // determine which points are centers of clusters by looking for neighboring cells
-  #define TOP_LEFT        ( idx - (GRID_EXTENT+1) )
-  #define TOP_MIDDLE      ( idx - GRID_EXTENT )
-  #define TOP_RIGHT       ( idx - (GRID_EXTENT-1) )
-  #define MIDDLE_LEFT     ( idx - 1 )
-  #define MIDDLE_RIGHT    ( idx + 1 )
-  #define BOTTOM_LEFT     ( idx + (GRID_EXTENT-1) )
-  #define BOTTOM_MIDDLE   ( idx + GRID_EXTENT )
-  #define BOTTOM_RIGHT    ( idx + (GRID_EXTENT+1) )
-  #define NOT_LEFT_EDGE   ( x(idx) > 1 )
-  #define NOT_RIGHT_EDGE  ( x(idx) < GRID_EXTENT )
-  #define NOT_TOP_EDGE    ( idx >= GRID_EXTENT )
-  #define NOT_BOTTOM_EDGE ( idx < (AMG88xx_PIXEL_ARRAY_SIZE - GRID_EXTENT) )
-
   uint8_t active[AMG88xx_PIXEL_ARRAY_SIZE];
   for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
-    active[idx] = 0;
-    // a cell has up to 8 neighbors. check each one to see if it's active.
-    // xxx
-    // xox
-    // xxx
-    if (PIXEL_ACTIVE(idx)) {
-      if (NOT_LEFT_EDGE) {
-        if (PIXEL_ACTIVE(MIDDLE_LEFT)) active[idx]++;
-        if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_LEFT)) active[idx]++;
-        if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_LEFT)) active[idx]++;
-      }
-      if (NOT_RIGHT_EDGE) {
-        if (PIXEL_ACTIVE(MIDDLE_RIGHT)) active[idx]++;
-        if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_RIGHT)) active[idx]++;
-        if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_RIGHT)) active[idx]++;
-      }
-      if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_MIDDLE)) active[idx]++;
-      if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_MIDDLE)) active[idx]++;
-    }
+    active[idx] = neighborsForPixel(idx);
   }
 
   SORT_ARRAY(cur_pixels, (active[i] >= MIN_PIXEL_NEIGHBORS),
@@ -177,7 +185,7 @@ uint8_t sortPixelsByTemp(uint8_t *ordered_indexes) {
     AMG88xx_PIXEL_ARRAY_SIZE);
 }
 
-uint8_t sortPointsByHistory(uint8_t *ordered_indexes) {
+uint8_t sortPastPointsByHistory(uint8_t *ordered_indexes) {
   SORT_ARRAY(histories, (histories[i] > 0),
     (histories[i] > histories[ordered_indexes[j]]), MAX_PEOPLE);
 }
@@ -200,13 +208,13 @@ void publishEvents() {
             // if user turns around now, algorithm considers it an exit
             int s = past_points[i] - GRID_EXTENT;
             starting_points[i] = max(s, 0);
-            histories[i] -= 2;
           } else {
             publish("2");
             int s = past_points[i] + GRID_EXTENT;
             starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
-            histories[i] -= 2;
           }
+          histories[i] -= 2;
+          crossed[i] = true;
         }
       }
     }
@@ -256,23 +264,18 @@ void updateAverages() {
 
 void clearTrackers() {
   memset(histories, 0, (MAX_PEOPLE*sizeof(uint16_t)));
+  memset(crossed, false, (MAX_PEOPLE*sizeof(bool)));
   memset(past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
   memset(forgotten_past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
 }
 
-void processSensor() {
-  if (!readPixels()) return;
-  equalizeValues();
-
+uint8_t findCurrentPoints(uint8_t *points) {
   // sort pixels by temperature to find peaks
-
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
   uint8_t active_pixel_count = sortPixelsByTemp(ordered_indexes);
 
   // determine which peaks are distinct people by making sure they are far enough apart
-
   uint8_t total_masses = 0;
-  uint8_t points[MAX_PEOPLE];
   for (uint8_t i=0; i<active_pixel_count; i++) {
     uint8_t idx = ordered_indexes[i];
     bool distinct = true;
@@ -290,34 +293,71 @@ void processSensor() {
     }
   }
 
+  return total_masses;
+}
+
+void processSensor() {
+  if (!readPixels()) return;
+  equalizeValues();
+
   // sort list of previously seen people by how many frames we've seen them to prioritize
   // finding people who have been in frame longest (reduces impact of noisy data)
 
   uint8_t ordered_past_points[MAX_PEOPLE];
-  uint8_t past_total_masses = sortPointsByHistory(ordered_past_points);
+  uint8_t past_total_masses = sortPastPointsByHistory(ordered_past_points);
+
+  // find list of peaks in current frame
+
+  uint8_t points[MAX_PEOPLE];
+  uint8_t total_masses = findCurrentPoints(points);
 
   // pair previously seen points with new points to determine where people moved
 
   // "I don't know who you are or what you want, but you should know that I have a
   // very particular set of skills that make me a nightmare for people like you.
   // I will find you, I will track you, and I will turn the lights on for you."
-  bool taken[total_masses];
-  memset(taken, false, (total_masses*sizeof(bool)));
+  uint8_t taken[total_masses];
+  memset(taken, 0, (total_masses*sizeof(uint8_t)));
 
   // "Good luck."
   uint8_t temp_forgotten_points[MAX_PEOPLE];
   memset(temp_forgotten_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
   uint8_t temp_forgotten_starting_points[MAX_PEOPLE];
   uint16_t temp_forgotten_histories[MAX_PEOPLE];
+  bool temp_forgotten_crossed[MAX_PEOPLE];
   uint8_t temp_forgotten_count = 0;
 
+  // track forgotten point states in temporary local variables and reset global ones
+  #define FORGET_POINT ({                                                         \
+    temp_forgotten_points[temp_forgotten_count] = past_points[idx];               \
+    temp_forgotten_starting_points[temp_forgotten_count] = starting_points[idx];  \
+    temp_forgotten_histories[temp_forgotten_count] = histories[idx];              \
+    temp_forgotten_crossed[temp_forgotten_count] = crossed[idx];                  \
+    temp_forgotten_count++;                                                       \
+    past_points[idx] = UNDEF_POINT;                                               \
+    pairs[idx] = UNDEF_POINT;                                                     \
+    histories[idx] = 0;                                                           \
+    crossed[idx] = false;                                                         \
+  })
+
+  uint8_t pairs[past_total_masses];
   for (uint8_t i=0; i<past_total_masses; i++) {
     uint8_t idx = ordered_past_points[i];
     float min_distance = MAX_DISTANCE;
     uint8_t min_index = UNDEF_POINT;
     for (uint8_t j=0; j<total_masses; j++) {
-      if (!taken[j]) {
-        // match with closest point
+      // match with closest available point
+      if (taken[j] == 0) {
+        float d = euclidean_distance(past_points[idx], points[j]);
+        if (d < min_distance) {
+          min_distance = d;
+          min_index = j;
+        }
+      }
+    }
+    if (min_index == UNDEF_POINT) {
+      // try again, but include already matched points in second pass
+      for (uint8_t j=0; j<total_masses; j++) {
         float d = euclidean_distance(past_points[idx], points[j]);
         if (d < min_distance) {
           min_distance = d;
@@ -326,51 +366,85 @@ void processSensor() {
       }
     }
     if (min_index != UNDEF_POINT &&
-        (total_masses + temp_forgotten_count) < past_total_masses &&
+        (total_masses + temp_forgotten_count) < past_total_masses && crossed[idx] &&
         ((AXIS(past_points[idx]) - LOWER_BOUND) <= min(min_distance, BORDER_PADDING) ||
          (UPPER_BOUND - AXIS(past_points[idx])) <= min(min_distance, BORDER_PADDING))) {
-      // a point disappeared in this frame, looks like it could be this one
+      // we know some point disappeared in this frame, and we know this point already
+      // crossed the middle and was near the border on the other side. Most likely,
+      // it's the one that left the grid, so let's drop it.
       min_index = UNDEF_POINT;
     }
     if (min_index == UNDEF_POINT) {
-      // point disappeared (no new point found), stop tracking it
-      // but track it separately so that if a new point appears
-      // later, we can pair them together below
-      temp_forgotten_points[temp_forgotten_count] = past_points[idx];
-      temp_forgotten_starting_points[temp_forgotten_count] = starting_points[idx];
-      temp_forgotten_histories[temp_forgotten_count] = histories[idx];
-      temp_forgotten_count++;
-      past_points[idx] = UNDEF_POINT;
-      histories[idx] = 0;
+      // still not found...
+      FORGET_POINT;
     } else {
-      // closest point matched, update trackers
-      if (past_points[idx] != points[min_index]) {
-        if (SIDE(points[min_index]) != SIDE(past_points[idx])) {
-          // point just crossed threshold, let's reduce its history to force
-          // it to spend another cycle on this side before we count the event
-          histories[idx] = min(histories[idx], MIN_HISTORY);
-        } else {
-          histories[idx]++;
-        }
-        past_points[idx] = points[min_index];
-      }
-      taken[min_index] = true;
+      taken[min_index]++;
+      pairs[idx] = min_index;
     }
   }
 
-  // look for any new points in this frame that did not match with past points
-
   for (uint8_t i=0; i<total_masses; i++) {
-    if (!taken[i]) {
+    if (taken[i] > 1) {
+      // more than one past point is trying to match with this single current point...
+      uint8_t max_score = 0;
+      uint8_t max_idx = UNDEF_POINT;
+      for (uint8_t idx=0; idx<past_total_masses; idx++) {
+        if (pairs[idx] == i) {
+          // chose the point that is a combination of most clustered and longest history.
+          // we're just adding up the number of neighbors a cell has and its history
+          // (capped at 4) to come up with a composite score to rank competing points
+          uint8_t score = neighborsForPixel(past_points[idx]) + min(histories[idx], 4);
+          if (score > max_score) {
+            max_score = score;
+            max_idx = idx;
+          } else if (score == max_score) {
+            // if 2 points have the same composite score, use the
+            // one who's temp is more similar to the new point
+            float d1 = abs(cur_pixels[past_points[idx]] - cur_pixels[points[i]]);
+            float d2 = abs(cur_pixels[past_points[max_idx]] - cur_pixels[points[i]]);
+            if (d1 < d2) {
+              max_idx = idx;
+            }
+          }
+        }
+      }
+      // once we've chosen our winning point, forget the rest...
+      for (uint8_t idx=0; idx<past_total_masses; idx++) {
+        if (pairs[idx] == i && idx != max_idx) {
+          FORGET_POINT;
+          taken[i]--;
+        }
+      }
+    }
+
+    if (taken[i] == 1) {
+      for (uint8_t idx=0; idx<past_total_masses; idx++) {
+        if (pairs[idx] == i) {
+          // closest point matched, update trackers
+          if (past_points[idx] != points[i]) {
+            if (SIDE(points[i]) != SIDE(past_points[idx])) {
+              // point just crossed threshold, let's reduce its history to force
+              // it to spend another cycle on this side before we count the event
+              histories[idx] = min(histories[idx], MIN_HISTORY);
+            } else {
+              histories[idx]++;
+            }
+            past_points[idx] = points[i];
+          }
+        }
+      }
+    } else if (taken[i] == 0) {
+      // new point appeared (no past point found), start tracking it
       uint16_t h = 1;
       uint8_t sp = points[i];
-      // new point appeared (no past point found), start tracking it
+      bool cross = false;
       if (cycles_since_forgotten < 5) {
         // first let's check forgotten points for a match
         for (uint8_t j=0; j<forgotten_count; j++) {
           if (forgotten_past_points[j] != UNDEF_POINT &&
               euclidean_distance(forgotten_past_points[j], points[i]) < MIN_DISTANCE) {
             sp = forgotten_starting_points[j];
+            cross = forgotten_crossed[j];
             h = forgotten_histories[j];
             if (SIDE(forgotten_past_points[j]) != SIDE(points[i])) {
               h = min(h, MIN_HISTORY);
@@ -383,6 +457,7 @@ void processSensor() {
       bool row5 = false;
       if (h == 1 && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
         // if point is starting in row 5, move it back to row 6
+        // (giving benefit of doubt that this point appeared behind a closed door)
         sp += GRID_EXTENT;
         row5 = true;
       }
@@ -397,6 +472,7 @@ void processSensor() {
             past_points[j] = points[i];
             starting_points[j] = sp;
             histories[j] = h;
+            crossed[j] = cross;
             break;
           }
         }
@@ -411,6 +487,7 @@ void processSensor() {
     memcpy(forgotten_starting_points, temp_forgotten_starting_points,
                                                          (MAX_PEOPLE*sizeof(uint8_t)));
     memcpy(forgotten_histories, temp_forgotten_histories, (MAX_PEOPLE*sizeof(uint16_t)));
+    memcpy(forgotten_crossed, temp_forgotten_crossed, (MAX_PEOPLE*sizeof(bool)));
     forgotten_count = temp_forgotten_count;
     cycles_since_forgotten = 0;
   } else {
