@@ -3,7 +3,7 @@
 #define FIRMWARE_VERSION        "V0.1"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define TEMP_BUFFER             0.5  // min increase in temp needed to register person
+#define TEMP_BUFFER             1.0  // min increase in temp needed to register person
 #define MIN_DISTANCE            3.0  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            5.0  // max distance that a point is allowed to move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
@@ -11,11 +11,6 @@
 #define MIN_PIXEL_NEIGHBORS     2    // a cell must have at least 2 active neighbors
 #define SIMILAR_TEMP_DIFF       1.0  // treat 2 cells within 1º of each other as the same
 #define ALPHA                   0.01 // learning rate for background temp
-#define LOWER_BOUND             0
-#define UPPER_BOUND             (GRID_EXTENT+1)
-#define BORDER_PADDING          (GRID_EXTENT/4)
-#define STRICT_BORDER_PADDING   (BORDER_PADDING-1)
-#define LENIENT_BORDER_PADDING  (BORDER_PADDING+1)
 
 #define REED_PIN                3
 #include <Wire.h>
@@ -103,10 +98,43 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 #define CHECK_DOOR(i)   ( door_state == HIGH || AXIS(i) <= (GRID_EXTENT/2) )
 #define PIXEL_ACTIVE(i) ( (CHECK_TEMP(i)) && (CHECK_DOOR(i)) )
 
+#define LOWER_BOUND             0
+#define UPPER_BOUND             (GRID_EXTENT+1)
+#define BORDER_PADDING          (GRID_EXTENT/4)
+#define LENIENT_BORDER_PADDING  (BORDER_PADDING+1)
+#define STRICT_BORDER_PADDING   (BORDER_PADDING-1)
+
+// check if point is on the top or bottom edges
+// xxxxxxxx
+// xxxxxxxx
+// oooooooo
+// oooooooo
+// oooooooo
+// oooooooo
+// xxxxxxxx
+// xxxxxxxx
 #define pointOnBorder(i) ( AXIS(i) <= (LOWER_BOUND + BORDER_PADDING) ||             \
                             AXIS(i) >= (UPPER_BOUND - BORDER_PADDING) )
+// check if point is in middle 2 rows
+// oooooooo
+// oooooooo
+// oooooooo
+// xxxxxxxx
+// xxxxxxxx
+// oooooooo
+// oooooooo
+// oooooooo
 #define pointInMiddle(i) ( AXIS(i) > (LOWER_BOUND + LENIENT_BORDER_PADDING) &&      \
                             AXIS(i) < (UPPER_BOUND - LENIENT_BORDER_PADDING) )
+// check if point is on left or right edges
+// xoooooox
+// xoooooox
+// xoooooox
+// xoooooox
+// xoooooox
+// xoooooox
+// xoooooox
+// xoooooox
 #define pointOnLREdge(i) ( NOT_AXIS(i) <= (LOWER_BOUND + STRICT_BORDER_PADDING) ||  \
                             NOT_AXIS(i) >= (UPPER_BOUND - STRICT_BORDER_PADDING) )
 
@@ -322,6 +350,8 @@ void processSensor() {
   // I will find you, I will track you, and I will turn the lights on for you."
   uint8_t taken[total_masses];
   memset(taken, 0, (total_masses*sizeof(uint8_t)));
+  uint8_t pairs[MAX_PEOPLE];
+  memset(pairs, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
 
   // "Good luck."
   uint8_t temp_forgotten_points[MAX_PEOPLE];
@@ -344,7 +374,6 @@ void processSensor() {
     crossed[idx] = false;                                                         \
   })
 
-  uint8_t pairs[past_total_masses];
   for (uint8_t i=0; i<past_total_masses; i++) {
     uint8_t idx = ordered_past_points[i];
     float min_distance = MAX_DISTANCE;
@@ -392,7 +421,8 @@ void processSensor() {
       // more than one past point is trying to match with this single current point...
       uint8_t max_score = 0;
       uint8_t max_idx = UNDEF_POINT;
-      for (uint8_t idx=0; idx<past_total_masses; idx++) {
+      for (uint8_t j=0; j<past_total_masses; j++) {
+        uint8_t idx = ordered_past_points[j];
         if (pairs[idx] == i) {
           // chose the point that is a combination of most clustered and longest history.
           // we're just adding up the number of neighbors a cell has and its history
@@ -413,7 +443,8 @@ void processSensor() {
         }
       }
       // once we've chosen our winning point, forget the rest...
-      for (uint8_t idx=0; idx<past_total_masses; idx++) {
+      for (uint8_t j=0; j<past_total_masses; j++) {
+        uint8_t idx = ordered_past_points[j];
         if (pairs[idx] == i && idx != max_idx) {
           FORGET_POINT;
           taken[i]--;
@@ -422,19 +453,18 @@ void processSensor() {
     }
 
     if (taken[i] == 1) {
-      for (uint8_t idx=0; idx<past_total_masses; idx++) {
-        if (pairs[idx] == i) {
+      for (uint8_t j=0; j<past_total_masses; j++) {
+        uint8_t idx = ordered_past_points[j];
+        if (pairs[idx] == i && past_points[idx] != points[i]) {
           // closest point matched, update trackers
-          if (past_points[idx] != points[i]) {
-            if (SIDE(points[i]) != SIDE(past_points[idx]) && pointInMiddle(points[i])) {
-              // point just barely crossed threshold, let's reduce its history to force
-              // it to spend another cycle on this side before we count the event
-              histories[idx] = min(histories[idx] + 1, MIN_HISTORY);
-            } else {
-              histories[idx]++;
-            }
-            past_points[idx] = points[i];
+          if (SIDE(points[i]) != SIDE(past_points[idx]) && pointInMiddle(points[i])) {
+            // point just barely crossed threshold, let's reduce its history to force
+            // it to spend another cycle on this side before we count the event
+            histories[idx] = min(histories[idx] + 1, MIN_HISTORY);
+          } else {
+            histories[idx]++;
           }
+          past_points[idx] = points[i];
         }
       }
     } else if (taken[i] == 0) {
@@ -450,7 +480,8 @@ void processSensor() {
             sp = forgotten_starting_points[j];
             cross = forgotten_crossed[j];
             h = forgotten_histories[j];
-            if (SIDE(forgotten_past_points[j]) != SIDE(points[i]) && pointInMiddle(points[i])) {
+            if (SIDE(forgotten_past_points[j]) != SIDE(points[i]) &&
+                pointInMiddle(points[i])) {
               h = min(h, MIN_HISTORY);
             }
             forgotten_past_points[j] = UNDEF_POINT;
@@ -495,7 +526,8 @@ void processSensor() {
   } else {
     if (cycles_since_forgotten == 2) {
       for (uint8_t i=0; i<forgotten_count; i++) {
-        if (pointOnBorder(forgotten_past_points[i]) || pointOnLREdge(forgotten_past_points[i])) {
+        if (pointOnBorder(forgotten_past_points[i]) ||
+            pointOnLREdge(forgotten_past_points[i])) {
           // this point exists on the outer edge of grid, forget it after 1 frame        
           forgotten_past_points[i] = UNDEF_POINT;
         }
