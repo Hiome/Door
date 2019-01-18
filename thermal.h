@@ -10,6 +10,7 @@
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MIN_PIXEL_NEIGHBORS     2    // a cell must have at least 2 active neighbors
 #define SIMILAR_TEMP_DIFF       1.0  // treat 2 cells within 1º of each other as the same
+#define ALPHA                   0.01 // learning rate for background temp
 
 #define REED_PIN                3
 #include <Wire.h>
@@ -17,6 +18,7 @@
 
 Adafruit_AMG88xx amg;
 
+float avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float cur_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float avg1 = 0;
 float avg2 = 0;
@@ -99,7 +101,8 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 #endif
 #define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
 #define SIDE_PAD(i)     ( pointOnLREdge(i) ? (TEMP_BUFFER/2) : 0 )
-#define CHECK_TEMP(i)   ( cur_pixels[(i)] > (SIDE_AVG(i) + TEMP_BUFFER + SIDE_PAD(i)) )
+#define AVG_TEMP(i)     ( max(SIDE_AVG(i), avg_pixels[(i)]) )
+#define CHECK_TEMP(i)   ( cur_pixels[(i)] > (AVG_TEMP(i) + TEMP_BUFFER + SIDE_PAD(i)) )
 #define CHECK_DOOR(i)   ( door_state == HIGH || AXIS(i) <= (GRID_EXTENT/2) )
 #define PIXEL_ACTIVE(i) ( (CHECK_TEMP(i)) && (CHECK_DOOR(i)) )
 
@@ -277,6 +280,12 @@ void calculateAverages() {
   }
   avg1 /= (AMG88xx_PIXEL_ARRAY_SIZE/2);
   avg2 /= (AMG88xx_PIXEL_ARRAY_SIZE/2);
+}
+
+void updateAverages() {
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    avg_pixels[i] += ALPHA * (cur_pixels[i] - avg_pixels[i]);
+  }
 }
 
 void clearTrackers() {
@@ -597,6 +606,8 @@ void processSensor() {
       SERIAL_FLUSH;
     }
   #endif
+
+  updateAverages();
 }
 
 void checkDoorState() {
@@ -620,7 +631,7 @@ void initialize() {
   door_state = 3;
 
   clearTrackers();
-  amg.readPixels(cur_pixels);
+  amg.readPixels(avg_pixels);
 }
 
 void loop() {
