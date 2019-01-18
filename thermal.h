@@ -275,11 +275,40 @@ bool readPixels() {
 void calculateAverages() {
   avg1 = 0;
   avg2 = 0;
+  float avg_avg1 = 0;
+  float avg_avg2 = 0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    SIDE_AVG(i) += cur_pixels[i];
+    if (SIDE(i) == 1) {
+      avg1 += cur_pixels[i];
+      avg_avg1 += avg_pixels[i];
+    } else {
+      avg2 += cur_pixels[i];
+      avg_avg2 += avg_pixels[i];
+    }
   }
   avg1 /= (AMG88xx_PIXEL_ARRAY_SIZE/2);
   avg2 /= (AMG88xx_PIXEL_ARRAY_SIZE/2);
+  avg_avg1 /= (AMG88xx_PIXEL_ARRAY_SIZE/2);
+  avg_avg2 /= (AMG88xx_PIXEL_ARRAY_SIZE/2);
+
+  // decrease running average in case there was a sudden drop in temp
+  float d1 = 0;
+  float d2 = 0;
+  if (avg1 < avg_avg1) {
+    d1 = avg_avg1 - avg1;
+  }
+  if (avg2 < avg_avg2) {
+    d2 = avg_avg2 - avg2;
+  }
+  if (d1 > 0 || d2 > 0) {
+    for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+      if (SIDE(i) == 1) {
+        avg_pixels[i] = max(avg_pixels[i] - d1, 0);
+      } else {
+        avg_pixels[i] = max(avg_pixels[i] - d2, 0);
+      }
+    }
+  }
 }
 
 void updateAverages() {
