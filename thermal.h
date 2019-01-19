@@ -256,16 +256,58 @@ void publishEvents() {
         // here if person immediately turns 90º after entering/exiting, so let's be more
         // lenient with the point if we're confident it's a person and not noise by requiring
         // that point's temp is significantly higher than average...
-        if (histories[i] >= MIN_HISTORY && SIDE(starting_points[i]) != SIDE(past_points[i]) &&
-            cur_pixels[past_points[i]] >= (SIDE_AVG(past_points[i]) + (3*TEMP_BUFFER))) {
-          if (SIDE(past_points[i]) == 1) {
-            publish("1");
-            starting_points[i] = past_points[i] - GRID_EXTENT;
-          } else {
-            publish("2");
-            starting_points[i] = past_points[i] + GRID_EXTENT;
+        if (histories[i] >= MIN_HISTORY && SIDE(starting_points[i]) != SIDE(past_points[i])) {
+          uint8_t idx = past_points[i];
+          uint8_t max_idx = past_points[i];
+          float max_temp = cur_pixels[idx];
+          if (NOT_LEFT_EDGE) {
+            if (PIXEL_ACTIVE(MIDDLE_LEFT) && cur_pixels[MIDDLE_LEFT] > max_temp) {
+              max_temp = cur_pixels[MIDDLE_LEFT];
+              max_idx = MIDDLE_LEFT;
+            }
+            if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_LEFT) && cur_pixels[TOP_LEFT] > max_temp) {
+              max_temp = cur_pixels[TOP_LEFT];
+              max_idx = TOP_LEFT;
+            }
+            if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_LEFT) && cur_pixels[BOTTOM_LEFT] > max_temp) {
+              max_temp = cur_pixels[BOTTOM_LEFT];
+              max_idx = BOTTOM_LEFT;
+            }
           }
-          crossed[i] = true;
+          if (NOT_RIGHT_EDGE) {
+            if (PIXEL_ACTIVE(MIDDLE_RIGHT) && cur_pixels[MIDDLE_RIGHT] > max_temp) {
+              max_temp = cur_pixels[MIDDLE_RIGHT];
+              max_idx = MIDDLE_RIGHT;
+            }
+            if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_RIGHT) && cur_pixels[TOP_RIGHT] > max_temp) {
+              max_temp = cur_pixels[TOP_RIGHT];
+              max_idx = TOP_RIGHT;
+            }
+            if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_RIGHT) && cur_pixels[BOTTOM_RIGHT] > max_temp) {
+              max_temp = cur_pixels[BOTTOM_RIGHT];
+              max_idx = BOTTOM_RIGHT;
+            }
+          }
+          if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_MIDDLE) && cur_pixels[TOP_MIDDLE] > max_temp) {
+            max_temp = cur_pixels[TOP_MIDDLE];
+            max_idx = TOP_MIDDLE;
+          }
+          if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_MIDDLE) && cur_pixels[BOTTOM_MIDDLE] > max_temp) {
+            max_temp = cur_pixels[BOTTOM_MIDDLE];
+            max_idx = BOTTOM_MIDDLE;
+          }
+
+          if (SIDE(past_points[i]) == SIDE(max_idx) &&
+              cur_pixels[max_idx] >= (SIDE_AVG(max_idx) + (3*TEMP_BUFFER))) {
+            if (SIDE(max_idx) == 1) {
+              publish("1");
+              starting_points[i] = past_points[i] - GRID_EXTENT;
+            } else {
+              publish("2");
+              starting_points[i] = past_points[i] + GRID_EXTENT;
+            }
+            crossed[i] = true;
+          }
         }
       } else if (histories[i] > MIN_HISTORY) {
         // check if a normal door entry/exit event occurred
@@ -534,11 +576,11 @@ void processSensor() {
       uint16_t h = 1;
       uint8_t sp = points[i];
       bool cross = false;
-      if (cycles_since_forgotten < 5) {
+      if (cycles_since_forgotten < MAX_EMPTY_CYCLES) {
         // first let's check forgotten points for a match
         for (uint8_t j=0; j<forgotten_count; j++) {
           if (forgotten_past_points[j] != UNDEF_POINT &&
-              euclidean_distance(forgotten_past_points[j], points[i]) < MIN_DISTANCE) {
+              euclidean_distance(forgotten_past_points[j], points[i]) <= MIN_DISTANCE) {
             sp = forgotten_starting_points[j];
             cross = forgotten_crossed[j];
             h = forgotten_histories[j];
@@ -578,7 +620,7 @@ void processSensor() {
 
   // copy forgotten data points for this frame to global scope
 
-  if (total_masses > 0 || past_total_masses > 0) {
+  if (temp_forgotten_count > 0) {
     memcpy(forgotten_past_points, temp_forgotten_points, (MAX_PEOPLE*sizeof(uint8_t)));
     memcpy(forgotten_starting_points, temp_forgotten_starting_points,
                                                          (MAX_PEOPLE*sizeof(uint8_t)));
@@ -586,11 +628,14 @@ void processSensor() {
     memcpy(forgotten_crossed, temp_forgotten_crossed, (MAX_PEOPLE*sizeof(bool)));
     forgotten_count = temp_forgotten_count;
     cycles_since_forgotten = 0;
+    SERIAL_PRINTLN("saved forgotten points");
   } else if (cycles_since_forgotten < MAX_EMPTY_CYCLES) {
     cycles_since_forgotten++;
     if (cycles_since_forgotten == MAX_EMPTY_CYCLES) {
       // clear forgotten points after 5 empty cycles
       memset(forgotten_past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
+      forgotten_count = 0;
+      SERIAL_PRINTLN("cleared forgotten points");
     }
   }
 
