@@ -121,8 +121,10 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 // oooooooo
 // xxxxxxxx
 // xxxxxxxx
-#define pointOnBorder(i) ( AXIS(i) <= (LOWER_BOUND + BORDER_PADDING) ||             \
-                            AXIS(i) >= (UPPER_BOUND - BORDER_PADDING) )
+#define pointOnTBorder(i) ( AXIS(i) <= (LOWER_BOUND + BORDER_PADDING) )
+#define pointOnBBorder(i) ( AXIS(i) >= (UPPER_BOUND - BORDER_PADDING) )
+#define pointOnBorder(i)  ( pointOnTBorder(i) || pointOnBBorder(i) )
+
 // check if point is in middle 2 rows
 // oooooooo
 // oooooooo
@@ -132,8 +134,10 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 // oooooooo
 // oooooooo
 // oooooooo
-#define pointInMiddle(i) ( AXIS(i) > (LOWER_BOUND + LENIENT_BORDER_PADDING) &&      \
-                            AXIS(i) < (UPPER_BOUND - LENIENT_BORDER_PADDING) )
+#define pointInRow4(i)   ( AXIS(i) == (GRID_EXTENT/2) )
+#define pointInRow5(i)   ( AXIS(i) == (GRID_EXTENT/2 + 1) )
+#define pointInMiddle(i) ( pointInRow4(i) || pointInRow5(i) )
+
 // check if point is on left or right edges
 // xoooooox
 // xoooooox
@@ -143,8 +147,9 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 // xoooooox
 // xoooooox
 // xoooooox
-#define pointOnLREdge(i) ( NOT_AXIS(i) <= (LOWER_BOUND + STRICT_BORDER_PADDING) ||  \
-                            NOT_AXIS(i) >= (UPPER_BOUND - STRICT_BORDER_PADDING) )
+#define pointOnLEdge(i)  ( NOT_AXIS(i) <= (LOWER_BOUND + STRICT_BORDER_PADDING) )
+#define pointOnREdge(i)  ( NOT_AXIS(i) >= (UPPER_BOUND - STRICT_BORDER_PADDING) )
+#define pointOnLREdge(i) ( pointOnLEdge(i) || pointOnREdge(i) )
 
 // check if point is near left or right edges
 // xxooooxx
@@ -259,41 +264,39 @@ void publishEvents() {
         if (histories[i] >= MIN_HISTORY && SIDE(starting_points[i]) != SIDE(past_points[i])) {
           uint8_t idx = past_points[i];
           uint8_t max_idx = past_points[i];
-          float max_temp = cur_pixels[idx];
           if (NOT_LEFT_EDGE) {
-            if (PIXEL_ACTIVE(MIDDLE_LEFT) && cur_pixels[MIDDLE_LEFT] > max_temp) {
-              max_temp = cur_pixels[MIDDLE_LEFT];
+            if (PIXEL_ACTIVE(MIDDLE_LEFT) && cur_pixels[MIDDLE_LEFT] > cur_pixels[max_idx]) {
               max_idx = MIDDLE_LEFT;
             }
-            if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_LEFT) && cur_pixels[TOP_LEFT] > max_temp) {
-              max_temp = cur_pixels[TOP_LEFT];
+            if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_LEFT) &&
+                cur_pixels[TOP_LEFT] > cur_pixels[max_idx]) {
               max_idx = TOP_LEFT;
             }
-            if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_LEFT) && cur_pixels[BOTTOM_LEFT] > max_temp) {
-              max_temp = cur_pixels[BOTTOM_LEFT];
+            if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_LEFT) &&
+                cur_pixels[BOTTOM_LEFT] > cur_pixels[max_idx]) {
               max_idx = BOTTOM_LEFT;
             }
           }
           if (NOT_RIGHT_EDGE) {
-            if (PIXEL_ACTIVE(MIDDLE_RIGHT) && cur_pixels[MIDDLE_RIGHT] > max_temp) {
-              max_temp = cur_pixels[MIDDLE_RIGHT];
+            if (PIXEL_ACTIVE(MIDDLE_RIGHT) &&
+                cur_pixels[MIDDLE_RIGHT] > cur_pixels[max_idx]) {
               max_idx = MIDDLE_RIGHT;
             }
-            if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_RIGHT) && cur_pixels[TOP_RIGHT] > max_temp) {
-              max_temp = cur_pixels[TOP_RIGHT];
+            if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_RIGHT) &&
+                cur_pixels[TOP_RIGHT] > cur_pixels[max_idx]) {
               max_idx = TOP_RIGHT;
             }
-            if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_RIGHT) && cur_pixels[BOTTOM_RIGHT] > max_temp) {
-              max_temp = cur_pixels[BOTTOM_RIGHT];
+            if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_RIGHT) &&
+                cur_pixels[BOTTOM_RIGHT] > cur_pixels[max_idx]) {
               max_idx = BOTTOM_RIGHT;
             }
           }
-          if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_MIDDLE) && cur_pixels[TOP_MIDDLE] > max_temp) {
-            max_temp = cur_pixels[TOP_MIDDLE];
+          if (NOT_TOP_EDGE && PIXEL_ACTIVE(TOP_MIDDLE) &&
+              cur_pixels[TOP_MIDDLE] > cur_pixels[max_idx]) {
             max_idx = TOP_MIDDLE;
           }
-          if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_MIDDLE) && cur_pixels[BOTTOM_MIDDLE] > max_temp) {
-            max_temp = cur_pixels[BOTTOM_MIDDLE];
+          if (NOT_BOTTOM_EDGE && PIXEL_ACTIVE(BOTTOM_MIDDLE) &&
+              cur_pixels[BOTTOM_MIDDLE] > cur_pixels[max_idx]) {
             max_idx = BOTTOM_MIDDLE;
           }
 
@@ -524,10 +527,8 @@ void processSensor() {
           // we're just adding up the number of neighbors a cell has and its history
           // (capped at 4) to come up with a composite score to rank competing points
           uint8_t score = neighbor_count[idx] + min(histories[idx], 4);
-          // add 1 to score if point idx's temperature is closer to the new point
-          float t1 = abs(cur_pixels[past_points[idx]] - cur_pixels[points[i]]);
-          float t2 = abs(cur_pixels[past_points[max_idx]] - cur_pixels[points[i]]);
-          if (t1 < t2) score++;
+          // add 2 to score if point idx's temperature is higher than max_idx's
+          if (cur_pixels[past_points[idx]] > cur_pixels[past_points[max_idx]]) score += 2;
 
           if (score > max_score) {
             max_score = score;
@@ -566,6 +567,9 @@ void processSensor() {
               histories[idx]++;
             }
             past_points[idx] = points[i];
+          } else if (cur_pixels[past_points[idx]] >=
+              (SIDE_AVG(past_points[idx]) + (3*TEMP_BUFFER))) {
+            histories[idx]++;
           }
           neighbor_count[idx] = neighborsForPixel(points[i]);
           break;
@@ -594,7 +598,7 @@ void processSensor() {
         }
       }
       bool row5 = false;
-      if (h == 1 && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
+      if (h == 1 && pointInRow5(sp)) {
         // if point is starting in row 5, move it back to row 6
         // (giving benefit of doubt that this point appeared behind a closed door)
         sp += GRID_EXTENT;
@@ -631,7 +635,7 @@ void processSensor() {
     SERIAL_PRINTLN("saved forgotten points");
   } else if (cycles_since_forgotten < MAX_EMPTY_CYCLES) {
     cycles_since_forgotten++;
-    if (cycles_since_forgotten == MAX_EMPTY_CYCLES) {
+    if (cycles_since_forgotten == MAX_EMPTY_CYCLES && forgotten_count > 0) {
       // clear forgotten points after 5 empty cycles
       memset(forgotten_past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
       forgotten_count = 0;
