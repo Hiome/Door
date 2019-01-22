@@ -10,6 +10,7 @@
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MIN_PIXEL_NEIGHBORS     2    // a cell must have at least 2 active neighbors
 #define SIMILAR_TEMP_DIFF       1.0  // treat 2 cells within 1º of each other as the same
+#define MAX_EMPTY_CYCLES        5    // max empty cycles to remember forgotten points
 #define ALPHA                   0.01 // learning rate for background temp
 
 #define REED_PIN                3
@@ -18,8 +19,8 @@
 
 Adafruit_AMG88xx amg;
 
-float avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float cur_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
+float avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float avg1 = 0;
 float avg2 = 0;
 
@@ -33,7 +34,6 @@ uint8_t forgotten_past_points[MAX_PEOPLE];
 uint8_t forgotten_starting_points[MAX_PEOPLE];
 uint16_t forgotten_histories[MAX_PEOPLE];
 bool forgotten_crossed[MAX_PEOPLE];
-uint8_t forgotten_neighbor_count[MAX_PEOPLE];
 uint8_t forgotten_count = 0;
 uint8_t cycles_since_forgotten = 0;
 
@@ -237,25 +237,24 @@ void publishEvents() {
   if (door_state == LOW) return; // nothing happened if door is closed
 
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
-    if (past_points[i] != UNDEF_POINT && histories[i] > MIN_HISTORY) {
-      // do not consider trajectories that end in border of middle 2 rows
-      if (!pointOnLREdge(past_points[i]) || !pointInMiddle(past_points[i])) {
-        int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
-        if (abs(diff) >= (GRID_EXTENT/2)) { // person traversed at least half the grid
-          if (diff > 0) {
-            publish("1");
-            // artificially shift starting point ahead 1 row so that
-            // if user turns around now, algorithm considers it an exit
-            int s = past_points[i] - GRID_EXTENT;
-            starting_points[i] = max(s, 0);
-          } else {
-            publish("2");
-            int s = past_points[i] + GRID_EXTENT;
-            starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
-          }
-          histories[i] -= 2;
-          crossed[i] = true;
+    if (past_points[i] != UNDEF_POINT && histories[i] > MIN_HISTORY &&
+        // do not consider trajectories that end in border of middle 2 rows
+        (!pointOnLREdge(past_points[i]) || !pointInMiddle(past_points[i]))) {
+      int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
+      if (abs(diff) >= (GRID_EXTENT/2)) { // person traversed at least half the grid
+        if (diff > 0) {
+          publish("1");
+          // artificially shift starting point ahead 1 row so that
+          // if user turns around now, algorithm considers it an exit
+          int s = past_points[i] - GRID_EXTENT;
+          starting_points[i] = max(s, 0);
+        } else {
+          publish("2");
+          int s = past_points[i] + GRID_EXTENT;
+          starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
+        histories[i] -= 2;
+        crossed[i] = true;
       }
     }
   }
@@ -382,7 +381,6 @@ void processSensor() {
   uint8_t temp_forgotten_starting_points[MAX_PEOPLE];
   uint16_t temp_forgotten_histories[MAX_PEOPLE];
   bool temp_forgotten_crossed[MAX_PEOPLE];
-  uint8_t temp_forgotten_neighbor_count[MAX_PEOPLE];
   uint8_t temp_forgotten_count = 0;
 
   // track forgotten point states in temporary local variables and reset global ones
@@ -391,7 +389,6 @@ void processSensor() {
     temp_forgotten_starting_points[temp_forgotten_count] = starting_points[idx];  \
     temp_forgotten_histories[temp_forgotten_count] = histories[idx];              \
     temp_forgotten_crossed[temp_forgotten_count] = crossed[idx];                  \
-    temp_forgotten_neighbor_count[temp_forgotten_count] = neighbor_count[idx];    \
     temp_forgotten_count++;                                                       \
     past_points[idx] = UNDEF_POINT;                                               \
     pairs[idx] = UNDEF_POINT;                                                     \
@@ -455,19 +452,13 @@ void processSensor() {
           // we're just adding up the number of neighbors a cell has and its history
           // (capped at 4) to come up with a composite score to rank competing points
           uint8_t score = neighbor_count[idx] + min(histories[idx], 4);
-          // add 1 to score if point idx's temperature is closer to the new point
-          float t1 = abs(cur_pixels[past_points[idx]] - cur_pixels[points[i]]);
-          float t2 = abs(cur_pixels[past_points[max_idx]] - cur_pixels[points[i]]);
-          if (t1 < t2) score++;
 
           if (score > max_score) {
             max_score = score;
             max_idx = idx;
           } else if (score == max_score) {
-            // if 2 points have the same composite score, pick the closer point
-            float d1 = euclidean_distance(past_points[idx], points[i]);
-            float d2 = euclidean_distance(past_points[max_idx], points[i]);
-            if (d1 < d2) {
+            // if 2 points have the same composite score, pick the hotter one
+            if (cur_pixels[past_points[idx]] > cur_pixels[past_points[max_idx]]) {
               max_idx = idx;
             }
           }
@@ -507,8 +498,7 @@ void processSensor() {
       uint16_t h = 1;
       uint8_t sp = points[i];
       bool cross = false;
-      uint8_t nc = neighborsForPixel(points[i]);
-      if (cycles_since_forgotten < 5) {
+      if (cycles_since_forgotten < MAX_EMPTY_CYCLES) {
         // first let's check forgotten points for a match
         for (uint8_t j=0; j<forgotten_count; j++) {
           if (forgotten_past_points[j] != UNDEF_POINT &&
@@ -516,7 +506,6 @@ void processSensor() {
             sp = forgotten_starting_points[j];
             cross = forgotten_crossed[j];
             h = forgotten_histories[j];
-            nc = forgotten_neighbor_count[j];
             if (SIDE(forgotten_past_points[j]) != SIDE(points[i]) &&
                 pointInMiddle(points[i])) {
               h = min(h, MIN_HISTORY);
@@ -543,7 +532,7 @@ void processSensor() {
             starting_points[j] = sp;
             histories[j] = h;
             crossed[j] = cross;
-            neighbor_count[j] = nc;
+            neighbor_count[j] = neighborsForPixel(points[i]);
             break;
           }
         }
@@ -553,30 +542,22 @@ void processSensor() {
 
   // copy forgotten data points for this frame to global scope
 
-  if (total_masses > 0 || past_total_masses > 0) {
+  if (temp_forgotten_count > 0) {
     memcpy(forgotten_past_points, temp_forgotten_points, (MAX_PEOPLE*sizeof(uint8_t)));
     memcpy(forgotten_starting_points, temp_forgotten_starting_points,
                                                          (MAX_PEOPLE*sizeof(uint8_t)));
     memcpy(forgotten_histories, temp_forgotten_histories, (MAX_PEOPLE*sizeof(uint16_t)));
     memcpy(forgotten_crossed, temp_forgotten_crossed, (MAX_PEOPLE*sizeof(bool)));
-    memcpy(forgotten_neighbor_count, temp_forgotten_neighbor_count,
-                                                         (MAX_PEOPLE*sizeof(uint8_t)));
     forgotten_count = temp_forgotten_count;
     cycles_since_forgotten = 0;
-  } else {
-    if (cycles_since_forgotten == 2) {
-      for (uint8_t i=0; i<forgotten_count; i++) {
-        if (pointOnBorder(forgotten_past_points[i]) ||
-            pointOnLREdge(forgotten_past_points[i])) {
-          // this point exists on the outer edge of grid, forget it after 1 frame        
-          forgotten_past_points[i] = UNDEF_POINT;
-        }
-      }
-    } else if (cycles_since_forgotten == 5) {
+    SERIAL_PRINTLN("saved forgotten points");
+  } else if (cycles_since_forgotten < MAX_EMPTY_CYCLES) {
+    cycles_since_forgotten++;
+    if (cycles_since_forgotten == MAX_EMPTY_CYCLES && forgotten_count > 0) {
+      // clear forgotten points list after 5 cycles
       memset(forgotten_past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
-    }
-    if (cycles_since_forgotten < 6) {
-      cycles_since_forgotten++;
+      forgotten_count = 0;
+      SERIAL_PRINTLN("cleared forgotten points");
     }
   }
 
