@@ -480,8 +480,8 @@ void processSensor() {
         if (pairs[idx] == i) {
           // closest point matched, update trackers
           if (past_points[idx] != points[i]) {
-            if (SIDE(points[i]) != SIDE(past_points[idx]) && pointInMiddle(points[i])) {
-              // point just barely crossed threshold, let's reduce its history to force
+            if (SIDE(points[i]) != SIDE(past_points[idx])) {
+              // point just crossed threshold, let's reduce its history to force
               // it to spend another cycle on this side before we count the event
               histories[idx] = min(histories[idx] + 1, MIN_HISTORY);
             } else {
