@@ -8,7 +8,7 @@
 #define MAX_DISTANCE            5.0  // max distance that a point is allowed to move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
-#define MIN_PIXEL_NEIGHBORS     2    // a cell must have at least 2 active neighbors
+#define MIN_PIXEL_NEIGHBORS     1    // a cell must have at least 1 active neighbor
 #define SIMILAR_TEMP_DIFF       1.0  // treat 2 cells within 1º of each other as the same
 #define MAX_EMPTY_CYCLES        5    // max empty cycles to remember forgotten points
 #define ALPHA                   0.01 // learning rate for background temp
