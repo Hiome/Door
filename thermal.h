@@ -3,16 +3,18 @@
 #define FIRMWARE_VERSION        "V0.1"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define TEMP_BUFFER             1.0  // min increase in temp needed to register person
+#define TEMP_BUFFER             2.0  // min increase in temp needed to register person
 #define HUMAN_THRESHOLD         3.0  // min degrees needed to confidently declare human
 #define MIN_DISTANCE            3.0  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
-#define MIN_PIXEL_NEIGHBORS     2    // a cell must have at least 2 active neighbors
+#define MIN_PIXEL_NEIGHBORS     0    // a cell must have at least 2 active neighbors
 #define SIMILAR_TEMP_DIFF       1.0  // treat 2 cells within 1º of each other as the same
 #define MAX_EMPTY_CYCLES        0    // max empty cycles to remember forgotten points
-#define ALPHA                   0.01 // learning rate for background temp
+#define ALPHA                   0.0001 // learning rate for background temp
+#define CONFIDENCE_THRESHOLD    0.5  // consider a point if we're 50% confident
+#define GRADIENT_THRESHOLD      9    // 3º temp change gives us 100% confidence of person
 
 #define REED_PIN                3
 #include <Wire.h>
@@ -22,6 +24,7 @@ Adafruit_AMG88xx amg;
 
 float cur_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
+float norm_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float avg1 = 0;
 float avg2 = 0;
 
@@ -105,7 +108,7 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 #define SIDE_AVG(p)     ( SIDE1(p) ? avg1 : avg2 )
 #define SIDE_PAD(i)     ( pointOnLREdge(i) || pointOnBorder(i) ? (TEMP_BUFFER/2) : 0 )
 #define AVG_TEMP(i)     ( max(SIDE_AVG(i), avg_pixels[(i)]) )
-#define CHECK_TEMP(i)   ( cur_pixels[(i)] > (avg_pixels[(i)] + TEMP_BUFFER + SIDE_PAD(i)) )
+#define CHECK_TEMP(i)   ( norm_pixels[(i)] > CONFIDENCE_THRESHOLD )
 #define CHECK_DOOR(i)   ( door_state == HIGH || AXIS(i) <= (GRID_EXTENT/2) )
 #define PIXEL_ACTIVE(i) ( (CHECK_TEMP(i)) && (CHECK_DOOR(i)) )
 
@@ -209,13 +212,13 @@ uint8_t neighborsForPixel(uint8_t idx) {
 // in desc order. For example, given an array {2, 4, 1, 0},
 //   SORT_ARRAY(a, (a[i] > 0), (a[i] > a[ordered_indexes[i]]), 4)
 // will return 3 and ordered_indexes will be {1, 0, 2}. I'm sorry...
-#define SORT_ARRAY(src, cnd, cmp, sze) ({                            \
+#define SORT_ARRAY(src, cnd, sze) ({                                 \
   uint8_t count = 0;                                                 \
   for (uint8_t i=0; i<(sze); i++) {                                  \
     if ((cnd)) {                                                     \
       bool added = false;                                            \
       for (uint8_t j=0; j<count; j++) {                              \
-        if ((cmp)) {                                                 \
+        if (src[i] > src[ordered_indexes[j]]) {                                                 \
           for (uint8_t x=count; x>j; x--) {                          \
             ordered_indexes[x] = ordered_indexes[x-1];               \
           }                                                          \
@@ -235,23 +238,11 @@ uint8_t neighborsForPixel(uint8_t idx) {
 //////////////////////////////////////////////////////////////////////
 
 uint8_t sortPixelsByTemp(uint8_t *ordered_indexes) {
-  uint8_t active[AMG88xx_PIXEL_ARRAY_SIZE];
-  for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
-    active[idx] = neighborsForPixel(idx);
-  }
-
-  SORT_ARRAY(cur_pixels, (active[i] >= MIN_PIXEL_NEIGHBORS),
-    ((abs(cur_pixels[i] - cur_pixels[ordered_indexes[j]]) <= SIMILAR_TEMP_DIFF &&
-      active[i] > active[ordered_indexes[j]]) ||
-    (cur_pixels[i] - cur_pixels[ordered_indexes[j]]) > SIMILAR_TEMP_DIFF ||
-    (cur_pixels[i] > cur_pixels[ordered_indexes[j]] &&
-      active[i] == active[ordered_indexes[j]])),
-    AMG88xx_PIXEL_ARRAY_SIZE);
+  SORT_ARRAY(norm_pixels, (PIXEL_ACTIVE(i)), AMG88xx_PIXEL_ARRAY_SIZE);
 }
 
 uint8_t sortPastPointsByHistory(uint8_t *ordered_indexes) {
-  SORT_ARRAY(histories, (histories[i] > 0),
-    (histories[i] > histories[ordered_indexes[j]]), MAX_PEOPLE);
+  SORT_ARRAY(histories, (histories[i] > 0), MAX_PEOPLE);
 }
 
 void publishEvents() {
@@ -341,6 +332,35 @@ void updateAverages() {
   }
 }
 
+void normalizePixels() {
+  float base_avg = amg.readThermistor();
+  float curr_avg = 0;
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    curr_avg += cur_pixels[i] - avg_pixels[i];
+  }
+  curr_avg = curr_avg/AMG88xx_PIXEL_ARRAY_SIZE + base_avg;
+
+  float bgm = GRADIENT_THRESHOLD;
+  float fgm = GRADIENT_THRESHOLD;
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    norm_pixels[i] = cur_pixels[i] - avg_pixels[i] + base_avg;
+    bgm = max(sq(norm_pixels[i] - base_avg), bgm);
+    fgm = max(sq(norm_pixels[i] - curr_avg), fgm);
+  }
+
+  #if GRADIENT_THRESHOLD == 0
+    if (fgm == 0 || bgm == 0) {
+      // avoid division by 0 error by pretending whole grid is empty
+      memset(norm_pixels, 0, (AMG88xx_PIXEL_ARRAY_SIZE*sizeof(float)));
+      return;
+    }
+  #endif
+
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    norm_pixels[i] = sq(norm_pixels[i] - curr_avg)/fgm * sq(norm_pixels[i] - base_avg)/bgm;
+  }
+}
+
 void clearTrackers() {
   memset(histories, 0, (MAX_PEOPLE*sizeof(uint16_t)));
   memset(crossed, false, (MAX_PEOPLE*sizeof(bool)));
@@ -377,6 +397,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
 
 void processSensor() {
   if (!readPixels()) return;
+  normalizePixels();
   calculateAverages();
 
   // sort list of previously seen people by how many frames we've seen them to prioritize
@@ -644,7 +665,7 @@ void processSensor() {
       for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
         if (PIXEL_ACTIVE(idx)) {
           idx == next_point ? SERIAL_PRINT("[") : SERIAL_PRINT(" ");
-          SERIAL_PRINT(cur_pixels[idx]);
+          SERIAL_PRINT(norm_pixels[idx]);
           if (idx == next_point) {
             SERIAL_PRINT("]");
             if (seen_points < total_masses) {
@@ -656,11 +677,20 @@ void processSensor() {
             SERIAL_PRINT(" ");
           }
         } else {
-          SERIAL_PRINT(" ----- ");
+          SERIAL_PRINT(" ");
+          SERIAL_PRINT(norm_pixels[idx]);
+          SERIAL_PRINT(" ");
         }
         if (!(NOT_RIGHT_EDGE)) SERIAL_PRINTLN();
       }
       SERIAL_PRINTLN();
+//      for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
+//        SERIAL_PRINT(" ");
+//        SERIAL_PRINT(cur_pixels[idx]);
+//        SERIAL_PRINT(" ");
+//        if (!(NOT_RIGHT_EDGE)) SERIAL_PRINTLN();
+//      }
+//      SERIAL_PRINTLN();
       SERIAL_FLUSH;
     }
   #endif
@@ -689,6 +719,11 @@ void initialize() {
   door_state = 3;
 
   clearTrackers();
+
+  SERIAL_PRINTLN("napping for 16s to calibrate AMG8833...");
+//  LOWPOWER_DELAY(SLEEP_8S);
+//  LOWPOWER_DELAY(SLEEP_8S);
+
   amg.readPixels(avg_pixels);
 }
 
