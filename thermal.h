@@ -3,14 +3,15 @@
 #define FIRMWARE_VERSION        "V0.1"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define MIN_DISTANCE            3.0  // min distance for 2 peaks to be separate people
+#define MIN_DISTANCE            2.0  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define ALPHA                   0.01 // learning rate for background temp
 #define SLOW_ALPHA              0.0099
-#define CONFIDENCE_THRESHOLD    0.5  // consider a point if we're 50% confident
-#define GRADIENT_THRESHOLD      9    // 3º temp change gives us 100% confidence of person
+#define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 50% confident
+#define AVG_CONF_THRESHOLD      0.3
+#define GRADIENT_THRESHOLD      6    // 2.5º temp change gives us 100% confidence of person
 
 #define REED_PIN                3
 #include <Wire.h>
@@ -27,6 +28,8 @@ uint8_t starting_points[MAX_PEOPLE];
 uint16_t histories[MAX_PEOPLE];
 bool crossed[MAX_PEOPLE];
 float past_norms[MAX_PEOPLE];
+float avg_norms[MAX_PEOPLE];
+uint16_t count[MAX_PEOPLE];
 
 uint8_t door_state;
 
@@ -151,13 +154,14 @@ void publishEvents() {
   if (door_state == LOW) return; // nothing happened if door is closed
 
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
-    if (past_points[i] != UNDEF_POINT) {
+    if (past_points[i] != UNDEF_POINT && (avg_norms[i]/count[i]) > AVG_CONF_THRESHOLD) {
       int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
       // point cleanly crossed grid
       if ((histories[i] > MIN_HISTORY && abs(diff) >= (GRID_EXTENT/2) &&
           (!pointOnLREdge(past_points[i]) || pointOnBorder(past_points[i]))) ||
-         // or point barely crossed threshold but we must be at least 90% confident
-         (past_norms[i] > 0.9 && SIDE(starting_points[i]) != SIDE(past_points[i]) &&
+         // or point barely crossed threshold but we must be at least 75% confident
+         ((avg_norms[i]/count[i]) > (2.5*AVG_CONF_THRESHOLD) &&
+          SIDE(starting_points[i]) != SIDE(past_points[i]) &&
           histories[i] >= MIN_HISTORY && abs(diff) >= (GRID_EXTENT/2 - 1))) {
         if (diff > 0) {
           publish("1");
@@ -388,6 +392,8 @@ void processSensor() {
             past_points[idx] = points[i];
           }
           past_norms[idx] = norm_pixels[points[i]];
+          avg_norms[idx] += past_norms[idx];
+          count[idx]++;
           break;
         }
       }
@@ -409,6 +415,8 @@ void processSensor() {
             histories[j] = 1;
             crossed[j] = false;
             past_norms[j] = norm_pixels[points[i]];
+            avg_norms[j] = past_norms[j];
+            count[j] = 1;
             break;
           }
         }
@@ -474,6 +482,15 @@ void processSensor() {
     }
   #endif
 
+  for (uint8_t i=0; i< MAX_PEOPLE; i++) {
+    if (count[i] > 65000) {
+      // don't overflow, just drop this point
+      count[i] = 0;
+      histories[i] = 0;
+      crossed[i] = false;
+      past_points[i] = UNDEF_POINT;
+    }
+  }
   updateAverages();
 }
 
