@@ -347,7 +347,13 @@ void processSensor() {
 
   #define MATCH_POINT ({                                                          \
     float d = euclidean_distance(past_points[idx], points[j]);                    \
-    if (d < min_distance) {                                                       \
+    if (abs(d - min_distance) < 0.5) {                                            \
+      if (abs(norm_pixels[j] - past_norms[idx]) <                                 \
+            abs(norm_pixels[min_index] - past_norms[idx])) {                      \
+        min_distance = d;                                                         \
+        min_index = j;                                                            \
+      }                                                                           \
+    } else if (d < min_distance) {                                                \
       min_distance = d;                                                           \
       min_index = j;                                                              \
     }                                                                             \
