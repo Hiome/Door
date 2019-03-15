@@ -192,10 +192,11 @@ void publishEvents() {
   }
 }
 
-void publishMaybeEvents(uint8_t i) {
-  if (CHECK_DOOR(i) && !crossed[i] && histories[i] > MIN_HISTORY &&
-      avg_norms[i]/count[i] > (2.5*AVG_CONF_THRESHOLD) &&
-      euclidean_distance(starting_points[i], past_points[i]) > MAX_DISTANCE) {
+void publishMaybeEvents(uint8_t idx) {
+  uint8_t i = past_points[i];
+  if (CHECK_DOOR(i) && !crossed[idx] && histories[idx] > MIN_HISTORY &&
+      avg_norms[idx]/count[idx] > (2.5*AVG_CONF_THRESHOLD) &&
+      euclidean_distance(starting_points[idx], i) > MAX_DISTANCE) {
     if (SIDE1(i)) {
       publish("m1");
     } else {
