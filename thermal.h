@@ -3,9 +3,9 @@
 #define FIRMWARE_VERSION        "V0.1"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define MIN_DISTANCE            2.0  // min distance for 2 peaks to be separate people
+#define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
-#define DISTANCE_BONUS          2    // max extra distance a hot point can move
+#define DISTANCE_BONUS          2.0  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        10   // max empty cycles to remember forgotten points
@@ -13,7 +13,7 @@
 #define SLOW_ALPHA              0.0099
 #define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
 #define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
-#define GRADIENT_THRESHOLD      6    // 2.5º temp change gives us 100% confidence of person
+#define GRADIENT_THRESHOLD      9    // 3º temp change gives us 100% confidence of person
 
 #define REED_PIN                3
 #include <Wire.h>
@@ -123,6 +123,9 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 // xoooooox
 // xoooooox
 #define pointOnLREdge(i) ( NOT_AXIS(i) == 1 || NOT_AXIS(i) == GRID_EXTENT )
+
+#define pointOnOuterEdge(i) ( x(i) == 1 || y(i) == 1 ||                     \
+                               x(i) == GRID_EXTENT || y(i) == GRID_EXTENT )
 
 // This macro sorts array indexes based on their corresponding values
 // in desc order. For example, given an array {2, 4, 1, 0},
@@ -252,6 +255,7 @@ void normalizePixels() {
 
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     norm_pixels[i] = sq(norm_pixels[i] - curr_avg)/fgm * sq(norm_pixels[i] - base_avg)/bgm;
+    if (pointOnOuterEdge(i)) norm_pixels[i] /= 3;
   }
 }
 
@@ -399,8 +403,10 @@ void processSensor() {
             max_score = score;
             max_idx = idx;
           } else if (score == max_score) {
-            // if 2 competing points have the same history, pick the more confident one
-            if (past_norms[idx] > past_norms[max_idx]) {
+            // if 2 competing points have the same history, pick the closer one
+            float d1 = euclidean_distance(past_points[idx], points[i]);
+            float d2 = euclidean_distance(past_points[max_idx], points[i]);
+            if (d1 < d2 || (d1 == d2 && past_norms[idx] > past_norms[max_idx])) {
               max_idx = idx;
             }
           }
