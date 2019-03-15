@@ -96,11 +96,11 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 #define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
 #define SIDE(p)         ( SIDE1(p) ? 1 : 2 )
 #define CHECK_TEMP(i)   ( norm_pixels[(i)] > CONFIDENCE_THRESHOLD )
-#define CHECK_DOOR(i)   ( door_state == HIGH || AXIS(i) <= (GRID_EXTENT/2) )
+#define CHECK_DOOR(i)   ( door_state == HIGH || SIDE1(i) )
 #define PIXEL_ACTIVE(i) ( (CHECK_TEMP(i)) && (CHECK_DOOR(i)) )
 
-#define UPPER_BOUND             (GRID_EXTENT+1)
-#define BORDER_PADDING          (GRID_EXTENT/4)
+#define UPPER_BOUND     ( GRID_EXTENT+1 )
+#define BORDER_PADDING  ( GRID_EXTENT/4 )
 
 // check if point is on the top or bottom edges
 // xxxxxxxx
@@ -188,6 +188,18 @@ void publishEvents() {
         histories[i] -= 2;
         crossed[i] = true;
       }
+    }
+  }
+}
+
+void publishMaybeEvents(uint8_t i) {
+  if (CHECK_DOOR(i) && !crossed[i] && histories[i] > MIN_HISTORY &&
+      avg_norms[i]/count[i] > (2.5*AVG_CONF_THRESHOLD) &&
+      euclidean_distance(starting_points[i], past_points[i]) > MAX_DISTANCE) {
+    if (SIDE1(i)) {
+      publish("m1");
+    } else {
+      publish("m2");
     }
   }
 }
@@ -312,6 +324,7 @@ void processSensor() {
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT ({                                                         \
     if (avg_norms[idx]/count[idx] > AVG_CONF_THRESHOLD) {                         \
+      publishMaybeEvents(idx);                                                    \
       temp_forgotten_points[temp_forgotten_num] = past_points[idx];               \
       temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];  \
       temp_forgotten_histories[temp_forgotten_num] = histories[idx];              \
@@ -561,15 +574,6 @@ void processSensor() {
     }
   #endif
 
-  for (uint8_t i=0; i< MAX_PEOPLE; i++) {
-    if (count[i] > 65000) {
-      // don't overflow, just drop this point
-      count[i] = 0;
-      histories[i] = 0;
-      crossed[i] = false;
-      past_points[i] = UNDEF_POINT;
-    }
-  }
   updateAverages();
 }
 
@@ -587,18 +591,15 @@ void checkDoorState() {
 void initialize() {
   amg.begin();
 
-  blink(4);
-  digitalWrite(LED, HIGH);
-
   pinMode(REED_PIN, INPUT_PULLUP);
   door_state = 3;
 
+  // give sensor 13sec to stabilize
+  blink(26);
+  // let sensor calibrate with light off
+  LOWPOWER_DELAY(SLEEP_2S);
+
   clearTrackers();
-
-  // give sensor 15sec to stabilize
-//  LOWPOWER_DELAY(SLEEP_8S);
-//  LOWPOWER_DELAY(SLEEP_8S);
-
   amg.readPixels(avg_pixels);
 }
 
