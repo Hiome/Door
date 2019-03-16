@@ -3,7 +3,7 @@
 #define FIRMWARE_VERSION        "V0.1"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
+#define MIN_DISTANCE            1.5  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
 #define DISTANCE_BONUS          2.0  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
@@ -173,8 +173,8 @@ void publishEvents() {
       // point cleanly crossed grid
       if ((histories[i] > MIN_HISTORY && abs(diff) >= (GRID_EXTENT/2) &&
           (!pointOnLREdge(past_points[i]) || pointOnBorder(past_points[i]))) ||
-         // or point barely crossed threshold but we must be at least 75% confident
-         ((avg_norms[i]/count[i]) > (2.5*AVG_CONF_THRESHOLD) &&
+         // or point barely crossed threshold but we must be at least 60% confident
+         ((avg_norms[i]/count[i]) > (2*AVG_CONF_THRESHOLD) &&
           SIDE(starting_points[i]) != SIDE(past_points[i]) &&
           histories[i] >= MIN_HISTORY && abs(diff) >= (GRID_EXTENT/2 - 1))) {
         if (diff > 0) {
@@ -188,7 +188,7 @@ void publishEvents() {
           int s = past_points[i] + GRID_EXTENT;
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
-        histories[i] -= 2;
+        histories[i] = 1;
         crossed[i] = true;
       }
     }
@@ -198,7 +198,7 @@ void publishEvents() {
 void publishMaybeEvents(uint8_t idx) {
   uint8_t i = past_points[i];
   if (CHECK_DOOR(i) && !crossed[idx] && histories[idx] > MIN_HISTORY &&
-      avg_norms[idx]/count[idx] > (2.5*AVG_CONF_THRESHOLD) &&
+      avg_norms[idx]/count[idx] > (1.2*AVG_CONF_THRESHOLD) &&
       euclidean_distance(starting_points[idx], i) > MAX_DISTANCE) {
     if (SIDE1(i)) {
       publish("m1");
@@ -435,9 +435,13 @@ void processSensor() {
           // closest point matched, update trackers
           if (past_points[idx] != points[i]) {
             if (SIDE(points[i]) != SIDE(past_points[idx])) {
-              // point just crossed threshold, let's reduce its history to force
-              // it to spend another cycle on this side before we count the event
-              histories[idx] = min(histories[idx] + 1, MIN_HISTORY);
+              if (avg_norms[idx]/count[idx] > 0.5) {
+                histories[idx]++;
+              } else {
+                // point just crossed threshold, let's reduce its history to force
+                // it to spend another cycle on this side before we count the event
+                histories[idx] = min(histories[idx] + 1, MIN_HISTORY);
+              }
             } else {
               histories[idx]++;
               if (points[i] == starting_points[idx]) {
