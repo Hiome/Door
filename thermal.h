@@ -94,13 +94,15 @@ int sort_asc(const void *cmp1, const void *cmp2) {
   #error Double check all your code, this is untested
 #endif
 #define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
+#define UPPER_BOUND     ( GRID_EXTENT+1 )
+#define BORDER_PADDING  ( GRID_EXTENT/4 )
 #define SIDE(p)         ( SIDE1(p) ? 1 : 2 )
 #define CHECK_TEMP(i)   ( norm_pixels[(i)] > CONFIDENCE_THRESHOLD )
 #define CHECK_DOOR(i)   ( door_state == HIGH || SIDE1(i) )
 #define PIXEL_ACTIVE(i) ( (CHECK_TEMP(i)) && (CHECK_DOOR(i)) )
-
-#define UPPER_BOUND     ( GRID_EXTENT+1 )
-#define BORDER_PADDING  ( GRID_EXTENT/4 )
+#define confidence(x)   ( avg_norms[(x)]/count[(x)] )
+#define totalDistance(x)( euclidean_distance(starting_points[(x)], past_points[(x)]) )
+#define adjHistory(x)   ( (histories[(x)]/count[(x)]) * histories[(x)] )
 
 // check if point is on the top or bottom edges
 // xxxxxxxx
@@ -112,6 +114,9 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 // xxxxxxxx
 // xxxxxxxx
 #define pointOnBorder(i) ( AXIS(i) < (GRID_EXTENT/2) || AXIS(i) > (GRID_EXTENT/2 + 1) )
+
+#define pointOnStrictBorder(i) ( AXIS(i) <= BORDER_PADDING ||                 \
+                                  AXIS(i) >= (UPPER_BOUND - BORDER_PADDING) )
 
 // check if point is on left or right edges
 // xoooooox
@@ -168,15 +173,15 @@ void publishEvents() {
   if (door_state == LOW) return; // nothing happened if door is closed
 
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
-    if (past_points[i] != UNDEF_POINT && (avg_norms[i]/count[i]) > AVG_CONF_THRESHOLD) {
+    if (past_points[i] != UNDEF_POINT && histories[i] > MIN_HISTORY &&
+          confidence(i) > AVG_CONF_THRESHOLD) {
       int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
       // point cleanly crossed grid
-      if ((histories[i] > MIN_HISTORY && abs(diff) >= (GRID_EXTENT/2) &&
+      if ((abs(diff) >= (GRID_EXTENT/2) &&
           (!pointOnLREdge(past_points[i]) || pointOnBorder(past_points[i]))) ||
          // or point barely crossed threshold but we must be at least 60% confident
-         ((avg_norms[i]/count[i]) > (2*AVG_CONF_THRESHOLD) &&
-          SIDE(starting_points[i]) != SIDE(past_points[i]) &&
-          histories[i] >= MIN_HISTORY && abs(diff) >= (GRID_EXTENT/2 - 1))) {
+         (confidence(i) > (2*AVG_CONF_THRESHOLD) && abs(diff) >= (GRID_EXTENT/2 - 1) &&
+          SIDE(starting_points[i]) != SIDE(past_points[i]))) {
         if (diff > 0) {
           publish("1");
           // artificially shift starting point ahead 1 row so that
@@ -196,11 +201,9 @@ void publishEvents() {
 }
 
 void publishMaybeEvents(uint8_t idx) {
-  uint8_t i = past_points[i];
-  if (CHECK_DOOR(i) && !crossed[idx] && histories[idx] > MIN_HISTORY &&
-      avg_norms[idx]/count[idx] > (1.2*AVG_CONF_THRESHOLD) &&
-      euclidean_distance(starting_points[idx], i) > MAX_DISTANCE) {
-    if (SIDE1(i)) {
+  if (CHECK_DOOR(past_points[idx]) && !crossed[idx] && histories[idx] > MIN_HISTORY &&
+      confidence(idx) > (1.2*AVG_CONF_THRESHOLD) && totalDistance(idx) >= MAX_DISTANCE) {
+    if (SIDE1(past_points[idx])) {
       publish("m1");
     } else {
       publish("m2");
@@ -350,7 +353,7 @@ void processSensor() {
 
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT ({                                                         \
-    if (avg_norms[idx]/count[idx] > AVG_CONF_THRESHOLD) {                         \
+    if (confidence(idx) > AVG_CONF_THRESHOLD) {                                   \
       publishMaybeEvents(idx);                                                    \
       temp_forgotten_points[temp_forgotten_num] = past_points[idx];               \
       temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];  \
@@ -369,7 +372,7 @@ void processSensor() {
 
   #define MATCH_POINT ({                                                          \
     float d = euclidean_distance(past_points[idx], points[j]);                    \
-    if (abs(d - min_distance) < 0.5) {                                            \
+    if (min_index != UNDEF_POINT && abs(d - min_distance) < 0.5) {                \
       if (abs(norm_pixels[points[j]] - past_norms[idx]) <                         \
             abs(norm_pixels[points[min_index]] - past_norms[idx])) {              \
         min_distance = d;                                                         \
@@ -420,22 +423,26 @@ void processSensor() {
   for (uint8_t i=0; i<total_masses; i++) {
     if (taken[i] > 1) {
       // more than one past point is trying to match with this single current point...
-      uint8_t max_score = 0;
+      float max_score = 0;
       uint8_t max_idx = UNDEF_POINT;
       for (uint8_t j=0; j<past_total_masses; j++) {
         uint8_t idx = ordered_past_points[j];
         if (pairs[idx] == i) {
-          // chose the point that has the longest history (capped at 5)
-          uint8_t score = min(histories[idx], 5);
+          float score = confidence(idx) * totalDistance(idx) * adjHistory(idx);
+          score /= max(euclidean_distance(past_points[idx], points[i]), 0.5);
           if (score > max_score) {
             max_score = score;
             max_idx = idx;
           } else if (score == max_score) {
-            // if 2 competing points have the same history, pick the closer one
-            float d1 = euclidean_distance(past_points[idx], points[i]);
-            float d2 = euclidean_distance(past_points[max_idx], points[i]);
-            if (d1 < d2 || (d1 == d2 && past_norms[idx] > past_norms[max_idx])) {
+            if (max_idx == UNDEF_POINT) {
               max_idx = idx;
+            } else {
+              // if 2 competing points have the same score, pick the closer one
+              float d1 = euclidean_distance(past_points[idx], points[i]);
+              float d2 = euclidean_distance(past_points[max_idx], points[i]);
+              if (d1 < d2 || (d1 == d2 && past_norms[idx] > past_norms[max_idx])) {
+                max_idx = idx;
+              }
             }
           }
         }
@@ -457,7 +464,7 @@ void processSensor() {
           // closest point matched, update trackers
           if (past_points[idx] != points[i]) {
             if (SIDE(points[i]) != SIDE(past_points[idx])) {
-              if (avg_norms[idx]/count[idx] > 0.5) {
+              if (confidence(idx) > 0.5) {
                 histories[idx]++;
               } else {
                 // point just crossed threshold, let's reduce its history to force
@@ -465,9 +472,10 @@ void processSensor() {
                 histories[idx] = min(histories[idx] + 1, MIN_HISTORY);
               }
             } else {
-              histories[idx]++;
               if (points[i] == starting_points[idx]) {
                 histories[idx] = 1;
+              } else {
+                histories[idx]++;
               }
             }
             past_points[idx] = points[i];
@@ -507,14 +515,26 @@ void processSensor() {
           }
         }
       }
-      if (h == 1 && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
-        // if point is starting in row 5, move it back to row 6
-        // (giving benefit of doubt that this point appeared behind a closed door)
-        sp += GRID_EXTENT;
-        addable = true;
+
+      bool valid_mid_point = true;
+      if (!pointOnStrictBorder(sp)) {
+        for (uint8_t k=0; k<total_masses; k++) {
+          if (SIDE(sp) != SIDE(points[k]) &&
+              euclidean_distance(points[k], sp) < MAX_DISTANCE) {
+            valid_mid_point = false;
+            break;
+          }
+        }
+
+        if (!addable && valid_mid_point && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
+          // if point is starting in row 5, move it back to row 6
+          // (giving benefit of doubt that this point appeared behind a closed door)
+          sp += GRID_EXTENT;
+          addable = true;
+        }
       }
       // ignore new points that showed up in middle 2 rows of grid
-      if (addable || pointOnBorder(sp)) {
+      if (valid_mid_point && (addable || pointOnBorder(sp))) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
           if (past_points[j] == UNDEF_POINT) {
