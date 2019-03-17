@@ -13,7 +13,7 @@
 #define SLOW_ALPHA              0.0099
 #define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
 #define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
-#define GRADIENT_THRESHOLD      9    // 3º temp change gives us 100% confidence of person
+#define GRADIENT_THRESHOLD      7    // 2.5º temp change gives us 100% confidence of person
 
 #define REED_PIN                3
 #include <Wire.h>
@@ -219,13 +219,24 @@ bool readPixels() {
 }
 
 void updateAverages() {
-  float m = 0;
+  float m1 = 0;
+  float m2 = 0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    m = max(norm_pixels[i], m);
+    if (SIDE1(i)) {
+      m1 = max(norm_pixels[i], m1);
+    } else {
+      m2 = max(norm_pixels[i], m2);
+    }
   }
-  float adjAlpha = ALPHA - SLOW_ALPHA*m;
+
+  float adjAlpha1 = ALPHA - SLOW_ALPHA*m1;
+  float adjAlpha2 = ALPHA - SLOW_ALPHA*m2;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    avg_pixels[i] += adjAlpha * (cur_pixels[i] - avg_pixels[i]);
+    if (SIDE1(i)) {
+      avg_pixels[i] += adjAlpha1 * (cur_pixels[i] - avg_pixels[i]);
+    } else {
+      avg_pixels[i] += adjAlpha2 * (cur_pixels[i] - avg_pixels[i]);
+    }
   }
 }
 
@@ -237,16 +248,23 @@ void normalizePixels() {
   }
   curr_avg = curr_avg/AMG88xx_PIXEL_ARRAY_SIZE + base_avg;
 
-  float bgm = GRADIENT_THRESHOLD;
-  float fgm = GRADIENT_THRESHOLD;
+  float bgm1 = GRADIENT_THRESHOLD;
+  float fgm1 = GRADIENT_THRESHOLD;
+  float bgm2 = GRADIENT_THRESHOLD;
+  float fgm2 = GRADIENT_THRESHOLD;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     norm_pixels[i] = cur_pixels[i] - avg_pixels[i] + base_avg;
-    bgm = max(sq(norm_pixels[i] - base_avg), bgm);
-    fgm = max(sq(norm_pixels[i] - curr_avg), fgm);
+    if (SIDE1(i)) {
+      bgm1 = max(sq(norm_pixels[i] - base_avg), bgm1);
+      fgm1 = max(sq(norm_pixels[i] - curr_avg), fgm1);
+    } else {
+      bgm2 = max(sq(norm_pixels[i] - base_avg), bgm2);
+      fgm2 = max(sq(norm_pixels[i] - curr_avg), fgm2);
+    }
   }
 
   #if GRADIENT_THRESHOLD == 0
-    if (fgm == 0 || bgm == 0) {
+    if (fgm1 == 0 || bgm1 == 0 || fgm2 == 0 || bgm2 == 0) {
       // avoid division by 0 error by pretending whole grid is empty
       memset(norm_pixels, 0, (AMG88xx_PIXEL_ARRAY_SIZE*sizeof(float)));
       return;
@@ -254,7 +272,11 @@ void normalizePixels() {
   #endif
 
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    norm_pixels[i] = sq(norm_pixels[i] - curr_avg)/fgm * sq(norm_pixels[i] - base_avg)/bgm;
+    if (SIDE1(i)) {
+      norm_pixels[i] = sq(norm_pixels[i]-curr_avg)/fgm1 * sq(norm_pixels[i]-base_avg)/bgm1;
+    } else {
+      norm_pixels[i] = sq(norm_pixels[i]-curr_avg)/fgm2 * sq(norm_pixels[i]-base_avg)/bgm2;
+    }
     if (pointOnOuterEdge(i)) norm_pixels[i] /= 3;
   }
 }
