@@ -37,8 +37,6 @@ uint8_t forgotten_past_points[MAX_PEOPLE];
 uint8_t forgotten_starting_points[MAX_PEOPLE];
 uint16_t forgotten_histories[MAX_PEOPLE];
 bool forgotten_crossed[MAX_PEOPLE];
-float forgotten_avg_norms[MAX_PEOPLE];
-uint16_t forgotten_count[MAX_PEOPLE];
 uint8_t forgotten_num = 0;
 uint8_t cycles_since_forgotten = 0;
 
@@ -102,7 +100,6 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 #define PIXEL_ACTIVE(i) ( (CHECK_TEMP(i)) && (CHECK_DOOR(i)) )
 #define confidence(x)   ( avg_norms[(x)]/count[(x)] )
 #define totalDistance(x)( euclidean_distance(starting_points[(x)], past_points[(x)]) )
-#define adjHistory(x)   ( (histories[(x)]/count[(x)]) * histories[(x)] )
 
 // check if point is on the top or bottom edges
 // xxxxxxxx
@@ -346,8 +343,6 @@ void processSensor() {
   uint8_t temp_forgotten_starting_points[MAX_PEOPLE];
   uint16_t temp_forgotten_histories[MAX_PEOPLE];
   bool temp_forgotten_crossed[MAX_PEOPLE];
-  float temp_forgotten_avg_norms[MAX_PEOPLE];
-  uint16_t temp_forgotten_count[MAX_PEOPLE];
   uint8_t temp_forgotten_num = 0;
   uint8_t forgotten_num_frd = 0;
 
@@ -359,8 +354,6 @@ void processSensor() {
       temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];  \
       temp_forgotten_histories[temp_forgotten_num] = histories[idx];              \
       temp_forgotten_crossed[temp_forgotten_num] = crossed[idx];                  \
-      temp_forgotten_avg_norms[temp_forgotten_num] = avg_norms[idx];              \
-      temp_forgotten_count[temp_forgotten_num] = count[idx];                      \
       temp_forgotten_num++;                                                       \
     }                                                                             \
     forgotten_num_frd++;                                                          \
@@ -370,34 +363,29 @@ void processSensor() {
     crossed[idx] = false;                                                         \
   })
 
-  #define MATCH_POINT ({                                                          \
-    float d = euclidean_distance(past_points[idx], points[j]);                    \
-    if (min_index != UNDEF_POINT && abs(d - min_distance) < 0.5) {                \
-      if (abs(norm_pixels[points[j]] - past_norms[idx]) <                         \
-            abs(norm_pixels[points[min_index]] - past_norms[idx])) {              \
-        min_distance = d;                                                         \
-        min_index = j;                                                            \
-      }                                                                           \
-    } else if (d < min_distance) {                                                \
-      min_distance = d;                                                           \
-      min_index = j;                                                              \
-    }                                                                             \
-  })
-
   for (uint8_t i=0; i<past_total_masses; i++) {
     uint8_t idx = ordered_past_points[i];
     float min_distance = MAX_DISTANCE + sq(past_norms[idx]) * DISTANCE_BONUS;
     uint8_t min_index = UNDEF_POINT;
     for (uint8_t j=0; j<total_masses; j++) {
-      // match with closest available point
-      if (taken[j] == 0) {
-        MATCH_POINT;
-      }
-    }
-    if (min_index == UNDEF_POINT) {
-      // try again, but include already matched points in second pass
-      for (uint8_t j=0; j<total_masses; j++) {
-        MATCH_POINT;
+      float d = euclidean_distance(past_points[idx], points[j]);
+      if (min_index != UNDEF_POINT && abs(d - min_distance) < 1) {
+        float c1 = abs(norm_pixels[points[j]] - past_norms[idx]);
+        float c2 = abs(norm_pixels[points[min_index]] - past_norms[idx]);
+        if (c1 < c2) {
+          min_distance = d;
+          min_index = j;
+        } else if (c1 == c2) {
+          float sd1 = euclidean_distance(starting_points[idx], points[j]);
+          float sd2 = euclidean_distance(starting_points[idx], points[min_index]);
+          if (sd1 > sd2) {
+            min_distance = d;
+            min_index = j;
+          }
+        }
+      } else if (d < min_distance) {
+        min_distance = d;
+        min_index = j;
       }
     }
 
@@ -428,7 +416,7 @@ void processSensor() {
       for (uint8_t j=0; j<past_total_masses; j++) {
         uint8_t idx = ordered_past_points[j];
         if (pairs[idx] == i) {
-          float score = confidence(idx) * totalDistance(idx) * adjHistory(idx);
+          float score = avg_norms[idx] * totalDistance(idx);
           score /= max(euclidean_distance(past_points[idx], points[i]), 0.5);
           if (score > max_score) {
             max_score = score;
@@ -492,7 +480,6 @@ void processSensor() {
       uint8_t sp = points[i];
       bool cross = false;
       float an = norm_pixels[points[i]];
-      uint16_t c = 1;
       bool addable = false;
       if (cycles_since_forgotten < MAX_EMPTY_CYCLES) {
         // first let's check forgotten points for a match
@@ -502,8 +489,7 @@ void processSensor() {
             h = forgotten_histories[j];
             sp = forgotten_starting_points[j];
             cross = forgotten_crossed[j];
-            an += forgotten_avg_norms[j];
-            c += forgotten_count[j];
+            an = 0;
             if (points[i] == sp) {
               h = 1;
             } else if (SIDE(forgotten_past_points[j]) != SIDE(points[i])) {
@@ -517,10 +503,10 @@ void processSensor() {
       }
 
       bool valid_mid_point = true;
-      if (!pointOnStrictBorder(sp)) {
+      if (!pointOnStrictBorder(points[i])) {
         for (uint8_t k=0; k<total_masses; k++) {
-          if (SIDE(sp) != SIDE(points[k]) &&
-              euclidean_distance(points[k], sp) < MAX_DISTANCE) {
+          if (SIDE(points[i]) != SIDE(points[k]) &&
+              euclidean_distance(points[k], points[i]) < MAX_DISTANCE) {
             valid_mid_point = false;
             break;
           }
@@ -544,7 +530,7 @@ void processSensor() {
             crossed[j] = cross;
             past_norms[j] = norm_pixels[points[i]];
             avg_norms[j] = an;
-            count[j] = c;
+            count[j] = 1;
             break;
           }
         }
@@ -560,8 +546,6 @@ void processSensor() {
                                                          (MAX_PEOPLE*sizeof(uint8_t)));
     memcpy(forgotten_histories, temp_forgotten_histories, (MAX_PEOPLE*sizeof(uint16_t)));
     memcpy(forgotten_crossed, temp_forgotten_crossed, (MAX_PEOPLE*sizeof(bool)));
-    memcpy(forgotten_avg_norms, temp_forgotten_avg_norms, (MAX_PEOPLE*sizeof(float)));
-    memcpy(forgotten_count, temp_forgotten_count, (MAX_PEOPLE*sizeof(uint16_t)));
     forgotten_num = temp_forgotten_num;
     cycles_since_forgotten = 0;
     SERIAL_PRINTLN("saved");
