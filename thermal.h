@@ -116,16 +116,14 @@ int sort_asc(const void *cmp1, const void *cmp2) {
                                   AXIS(i) >= (UPPER_BOUND - BORDER_PADDING) )
 
 // check if point is on left or right edges
+// xxxxxxxx
 // xoooooox
 // xoooooox
 // xoooooox
 // xoooooox
 // xoooooox
 // xoooooox
-// xoooooox
-// xoooooox
-#define pointOnLREdge(i) ( NOT_AXIS(i) == 1 || NOT_AXIS(i) == GRID_EXTENT )
-
+// xxxxxxxx
 #define pointOnOuterEdge(i) ( x(i) == 1 || y(i) == 1 ||                     \
                                x(i) == GRID_EXTENT || y(i) == GRID_EXTENT )
 
@@ -161,11 +159,7 @@ void publishEvents() {
           confidence(i) > AVG_CONF_THRESHOLD) {
       int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
       // point cleanly crossed grid
-      if ((abs(diff) >= (GRID_EXTENT/2) &&
-          (!pointOnLREdge(past_points[i]) || pointOnBorder(past_points[i]))) ||
-         // or point barely crossed threshold but we must be at least 60% confident
-         (confidence(i) > (1.5*AVG_CONF_THRESHOLD) && abs(diff) >= (GRID_EXTENT/2 - 1) &&
-          SIDE(starting_points[i]) != SIDE(past_points[i]))) {
+      if (abs(diff) >= (GRID_EXTENT/2)) {
         if (diff > 0) {
           publish("1");
           // artificially shift starting point ahead 1 row so that
