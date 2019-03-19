@@ -179,6 +179,8 @@ void publishEvents() {
         }
         histories[i] = 1;
         crossed[i] = true;
+        avg_norms[i] = past_norms[i];
+        count[i] = 1;
       }
     }
   }
@@ -349,7 +351,7 @@ void processSensor() {
           float d = euclidean_distance(past_points[idx], points[j]);
           if (d < max_distance) {
             float c = abs(norm_pixels[points[j]] - past_norms[idx]);
-            float score = log10(sq(d) + 1) + 2*pow(10.0, c);
+            float score = log10(sq(d) + 1.0) + 2.0*pow(10.0, c);
             if (score < min_score) {
               min_score = score;
               min_index = j;
@@ -391,7 +393,8 @@ void processSensor() {
       uint8_t max_idx = UNDEF_POINT;
       for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
         if (past_points[idx] != UNDEF_POINT && pairs[idx] == i) {
-          float score = avg_norms[idx]/log(count[idx] + 1) * totalDistance(idx);
+          float b = crossed[idx] ? 4.0 : 0.0;
+          float score = confidence(idx) * (totalDistance(idx) + b);
           score /= max(euclidean_distance(past_points[idx], points[i]), 0.9);
           if (score > max_score) {
             max_score = score;
