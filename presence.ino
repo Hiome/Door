@@ -18,10 +18,14 @@
 #define PIR    3
 #define xshut1 6
 #define xshut2 7
+#define FLASH  8
 #define LED    9
 #define BATT   A7
 
 #include <RFM69_ATC.h>
+#include <RFM69_OTA.h>
+#include <SPIFlash.h>
+#include <SPI.h>
 #include <LowPower.h>
 
 #ifdef ENABLE_SERIAL
@@ -39,6 +43,7 @@
 #define LOWPOWER_DELAY(d) ( LowPower.powerDown(d, ADC_OFF, BOD_ON) )
 
 RFM69_ATC radio;
+SPIFlash flash(FLASH, 0xEF30); //EF30 for windbond 4mbit flash
 
 void blink(uint8_t times) {
   while (times > 0) {
@@ -100,9 +105,16 @@ void setup() {
   radio.enableAutoPower(ATC_RSSI);
   radio.sleep();
 
+  if (flash.initialize()) flash.sleep();
+
   initialize();
 
   publish(FIRMWARE_VERSION);
   digitalWrite(LED, LOW);
+}
+
+void loop() {
+  if (radio.receiveDone()) CheckForWirelessHEX(radio, flash, false);
+  loop_frd();
 }
 
