@@ -11,7 +11,7 @@
 #define MAX_EMPTY_CYCLES        5    // max empty cycles to remember forgotten points
 #define ALPHA                   0.01 // learning rate for background temp
 #define SLOW_ALPHA              0.0099
-#define CONFIDENCE_THRESHOLD    0.15 // consider a point if we're 15% confident
+#define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
 #define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
 #define GRADIENT_THRESHOLD      5    // 2º temp change gives us 100% confidence of person
 
@@ -110,7 +110,14 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 // xxxxxxxx
 // xxxxxxxx
 // xxxxxxxx
-#define pointOnBorder(i) ( AXIS(i) < (GRID_EXTENT/2) || AXIS(i) > (GRID_EXTENT/2 + 1) )
+#ifdef YAXIS
+  #define pointOnBorder(i) ( (i) < (GRID_EXTENT * 3) || (i) >= (GRID_EXTENT * 5) )
+  #define pointInMiddle(i) ( (i) >= (GRID_EXTENT * 2) && (i) < (GRID_EXTENT * 6) )
+#else
+  #define pointOnBorder(i) ( AXIS(i) < (GRID_EXTENT/2) || AXIS(i) > (GRID_EXTENT/2 + 1) )
+  #define pointInMiddle(i) ( AXIS(i) > BORDER_PADDING &&            \
+                             AXIS(i) < (UPPER_BOUND-BORDER_PADDING) )
+#endif
 
 // check if point is on left or right edges
 // xxxxxxxx
@@ -349,7 +356,7 @@ void processSensor() {
         for (uint8_t j=0; j<total_masses; j++) {
           float d = euclidean_distance(past_points[idx], points[j]);
           if (d < max_distance) {
-            float score = d/max_distance - 2.0*(norm_pixels[points[j]] - past_norms[idx]);
+            float score = (d/max_distance) - (norm_pixels[points[j]]/past_norms[idx]);
             if (score < min_score) {
               min_score = score;
               min_index = j;
@@ -478,7 +485,19 @@ void processSensor() {
         }
       }
 
-      if (an > 0 && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
+      bool nobodyInMiddle = true;
+      for (uint8_t i=0; i<MAX_PEOPLE; i++) {
+        if (past_points[i] != UNDEF_POINT && pointInMiddle(past_points[i]) &&
+              confidence(i) > AVG_CONF_THRESHOLD && histories[i] > 1) {
+          // there's already a person in the middle of the grid
+          // so it's unlikely a new valid person just appeared in the middle
+          // (person can't be running and door wasn't closed)
+          nobodyInMiddle = false;
+          break;
+        }
+      }
+
+      if (nobodyInMiddle && an > 0 && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
         // if point is starting in row 5, move it back to row 6
         // (giving benefit of doubt that this point appeared behind a closed door)
         sp += GRID_EXTENT;
@@ -486,7 +505,7 @@ void processSensor() {
       }
 
       // ignore new points that showed up in middle 2 rows of grid
-      if (an == 0 || pointOnBorder(sp)) {
+      if (an == 0 || (nobodyInMiddle && pointOnBorder(sp)) || !pointInMiddle(sp)) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
           if (past_points[j] == UNDEF_POINT) {
