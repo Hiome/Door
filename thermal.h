@@ -185,13 +185,21 @@ void publishEvents() {
 }
 
 void publishMaybeEvents(uint8_t idx) {
-  if (CHECK_DOOR(past_points[idx]) && !crossed[idx] && totalDistance(idx) > MIN_DISTANCE &&
-      ((histories[idx] > MIN_HISTORY && confidence(idx) > (1.25*AVG_CONF_THRESHOLD)) ||
-      (histories[idx] > (2*MIN_HISTORY) && confidence(idx) > AVG_CONF_THRESHOLD))) {
-    if (SIDE1(past_points[idx])) {
-      publish("m1");
-    } else {
-      publish("m2");
+  if (CHECK_DOOR(past_points[idx]) && !crossed[idx] && totalDistance(idx) > MIN_DISTANCE) {
+    if ((histories[idx] > MIN_HISTORY && confidence(idx) > (1.25*AVG_CONF_THRESHOLD)) ||
+        (histories[idx] > (2*MIN_HISTORY) && confidence(idx) > AVG_CONF_THRESHOLD)) {
+      if (SIDE1(past_points[idx])) {
+        publish("m1");
+      } else {
+        publish("m2");
+      }
+    else if (histories[idx] >= MIN_HISTORY || confidence(idx) > 0.2) {
+      // we don't know what happened, add door to suspicious list
+      if (SIDE1(past_points[idx])) {
+        publish("s1");
+      } else {
+        publish("s2");
+      }
     }
   }
 }
@@ -326,8 +334,8 @@ void processSensor() {
 
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT ({                                                         \
+    publishMaybeEvents(idx);                                                      \
     if (confidence(idx) > AVG_CONF_THRESHOLD) {                                   \
-      publishMaybeEvents(idx);                                                    \
       temp_forgotten_points[temp_forgotten_num] = past_points[idx];               \
       temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];  \
       temp_forgotten_histories[temp_forgotten_num] = histories[idx];              \
