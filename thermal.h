@@ -193,7 +193,7 @@ void publishMaybeEvents(uint8_t idx) {
       } else {
         publish("m2");
       }
-    else if (histories[idx] >= MIN_HISTORY || confidence(idx) > 0.2) {
+    } else if (histories[idx] >= MIN_HISTORY || confidence(idx) > 0.2) {
       // we don't know what happened, add door to suspicious list
       if (SIDE1(past_points[idx])) {
         publish("s1");
