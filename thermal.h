@@ -193,7 +193,8 @@ void publishMaybeEvents(uint8_t idx) {
       } else {
         publish("m2");
       }
-    } else if (histories[idx] >= MIN_HISTORY || confidence(idx) > 0.2) {
+    } else if (count[idx] >= histories[idx] &&
+        (histories[idx] >= MIN_HISTORY || confidence(idx) > 0.2)) {
       // we don't know what happened, add door to suspicious list
       if (SIDE1(past_points[idx])) {
         publish("s1");
@@ -335,7 +336,8 @@ void processSensor() {
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT ({                                                         \
     publishMaybeEvents(idx);                                                      \
-    if (confidence(idx) > AVG_CONF_THRESHOLD) {                                   \
+    if (confidence(idx) > AVG_CONF_THRESHOLD &&                                   \
+        AXIS(past_points[idx]) > 1 && AXIS(past_points[idx]) < GRID_EXTENT) {     \
       temp_forgotten_points[temp_forgotten_num] = past_points[idx];               \
       temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];  \
       temp_forgotten_histories[temp_forgotten_num] = histories[idx];              \
