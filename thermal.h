@@ -186,7 +186,7 @@ void publishEvents() {
 
 void publishMaybeEvents(uint8_t idx) {
   if (CHECK_DOOR(past_points[idx]) && !crossed[idx] && totalDistance(idx) > MIN_DISTANCE) {
-    if ((histories[idx] > MIN_HISTORY && confidence(idx) > (1.25*AVG_CONF_THRESHOLD)) ||
+    if ((histories[idx] > MIN_HISTORY && confidence(idx) > (1.5*AVG_CONF_THRESHOLD)) ||
         (histories[idx] > (2*MIN_HISTORY) && confidence(idx) > AVG_CONF_THRESHOLD)) {
       if (SIDE1(past_points[idx])) {
         publish("m1");
