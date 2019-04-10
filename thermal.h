@@ -15,7 +15,8 @@
 #define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
 #define GRADIENT_THRESHOLD      5    // 2º temp change gives us 100% confidence of person
 
-#define REED_PIN                3
+#define REED_PIN_AJAR           3
+#define REED_PIN_CLOSE          4
 #include <Wire.h>
 #include <Adafruit_AMG88xx.h>
 
@@ -40,7 +41,10 @@ bool forgotten_crossed[MAX_PEOPLE];
 uint8_t forgotten_num = 0;
 uint8_t cycles_since_forgotten = 0;
 
-uint8_t door_state;
+#define DOOR_CLOSED 0
+#define DOOR_AJAR   1
+#define DOOR_OPEN   2
+uint8_t door_state = 9;
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -96,7 +100,7 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 #define BORDER_PADDING  ( GRID_EXTENT/4 )
 #define SIDE(p)         ( SIDE1(p) ? 1 : 2 )
 #define CHECK_TEMP(i)   ( norm_pixels[(i)] > CONFIDENCE_THRESHOLD )
-#define CHECK_DOOR(i)   ( door_state == HIGH || SIDE1(i) )
+#define CHECK_DOOR(i)   ( door_state == DOOR_OPEN || (door_state == DOOR_CLOSED && SIDE1(i)) )
 #define PIXEL_ACTIVE(i) ( (CHECK_TEMP(i)) && (CHECK_DOOR(i)) )
 #define confidence(x)   ( avg_norms[(x)]/count[(x)] )
 #define totalDistance(x)( euclidean_distance(starting_points[(x)], past_points[(x)]) )
@@ -156,7 +160,7 @@ uint8_t sortPixelsByConfidence(uint8_t *ordered_indexes) {
 }
 
 void publishEvents() {
-  if (door_state == LOW) return; // nothing happened if door is closed
+  if (door_state != DOOR_OPEN) return; // nothing happened if door is closed or ajar
 
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     if (past_points[i] != UNDEF_POINT && histories[i] > MIN_HISTORY &&
@@ -614,21 +618,24 @@ void processSensor() {
 }
 
 void checkDoorState() {
-  if (door_state != digitalRead(REED_PIN)) {
-    door_state = digitalRead(REED_PIN);
-    if (door_state == HIGH) {
-      publish("d1");
-    } else {
+  if (digitalRead(REED_PIN_CLOSE) == LOW) {
+    if (door_state != DOOR_CLOSED) {
+      door_state = DOOR_CLOSED;
       publish("d0");
     }
+  } else {
+    if (door_state == DOOR_CLOSED) {
+      publish("d1");
+    }
+    door_state = digitalRead(REED_PIN_AJAR) == LOW ? DOOR_AJAR : DOOR_OPEN;
   }
 }
 
 void initialize() {
   amg.begin();
 
-  pinMode(REED_PIN, INPUT_PULLUP);
-  door_state = 3;
+  pinMode(REED_PIN_CLOSE, INPUT_PULLUP);
+  pinMode(REED_PIN_AJAR, INPUT_PULLUP);
 
   // give sensor 13sec to stabilize
   blink(26);
