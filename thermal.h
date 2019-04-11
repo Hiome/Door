@@ -44,7 +44,7 @@ uint8_t cycles_since_forgotten = 0;
 #define DOOR_CLOSED 0
 #define DOOR_AJAR   1
 #define DOOR_OPEN   2
-uint8_t door_state = 9;
+uint8_t door_state = DOOR_CLOSED;
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -636,6 +636,13 @@ void initialize() {
 
   pinMode(REED_PIN_CLOSE, INPUT_PULLUP);
   pinMode(REED_PIN_AJAR, INPUT_PULLUP);
+
+  if (digitalRead(REED_PIN_CLOSE) == LOW) {
+    // set it to the opposite so that checkDoorState can properly publish first event.
+    // we could just publish the first door state here, but then it would publish
+    // out of order from the sensor version message.
+    door_state = DOOR_OPEN;
+  }
 
   // give sensor 13sec to stabilize
   blink(26);
