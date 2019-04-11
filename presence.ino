@@ -82,7 +82,7 @@ void publish(char* msg) {
   char sendBuf[15];
   uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, BATTERY_LEVEL, packetCount);
   radio.sendWithRetry(GATEWAYID, sendBuf, len, 5);
-  radio.sleep();
+
   if (packetCount < 9)
     packetCount++;
   else
@@ -103,7 +103,6 @@ void setup() {
   radio.initialize(RF69_915MHZ, NODEID, NETWORKID);
   radio.encrypt(ENCRYPTKEY);
   radio.enableAutoPower(ATC_RSSI);
-  radio.sleep();
 
   if (flash.initialize()) flash.sleep();
 
