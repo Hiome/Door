@@ -657,4 +657,3 @@ void loop_frd() {
   checkDoorState();
   processSensor();
 }
-

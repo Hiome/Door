@@ -116,4 +116,3 @@ void loop() {
   if (radio.receiveDone()) CheckForWirelessHEX(radio, flash, false);
   loop_frd();
 }
-
