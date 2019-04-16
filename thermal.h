@@ -15,8 +15,8 @@
 #define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
 #define GRADIENT_THRESHOLD      5    // 2º temp change gives us 100% confidence of person
 
-#define REED_PIN_AJAR           3
-#define REED_PIN_CLOSE          4
+#define REED_PIN_CLOSE          3
+#define REED_PIN_AJAR           4
 #include <Wire.h>
 #include <Adafruit_AMG88xx.h>
 
