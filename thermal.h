@@ -519,7 +519,9 @@ void processSensor() {
       }
 
       // ignore new points that showed up in middle 2 rows of grid
-      if (an == 0 || (nobodyInMiddle && pointOnBorder(sp)) || !pointInMiddle(sp)) {
+      if (an == 0 ||
+          (nobodyInMiddle && an > AVG_CONF_THRESHOLD && pointOnBorder(sp)) ||
+          !pointInMiddle(sp)) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
           if (past_points[j] == UNDEF_POINT) {
