@@ -500,27 +500,34 @@ void processSensor() {
       }
 
       bool nobodyInMiddle = true;
-      for (uint8_t i=0; i<MAX_PEOPLE; i++) {
-        if (past_points[i] != UNDEF_POINT && pointInMiddle(past_points[i]) &&
-              confidence(i) > AVG_CONF_THRESHOLD && histories[i] > 1) {
-          // there's already a person in the middle of the grid
-          // so it's unlikely a new valid person just appeared in the middle
-          // (person can't be running and door wasn't closed)
-          nobodyInMiddle = false;
-          break;
+      float closest_distance = 5;
+      if (an > 0) {
+        for (uint8_t j=0; j<MAX_PEOPLE; j++) {
+          if (past_points[j] != UNDEF_POINT && histories[j] > 1 &&
+                pointInMiddle(past_points[j]) && confidence(j) > AVG_CONF_THRESHOLD) {
+            // there's already a person in the middle of the grid
+            // so it's unlikely a new valid person just appeared in the middle
+            // (person can't be running and door wasn't closed)
+            nobodyInMiddle = false;
+            float d = euclidean_distance(past_points[j], points[i]);
+            if (d < closest_distance) {
+              closest_distance = d;
+              break;
+            }
+          }
         }
-      }
 
-      if (nobodyInMiddle && an > 0 && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
-        // if point is starting in row 5, move it back to row 6
-        // (giving benefit of doubt that this point appeared behind a closed door)
-        sp += GRID_EXTENT;
-        an = 0;
+        if (nobodyInMiddle && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
+          // if point is starting in row 5, move it back to row 6
+          // (giving benefit of doubt that this point appeared behind a closed door)
+          sp += GRID_EXTENT;
+          an = 0;
+        }
       }
 
       // ignore new points that showed up in middle 2 rows of grid
       if (an == 0 ||
-          (nobodyInMiddle && an > AVG_CONF_THRESHOLD && pointOnBorder(sp)) ||
+          ((nobodyInMiddle || closest_distance == 5) && an > AVG_CONF_THRESHOLD && pointOnBorder(sp)) ||
           !pointInMiddle(sp)) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
