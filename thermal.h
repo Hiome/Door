@@ -653,10 +653,12 @@ void initialize() {
     door_state = DOOR_OPEN;
   }
 
-  // give sensor 13sec to stabilize
-  blink(26);
-  // let sensor calibrate with light off
-  LOWPOWER_DELAY(SLEEP_2S);
+  #ifndef ENABLE_SERIAL
+    // give sensor 13sec to stabilize
+    blink(26);
+    // let sensor calibrate with light off
+    LOWPOWER_DELAY(SLEEP_2S);
+  #endif
 
   clearTrackers();
   amg.readPixels(avg_pixels);
