@@ -415,9 +415,13 @@ void processSensor() {
       uint8_t max_idx = UNDEF_POINT;
       for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
         if (past_points[idx] != UNDEF_POINT && pairs[idx] == i) {
-          float b = crossed[idx] ? 4.0 : 0.0;
-          float score = confidence(idx) * (max(totalDistance(idx), 0.5) + b);
-          score /= max(euclidean_distance(past_points[idx], points[i]), 0.9);
+          float score = confidence(idx);
+          if (score < AVG_CONF_THRESHOLD) {
+            score = 0;
+          } else {
+            score *= max(totalDistance(idx), 0.5) + (crossed[idx] ? 4.0 : 0.0);
+            score /= max(euclidean_distance(past_points[idx], points[i]), 0.9);
+          }
           if (score > max_score) {
             max_score = score;
             max_idx = idx;
