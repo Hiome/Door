@@ -13,7 +13,7 @@
 #define SLOW_ALPHA              0.0099
 #define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
 #define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
-#define GRADIENT_THRESHOLD      5    // 2º temp change gives us 100% confidence of person
+#define GRADIENT_THRESHOLD      3    // 2º temp change gives us 100% confidence of person
 
 #define REED_PIN_CLOSE          3
 #define REED_PIN_AJAR           4
