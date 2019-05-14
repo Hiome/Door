@@ -106,9 +106,10 @@ void setup() {
 
   if (flash.initialize()) flash.sleep();
 
+  publish(FIRMWARE_VERSION);
+
   initialize();
 
-  publish(FIRMWARE_VERSION);
   digitalWrite(LED, LOW);
 }
 
