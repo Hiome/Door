@@ -368,6 +368,14 @@ void processSensor() {
         float min_score = 100;
         uint8_t min_index = UNDEF_POINT;
         for (uint8_t j=0; j<total_masses; j++) {
+          if ((norm_pixels[points[j]] < past_norms[idx] &&
+              norm_pixels[points[j]] * 3.0 + 0.05 < past_norms[idx]) ||
+              (past_norms[idx] < norm_pixels[points[j]] &&
+              past_norms[idx] * 3.0 + 0.05 < norm_pixels[points[j]])) {
+            // more than a 3x difference between these points, don't pair them
+            continue;
+          }
+
           float d = euclidean_distance(past_points[idx], points[j]);
           if (d < max_distance) {
             float score = (d/max_distance) - (norm_pixels[points[j]]/past_norms[idx]);
