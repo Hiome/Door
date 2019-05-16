@@ -8,7 +8,7 @@
 #define DISTANCE_BONUS          2.0  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
-#define MAX_EMPTY_CYCLES        5    // max empty cycles to remember forgotten points
+#define MAX_EMPTY_CYCLES        3    // max empty cycles to remember forgotten points
 #define ALPHA                   0.01 // learning rate for background temp
 #define SLOW_ALPHA              0.0099
 #define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
@@ -34,6 +34,7 @@ float past_norms[MAX_PEOPLE];
 float avg_norms[MAX_PEOPLE];
 uint16_t count[MAX_PEOPLE];
 
+float forgotten_norms[MAX_PEOPLE];
 uint8_t forgotten_past_points[MAX_PEOPLE];
 uint8_t forgotten_starting_points[MAX_PEOPLE];
 uint16_t forgotten_histories[MAX_PEOPLE];
@@ -331,6 +332,7 @@ void processSensor() {
   // "Good luck."
   uint8_t temp_forgotten_points[MAX_PEOPLE];
   memset(temp_forgotten_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
+  float temp_forgotten_norms[MAX_PEOPLE];
   uint8_t temp_forgotten_starting_points[MAX_PEOPLE];
   uint16_t temp_forgotten_histories[MAX_PEOPLE];
   bool temp_forgotten_crossed[MAX_PEOPLE];
@@ -343,6 +345,7 @@ void processSensor() {
     if (confidence(idx) > AVG_CONF_THRESHOLD &&                                   \
         AXIS(past_points[idx]) > 1 && AXIS(past_points[idx]) < GRID_EXTENT) {     \
       temp_forgotten_points[temp_forgotten_num] = past_points[idx];               \
+      temp_forgotten_norms[temp_forgotten_num] = past_norms[idx];                 \
       temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];  \
       temp_forgotten_histories[temp_forgotten_num] = histories[idx];              \
       temp_forgotten_crossed[temp_forgotten_num] = crossed[idx];                  \
@@ -495,6 +498,10 @@ void processSensor() {
         // first let's check forgotten points for a match
         for (uint8_t j=0; j<forgotten_num; j++) {
           if (forgotten_past_points[j] != UNDEF_POINT &&
+              // point cannot be more than 2x warmer than forgotten point
+              ((forgotten_norms[j] < an && forgotten_norms[j] * 2.0 > an) ||
+                (an < forgotten_norms[j] && an * 2.0 > forgotten_norms[j])) &&
+              // point cannot have moved more than MAX_DISTANCE
               euclidean_distance(forgotten_past_points[j], points[i]) < MAX_DISTANCE) {
             h = forgotten_histories[j];
             sp = forgotten_starting_points[j];
@@ -512,24 +519,28 @@ void processSensor() {
       }
 
       bool nobodyInMiddle = true;
+      bool nobodyOnBoard = true;
       float closest_distance = 5;
       if (an > 0) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           if (past_points[j] != UNDEF_POINT && histories[j] > 1 &&
-                pointInMiddle(past_points[j]) && confidence(j) > AVG_CONF_THRESHOLD) {
+                confidence(j) > AVG_CONF_THRESHOLD) {
             // there's already a person in the middle of the grid
             // so it's unlikely a new valid person just appeared in the middle
             // (person can't be running and door wasn't closed)
-            nobodyInMiddle = false;
-            float d = euclidean_distance(past_points[j], points[i]);
-            if (d < closest_distance) {
-              closest_distance = d;
-              break;
+            nobodyOnBoard = false;
+            if (pointInMiddle(past_points[j])) {
+              nobodyInMiddle = false;
+              float d = euclidean_distance(past_points[j], points[i]);
+              if (d < closest_distance) {
+                closest_distance = d;
+                break;
+              }
             }
           }
         }
 
-        if (nobodyInMiddle && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
+        if (nobodyOnBoard && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
           // if point is starting in row 5, move it back to row 6
           // (giving benefit of doubt that this point appeared behind a closed door)
           sp += GRID_EXTENT;
@@ -561,6 +572,7 @@ void processSensor() {
   // copy forgotten data points for this frame to global scope
 
   if (temp_forgotten_num > 0) {
+    memcpy(forgotten_norms, temp_forgotten_norms, (MAX_PEOPLE*sizeof(float)));
     memcpy(forgotten_past_points, temp_forgotten_points, (MAX_PEOPLE*sizeof(uint8_t)));
     memcpy(forgotten_starting_points, temp_forgotten_starting_points,
                                                          (MAX_PEOPLE*sizeof(uint8_t)));
@@ -665,8 +677,11 @@ void initialize() {
     door_state = DOOR_OPEN;
   }
 
-  // give sensor 13sec to stabilize
-  blink(26);
+  blink(2);
+  publish(FIRMWARE_VERSION);
+
+  // give sensor 12sec to stabilize
+  blink(24);
   // let sensor calibrate with light off
   LOWPOWER_DELAY(SLEEP_2S);
 
