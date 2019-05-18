@@ -46,6 +46,7 @@ uint8_t cycles_since_forgotten = 0;
 #define DOOR_AJAR   1
 #define DOOR_OPEN   2
 uint8_t door_state = DOOR_CLOSED;
+uint8_t last_published_door_state = 9;
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -170,13 +171,13 @@ void publishEvents() {
       // point cleanly crossed grid
       if (abs(diff) >= (GRID_EXTENT/2)) {
         if (diff > 0) {
-          publish("1");
+          publish("1", true);
           // artificially shift starting point ahead 1 row so that
           // if user turns around now, algorithm considers it an exit
           int s = past_points[i] - GRID_EXTENT;
           starting_points[i] = max(s, 0);
         } else {
-          publish("2");
+          publish("2", true);
           int s = past_points[i] + GRID_EXTENT;
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
@@ -191,20 +192,19 @@ void publishEvents() {
 
 void publishMaybeEvents(uint8_t idx) {
   if (CHECK_DOOR(past_points[idx]) && !crossed[idx] && totalDistance(idx) > MIN_DISTANCE) {
-    if ((histories[idx] > MIN_HISTORY && confidence(idx) > (1.5*AVG_CONF_THRESHOLD)) ||
-        (histories[idx] > (2*MIN_HISTORY) && confidence(idx) > AVG_CONF_THRESHOLD)) {
+    if (histories[idx] > MIN_HISTORY && confidence(idx) > (1.5*AVG_CONF_THRESHOLD)) {
       if (SIDE1(past_points[idx])) {
-        publish("m1");
+        publish("m1", false);
       } else {
-        publish("m2");
+        publish("m2", false);
       }
     } else if (count[idx] >= histories[idx] &&
-        (histories[idx] >= MIN_HISTORY || confidence(idx) > 0.2)) {
+        (histories[idx] >= MIN_HISTORY || confidence(idx) > (2*CONFIDENCE_THRESHOLD))) {
       // we don't know what happened, add door to suspicious list
       if (SIDE1(past_points[idx])) {
-        publish("s1");
+        publish("s1", false);
       } else {
-        publish("s2");
+        publish("s2", false);
       }
     }
   }
@@ -652,15 +652,16 @@ void processSensor() {
 
 void checkDoorState() {
   if (digitalRead(REED_PIN_CLOSE) == LOW) {
-    if (door_state != DOOR_CLOSED) {
-      door_state = DOOR_CLOSED;
-      publish("d0");
-    }
+    door_state = DOOR_CLOSED;
   } else {
-    if (door_state == DOOR_CLOSED) {
-      publish("d1");
-    }
     door_state = digitalRead(REED_PIN_AJAR) == LOW ? DOOR_AJAR : DOOR_OPEN;
+  }
+  if (door_state == DOOR_CLOSED && last_published_door_state != DOOR_CLOSED) {
+    if (publish("d0", false))
+      last_published_door_state = DOOR_CLOSED;
+  } else if (door_state != DOOR_CLOSED && last_published_door_state == DOOR_CLOSED) {
+    if (publish("d1", false))
+      last_published_door_state = DOOR_OPEN;
   }
 }
 
@@ -670,15 +671,8 @@ void initialize() {
   pinMode(REED_PIN_CLOSE, INPUT_PULLUP);
   pinMode(REED_PIN_AJAR, INPUT_PULLUP);
 
-  if (digitalRead(REED_PIN_CLOSE) == LOW) {
-    // set it to the opposite so that checkDoorState can properly publish first event.
-    // we could just publish the first door state here, but then it would publish
-    // out of order from the sensor version message.
-    door_state = DOOR_OPEN;
-  }
-
   blink(2);
-  publish(FIRMWARE_VERSION);
+  publish(FIRMWARE_VERSION, true);
 
   // give sensor 12sec to stabilize
   blink(24);
