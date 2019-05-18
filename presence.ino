@@ -80,7 +80,13 @@ void blink(uint8_t times) {
 uint8_t packetCount = 1;
 bool publish(char* msg, bool forceSend) {
   // don't wait to send motion or suspicious message if network is busy
-  if (!forceSend && !radio.canSend()) return false;
+  if (!forceSend && !radio.canSend()) {
+    SERIAL_PRINT("skipped ");
+    SERIAL_PRINT(msg);
+    SERIAL_PRINTLN("\n\n");
+    SERIAL_FLUSH;
+    return false;
+  }
 
   char sendBuf[15];
   uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, BATTERY_LEVEL, packetCount);
