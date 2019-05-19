@@ -199,7 +199,7 @@ void publishMaybeEvents(uint8_t idx) {
         publish("m2", false);
       }
     } else if (count[idx] >= histories[idx] &&
-        (histories[idx] >= MIN_HISTORY || confidence(idx) > (2*CONFIDENCE_THRESHOLD))) {
+        (histories[idx] >= (2*MIN_HISTORY) || confidence(idx) > (2*CONFIDENCE_THRESHOLD))) {
       // we don't know what happened, add door to suspicious list
       if (SIDE1(past_points[idx])) {
         publish("s1", false);
@@ -656,12 +656,10 @@ void checkDoorState() {
   } else {
     door_state = digitalRead(REED_PIN_AJAR) == LOW ? DOOR_AJAR : DOOR_OPEN;
   }
-  if (door_state == DOOR_CLOSED && last_published_door_state != DOOR_CLOSED) {
-    if (publish("d0", false))
-      last_published_door_state = DOOR_CLOSED;
-  } else if (door_state != DOOR_CLOSED && last_published_door_state == DOOR_CLOSED) {
-    if (publish("d1", false))
-      last_published_door_state = DOOR_OPEN;
+  if (door_state != last_published_door_state &&
+      publish(door_state == DOOR_CLOSED ? "d0" : (door_state == DOOR_OPEN ? "d1" : "d2"),
+        false)) {
+    last_published_door_state = door_state;
   }
 }
 
