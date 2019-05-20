@@ -102,10 +102,12 @@ bool publish(char* msg, int8_t retries) {
     uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, BATTERY_LEVEL, packetCount);
     bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries);
 
-    if (packetCount < 9)
-      packetCount++;
-    else
-      packetCount = 1;
+    if (success || retries > 0) {
+      if (packetCount < 9)
+        packetCount++;
+      else
+        packetCount = 1;
+    }
 
     SERIAL_PRINT("published ");
     SERIAL_PRINT(sendBuf);

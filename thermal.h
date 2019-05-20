@@ -494,9 +494,37 @@ void processSensor() {
       uint8_t sp = points[i];
       bool cross = false;
       float an = norm_pixels[points[i]];
+      bool retroMatched = false;
 
-      if (cycles_since_forgotten < MAX_EMPTY_CYCLES) {
-        // first let's check forgotten points for a match
+      if (temp_forgotten_num > 0) {
+        // first let's check forgotten points from this frame for a match
+        for (uint8_t j=0; j<temp_forgotten_num; j++) {
+          if (temp_forgotten_points[j] != UNDEF_POINT &&
+              // point cannot be more than 3x warmer than forgotten point
+              ((temp_forgotten_norms[j] < an && temp_forgotten_norms[j]*3.0+0.05 > an) ||
+                (an < temp_forgotten_norms[j] && an*3.0+0.05 > temp_forgotten_norms[j])) &&
+              // point cannot have moved more than MAX_DISTANCE
+              euclidean_distance(temp_forgotten_points[j], points[i]) < MAX_DISTANCE) {
+            h = temp_forgotten_histories[j];
+            sp = temp_forgotten_starting_points[j];
+            cross = temp_forgotten_crossed[j];
+            if (points[i] == sp) {
+              h = 1;
+            } else if (SIDE(temp_forgotten_points[j]) != SIDE(points[i])) {
+              h = min(h + 1, MIN_HISTORY);
+            } else {
+              h++;
+            }
+            temp_forgotten_points[j] = UNDEF_POINT;
+            temp_forgotten_num--;
+            retroMatched = true;
+            break;
+          }
+        }
+      }
+
+      if (!retroMatched && cycles_since_forgotten < MAX_EMPTY_CYCLES) {
+        // second let's check past forgotten points for a match
         for (uint8_t j=0; j<forgotten_num; j++) {
           if (forgotten_past_points[j] != UNDEF_POINT &&
               // point cannot be more than 2x warmer than forgotten point
@@ -514,6 +542,7 @@ void processSensor() {
               h = min(h, MIN_HISTORY);
             }
             forgotten_past_points[j] = UNDEF_POINT;
+            retroMatched = true;
             break;
           }
         }
@@ -522,7 +551,7 @@ void processSensor() {
       bool nobodyInMiddle = true;
       bool nobodyOnBoard = true;
       float closest_distance = 5;
-      if (an > 0) {
+      if (!retroMatched) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           if (past_points[j] != UNDEF_POINT && histories[j] > 1 &&
                 confidence(j) > AVG_CONF_THRESHOLD) {
@@ -549,7 +578,7 @@ void processSensor() {
       }
 
       // ignore new points that showed up in middle 2 rows of grid
-      if (an == 0 ||
+      if (retroMatched ||
           ((nobodyInMiddle || closest_distance == 5) && an >= 0.4 && pointOnBorder(sp)) ||
           !pointInMiddle(sp)) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
