@@ -78,32 +78,42 @@ void blink(uint8_t times) {
 #endif
 
 uint8_t packetCount = 1;
-bool publish(char* msg, bool forceSend) {
-  // don't wait to send motion or suspicious message if network is busy
-  if (!forceSend && !radio.canSend()) {
-    SERIAL_PRINT("skipped ");
-    SERIAL_PRINT(msg);
+bool publish(char* msg, int8_t retries) {
+  if (retries == -1) {
+    if (!radio.canSend()) {
+      SERIAL_PRINT("skipped ");
+      SERIAL_PRINT(msg);
+      SERIAL_PRINTLN("\n\n");
+      SERIAL_FLUSH;
+      return false;
+    }
+
+    char sendBuf[15];
+    uint8_t len = sprintf(sendBuf, "%s;%d0", msg, BATTERY_LEVEL);
+    radio.send(GATEWAYID, sendBuf, len, false);
+
+    SERIAL_PRINT("published ");
+    SERIAL_PRINT(sendBuf);
     SERIAL_PRINTLN("\n\n");
     SERIAL_FLUSH;
-    return false;
+    return true;
+  } else {
+    char sendBuf[15];
+    uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, BATTERY_LEVEL, packetCount);
+    bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries);
+
+    if (packetCount < 9)
+      packetCount++;
+    else
+      packetCount = 1;
+
+    SERIAL_PRINT("published ");
+    SERIAL_PRINT(sendBuf);
+    SERIAL_PRINTLN("\n\n");
+    SERIAL_FLUSH;
+
+    return success;
   }
-
-  char sendBuf[15];
-  uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, BATTERY_LEVEL, packetCount);
-
-  radio.sendWithRetry(GATEWAYID, sendBuf, len, 10);
-
-  if (packetCount < 9)
-    packetCount++;
-  else
-    packetCount = 1;
-
-  SERIAL_PRINT("published ");
-  SERIAL_PRINT(sendBuf);
-  SERIAL_PRINTLN("\n\n");
-  SERIAL_FLUSH;
-
-  return true;
 }
 
 void setup() {

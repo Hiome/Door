@@ -171,13 +171,13 @@ void publishEvents() {
       // point cleanly crossed grid
       if (abs(diff) >= (GRID_EXTENT/2)) {
         if (diff > 0) {
-          publish("1", true);
+          publish("1", 10);
           // artificially shift starting point ahead 1 row so that
           // if user turns around now, algorithm considers it an exit
           int s = past_points[i] - GRID_EXTENT;
           starting_points[i] = max(s, 0);
         } else {
-          publish("2", true);
+          publish("2", 10);
           int s = past_points[i] + GRID_EXTENT;
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
@@ -191,20 +191,21 @@ void publishEvents() {
 }
 
 void publishMaybeEvents(uint8_t idx) {
-  if (CHECK_DOOR(past_points[idx]) && !crossed[idx] && totalDistance(idx) > MIN_DISTANCE) {
-    if (histories[idx] > MIN_HISTORY && confidence(idx) > (1.5*AVG_CONF_THRESHOLD)) {
+  if (CHECK_DOOR(past_points[idx]) && !crossed[idx] && histories[idx] > MIN_HISTORY &&
+      totalDistance(idx) > MAX_DISTANCE) {
+    if (confidence(idx) > (2*AVG_CONF_THRESHOLD)) {
       if (SIDE1(past_points[idx])) {
-        publish("m1", false);
+        publish("m1", -1);
       } else {
-        publish("m2", false);
+        publish("m2", -1);
       }
     } else if (count[idx] >= histories[idx] &&
         (histories[idx] >= (2*MIN_HISTORY) || confidence(idx) > (2*CONFIDENCE_THRESHOLD))) {
       // we don't know what happened, add door to suspicious list
       if (SIDE1(past_points[idx])) {
-        publish("s1", false);
+        publish("s1", -1);
       } else {
-        publish("s2", false);
+        publish("s2", -1);
       }
     }
   }
@@ -366,7 +367,7 @@ void processSensor() {
   if (past_total_masses > 0) {
     for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
       if (past_points[idx] != UNDEF_POINT) {
-        float max_distance = MAX_DISTANCE + sq(past_norms[idx]) * DISTANCE_BONUS;
+        float max_distance = MAX_DISTANCE + past_norms[idx] * DISTANCE_BONUS;
         float min_distance = 0;
         float min_score = 100;
         uint8_t min_index = UNDEF_POINT;
@@ -544,7 +545,6 @@ void processSensor() {
           // if point is starting in row 5, move it back to row 6
           // (giving benefit of doubt that this point appeared behind a closed door)
           sp += GRID_EXTENT;
-          an = 0;
         }
       }
 
@@ -656,10 +656,10 @@ void checkDoorState() {
   } else {
     door_state = digitalRead(REED_PIN_AJAR) == LOW ? DOOR_AJAR : DOOR_OPEN;
   }
-  if (door_state != last_published_door_state &&
-      publish(door_state == DOOR_CLOSED ? "d0" : (door_state == DOOR_OPEN ? "d1" : "d2"),
-        false)) {
-    last_published_door_state = door_state;
+  if (((door_state == DOOR_CLOSED && last_published_door_state != DOOR_CLOSED) ||
+       (door_state != DOOR_CLOSED && last_published_door_state != DOOR_OPEN)) &&
+      publish(door_state == DOOR_CLOSED ? "d0" : "d1", 0)) {
+    last_published_door_state = door_state == DOOR_CLOSED ? DOOR_CLOSED : DOOR_OPEN;
   }
 }
 
@@ -670,7 +670,7 @@ void initialize() {
   pinMode(REED_PIN_AJAR, INPUT_PULLUP);
 
   blink(2);
-  publish(FIRMWARE_VERSION, true);
+  publish(FIRMWARE_VERSION, 10);
 
   // give sensor 12sec to stabilize
   blink(24);
