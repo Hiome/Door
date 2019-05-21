@@ -107,6 +107,7 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 #define PIXEL_ACTIVE(i) ( (CHECK_TEMP(i)) && (CHECK_DOOR(i)) )
 #define confidence(x)   ( avg_norms[(x)]/count[(x)] )
 #define totalDistance(x)( euclidean_distance(starting_points[(x)], past_points[(x)]) )
+#define doorOpenedAgo(x)( frames_since_door_open < (x) && door_state == DOOR_OPEN )
 
 // check if point is on the top or bottom edges
 // xxxxxxxx
@@ -550,41 +551,31 @@ void processSensor() {
 //      }
 
       bool nobodyInMiddle = true;
-      bool nobodyOnBoard = true;
-      float closest_distance = 5;
       if (!retroMatched) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           if (past_points[j] != UNDEF_POINT && histories[j] > 1 &&
-                confidence(j) > AVG_CONF_THRESHOLD) {
+                confidence(j) > AVG_CONF_THRESHOLD && pointInMiddle(past_points[j]) &&
+                euclidean_distance(past_points[j], points[i]) < 5) {
             // there's already a person in the middle of the grid
             // so it's unlikely a new valid person just appeared in the middle
             // (person can't be running and door wasn't closed)
-            nobodyOnBoard = false;
-            if (pointInMiddle(past_points[j])) {
-              nobodyInMiddle = false;
-              float d = euclidean_distance(past_points[j], points[i]);
-              if (d < closest_distance) {
-                closest_distance = d;
-                break;
-              }
-            }
+            nobodyInMiddle = false;
+            break;
           }
         }
 
-        if (nobodyOnBoard && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
-          // if point is starting in row 5, move it back to row 6
-          // (giving benefit of doubt that this point appeared behind a closed door)
+        if (doorOpenedAgo(2) && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
+          // if point is starting in row 5 right after door opens, move it back to row 6
           sp += GRID_EXTENT;
         }
       }
 
       // ignore new points on side 1 immediately after door opens
-      if (frames_since_door_open < 3 && door_state == DOOR_OPEN && SIDE1(sp)) continue;
+      if (doorOpenedAgo(3) && SIDE1(sp)) continue;
 
       // ignore new points that showed up in middle 2 rows of grid
       if (retroMatched ||
-          ((nobodyInMiddle || closest_distance == 5) && an >= 0.4 && pointOnBorder(sp)) ||
-          !pointInMiddle(sp)) {
+          (nobodyInMiddle && an >= 0.4 && pointOnBorder(sp)) || !pointInMiddle(sp)) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
           if (past_points[j] == UNDEF_POINT) {
