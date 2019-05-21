@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.2"
+#define FIRMWARE_VERSION        "V0.2b1"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -47,6 +47,7 @@ uint8_t cycles_since_forgotten = 0;
 #define DOOR_OPEN   2
 uint8_t door_state = DOOR_CLOSED;
 uint8_t last_published_door_state = 9;
+uint8_t frames_since_door_open = 0;
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -496,57 +497,57 @@ void processSensor() {
       float an = norm_pixels[points[i]];
       bool retroMatched = false;
 
-      if (temp_forgotten_num > 0) {
-        // first let's check forgotten points from this frame for a match
-        for (uint8_t j=0; j<temp_forgotten_num; j++) {
-          if (temp_forgotten_points[j] != UNDEF_POINT &&
-              // point cannot be more than 3x warmer than forgotten point
-              ((temp_forgotten_norms[j] < an && temp_forgotten_norms[j]*3.0+0.05 > an) ||
-                (an < temp_forgotten_norms[j] && an*3.0+0.05 > temp_forgotten_norms[j])) &&
-              // point cannot have moved more than MAX_DISTANCE
-              euclidean_distance(temp_forgotten_points[j], points[i]) < MAX_DISTANCE) {
-            h = temp_forgotten_histories[j];
-            sp = temp_forgotten_starting_points[j];
-            cross = temp_forgotten_crossed[j];
-            if (points[i] == sp) {
-              h = 1;
-            } else if (SIDE(temp_forgotten_points[j]) != SIDE(points[i])) {
-              h = min(h + 1, MIN_HISTORY);
-            } else {
-              h++;
-            }
-            temp_forgotten_points[j] = UNDEF_POINT;
-            temp_forgotten_num--;
-            retroMatched = true;
-            break;
-          }
-        }
-      }
-
-      if (!retroMatched && cycles_since_forgotten < MAX_EMPTY_CYCLES) {
-        // second let's check past forgotten points for a match
-        for (uint8_t j=0; j<forgotten_num; j++) {
-          if (forgotten_past_points[j] != UNDEF_POINT &&
-              // point cannot be more than 2x warmer than forgotten point
-              ((forgotten_norms[j] < an && forgotten_norms[j] * 2.0 > an) ||
-                (an < forgotten_norms[j] && an * 2.0 > forgotten_norms[j])) &&
-              // point cannot have moved more than MAX_DISTANCE
-              euclidean_distance(forgotten_past_points[j], points[i]) < MAX_DISTANCE) {
-            h = forgotten_histories[j];
-            sp = forgotten_starting_points[j];
-            cross = forgotten_crossed[j];
-            an = 0;
-            if (points[i] == sp) {
-              h = 1;
-            } else if (SIDE(forgotten_past_points[j]) != SIDE(points[i])) {
-              h = min(h, MIN_HISTORY);
-            }
-            forgotten_past_points[j] = UNDEF_POINT;
-            retroMatched = true;
-            break;
-          }
-        }
-      }
+//      if (temp_forgotten_num > 0) {
+//        // first let's check forgotten points from this frame for a match
+//        for (uint8_t j=0; j<temp_forgotten_num; j++) {
+//          if (temp_forgotten_points[j] != UNDEF_POINT &&
+//              // point cannot be more than 3x warmer than forgotten point
+//              ((temp_forgotten_norms[j] < an && temp_forgotten_norms[j]*3.0+0.05 > an) ||
+//                (an < temp_forgotten_norms[j] && an*3.0+0.05 > temp_forgotten_norms[j])) &&
+//              // point cannot have moved more than MAX_DISTANCE
+//              euclidean_distance(temp_forgotten_points[j], points[i]) < MAX_DISTANCE) {
+//            h = temp_forgotten_histories[j];
+//            sp = temp_forgotten_starting_points[j];
+//            cross = temp_forgotten_crossed[j];
+//            if (points[i] == sp) {
+//              h = 1;
+//            } else if (SIDE(temp_forgotten_points[j]) != SIDE(points[i])) {
+//              h = min(h + 1, MIN_HISTORY);
+//            } else {
+//              h++;
+//            }
+//            temp_forgotten_points[j] = UNDEF_POINT;
+//            temp_forgotten_num--;
+//            retroMatched = true;
+//            break;
+//          }
+//        }
+//      }
+//
+//      if (!retroMatched && cycles_since_forgotten < MAX_EMPTY_CYCLES) {
+//        // second let's check past forgotten points for a match
+//        for (uint8_t j=0; j<forgotten_num; j++) {
+//          if (forgotten_past_points[j] != UNDEF_POINT &&
+//              // point cannot be more than 2x warmer than forgotten point
+//              ((forgotten_norms[j] < an && forgotten_norms[j] * 2.0 > an) ||
+//                (an < forgotten_norms[j] && an * 2.0 > forgotten_norms[j])) &&
+//              // point cannot have moved more than MAX_DISTANCE
+//              euclidean_distance(forgotten_past_points[j], points[i]) < MAX_DISTANCE) {
+//            h = forgotten_histories[j];
+//            sp = forgotten_starting_points[j];
+//            cross = forgotten_crossed[j];
+//            an = 0;
+//            if (points[i] == sp) {
+//              h = 1;
+//            } else if (SIDE(forgotten_past_points[j]) != SIDE(points[i])) {
+//              h = min(h, MIN_HISTORY);
+//            }
+//            forgotten_past_points[j] = UNDEF_POINT;
+//            retroMatched = true;
+//            break;
+//          }
+//        }
+//      }
 
       bool nobodyInMiddle = true;
       bool nobodyOnBoard = true;
@@ -576,6 +577,9 @@ void processSensor() {
           sp += GRID_EXTENT;
         }
       }
+
+      // ignore new points on side 1 immediately after door opens
+      if (frames_since_door_open < 3 && door_state == DOOR_OPEN && SIDE1(sp)) continue;
 
       // ignore new points that showed up in middle 2 rows of grid
       if (retroMatched ||
@@ -623,6 +627,10 @@ void processSensor() {
   // publish event if any people moved through doorway yet
 
   publishEvents();
+
+  if (frames_since_door_open < 5) {
+    frames_since_door_open++;
+  }
 
   // wrap up with debugging output
 
@@ -680,10 +688,14 @@ void processSensor() {
 }
 
 void checkDoorState() {
+  uint8_t last_door_state = door_state;
   if (digitalRead(REED_PIN_CLOSE) == LOW) {
     door_state = DOOR_CLOSED;
   } else {
     door_state = digitalRead(REED_PIN_AJAR) == LOW ? DOOR_AJAR : DOOR_OPEN;
+  }
+  if (last_door_state != door_state) {
+    frames_since_door_open = 0;
   }
   if (((door_state == DOOR_CLOSED && last_published_door_state != DOOR_CLOSED) ||
        (door_state != DOOR_CLOSED && last_published_door_state != DOOR_OPEN)) &&
