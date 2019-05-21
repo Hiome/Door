@@ -8,7 +8,6 @@
 #define DISTANCE_BONUS          2.0  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
-#define MAX_EMPTY_CYCLES        3    // max empty cycles to remember forgotten points
 #define ALPHA                   0.01 // learning rate for background temp
 #define SLOW_ALPHA              0.0099
 #define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
@@ -33,14 +32,6 @@ bool crossed[MAX_PEOPLE];
 float past_norms[MAX_PEOPLE];
 float avg_norms[MAX_PEOPLE];
 uint16_t count[MAX_PEOPLE];
-
-float forgotten_norms[MAX_PEOPLE];
-uint8_t forgotten_past_points[MAX_PEOPLE];
-uint8_t forgotten_starting_points[MAX_PEOPLE];
-uint16_t forgotten_histories[MAX_PEOPLE];
-bool forgotten_crossed[MAX_PEOPLE];
-uint8_t forgotten_num = 0;
-uint8_t cycles_since_forgotten = 0;
 
 #define DOOR_CLOSED 0
 #define DOOR_AJAR   1
@@ -340,21 +331,16 @@ void processSensor() {
   uint16_t temp_forgotten_histories[MAX_PEOPLE];
   bool temp_forgotten_crossed[MAX_PEOPLE];
   uint8_t temp_forgotten_num = 0;
-  uint8_t forgotten_num_frd = 0;
 
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT ({                                                         \
     publishMaybeEvents(idx);                                                      \
-    if (confidence(idx) > AVG_CONF_THRESHOLD &&                                   \
-        AXIS(past_points[idx]) > 1 && AXIS(past_points[idx]) < GRID_EXTENT) {     \
-      temp_forgotten_points[temp_forgotten_num] = past_points[idx];               \
-      temp_forgotten_norms[temp_forgotten_num] = past_norms[idx];                 \
-      temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];  \
-      temp_forgotten_histories[temp_forgotten_num] = histories[idx];              \
-      temp_forgotten_crossed[temp_forgotten_num] = crossed[idx];                  \
-      temp_forgotten_num++;                                                       \
-    }                                                                             \
-    forgotten_num_frd++;                                                          \
+    temp_forgotten_points[temp_forgotten_num] = past_points[idx];                 \
+    temp_forgotten_norms[temp_forgotten_num] = past_norms[idx];                   \
+    temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];    \
+    temp_forgotten_histories[temp_forgotten_num] = histories[idx];                \
+    temp_forgotten_crossed[temp_forgotten_num] = crossed[idx];                    \
+    temp_forgotten_num++;                                                         \
     pairs[idx] = UNDEF_POINT;                                                     \
     past_points[idx] = UNDEF_POINT;                                               \
     histories[idx] = 0;                                                           \
@@ -417,7 +403,7 @@ void processSensor() {
         }
 
         if (min_index != UNDEF_POINT && crossed[idx] &&
-            (total_masses + forgotten_num_frd) < past_total_masses &&
+            (total_masses + temp_forgotten_num) < past_total_masses &&
             (AXIS(past_points[idx]) <= min(min_distance, BORDER_PADDING) ||
             (UPPER_BOUND - AXIS(past_points[idx])) <= min(min_distance, BORDER_PADDING))) {
           // we know some point disappeared in this frame, and we know this point already
@@ -514,57 +500,31 @@ void processSensor() {
       float an = norm_pixels[points[i]];
       bool retroMatched = false;
 
-//      if (temp_forgotten_num > 0) {
-//        // first let's check forgotten points from this frame for a match
-//        for (uint8_t j=0; j<temp_forgotten_num; j++) {
-//          if (temp_forgotten_points[j] != UNDEF_POINT &&
-//              // point cannot be more than 3x warmer than forgotten point
-//              ((temp_forgotten_norms[j] < an && temp_forgotten_norms[j]*3.0+0.05 > an) ||
-//                (an < temp_forgotten_norms[j] && an*3.0+0.05 > temp_forgotten_norms[j])) &&
-//              // point cannot have moved more than MAX_DISTANCE
-//              euclidean_distance(temp_forgotten_points[j], points[i]) < MAX_DISTANCE) {
-//            h = temp_forgotten_histories[j];
-//            sp = temp_forgotten_starting_points[j];
-//            cross = temp_forgotten_crossed[j];
-//            if (points[i] == sp) {
-//              h = 1;
-//            } else if (SIDE(temp_forgotten_points[j]) != SIDE(points[i])) {
-//              h = min(h + 1, MIN_HISTORY);
-//            } else {
-//              h++;
-//            }
-//            temp_forgotten_points[j] = UNDEF_POINT;
-//            temp_forgotten_num--;
-//            retroMatched = true;
-//            break;
-//          }
-//        }
-//      }
-//
-//      if (!retroMatched && cycles_since_forgotten < MAX_EMPTY_CYCLES) {
-//        // second let's check past forgotten points for a match
-//        for (uint8_t j=0; j<forgotten_num; j++) {
-//          if (forgotten_past_points[j] != UNDEF_POINT &&
-//              // point cannot be more than 2x warmer than forgotten point
-//              ((forgotten_norms[j] < an && forgotten_norms[j] * 2.0 > an) ||
-//                (an < forgotten_norms[j] && an * 2.0 > forgotten_norms[j])) &&
-//              // point cannot have moved more than MAX_DISTANCE
-//              euclidean_distance(forgotten_past_points[j], points[i]) < MAX_DISTANCE) {
-//            h = forgotten_histories[j];
-//            sp = forgotten_starting_points[j];
-//            cross = forgotten_crossed[j];
-//            an = 0;
-//            if (points[i] == sp) {
-//              h = 1;
-//            } else if (SIDE(forgotten_past_points[j]) != SIDE(points[i])) {
-//              h = min(h, MIN_HISTORY);
-//            }
-//            forgotten_past_points[j] = UNDEF_POINT;
-//            retroMatched = true;
-//            break;
-//          }
-//        }
-//      }
+      if (temp_forgotten_num > 0) {
+        // first let's check forgotten points from this frame for a match
+        for (uint8_t j=0; j<temp_forgotten_num; j++) {
+          if (temp_forgotten_points[j] != UNDEF_POINT &&
+              // point cannot be more than 3x warmer than forgotten point
+              ((temp_forgotten_norms[j] < an && temp_forgotten_norms[j]*3.0+0.05 > an) ||
+                (an < temp_forgotten_norms[j] && an*3.0+0.05 > temp_forgotten_norms[j])) &&
+              // point cannot have moved more than MAX_DISTANCE
+              euclidean_distance(temp_forgotten_points[j], points[i]) < MAX_DISTANCE) {
+            h = temp_forgotten_histories[j];
+            sp = temp_forgotten_starting_points[j];
+            cross = temp_forgotten_crossed[j];
+            if (points[i] == sp) {
+              h = 1;
+            } else if (SIDE(temp_forgotten_points[j]) != SIDE(points[i])) {
+              h = min(h + 1, MIN_HISTORY);
+            } else {
+              h++;
+            }
+            temp_forgotten_points[j] = UNDEF_POINT;
+            retroMatched = true;
+            break;
+          }
+        }
+      }
 
       bool nobodyInMiddle = true;
       if (!retroMatched) {
@@ -606,28 +566,6 @@ void processSensor() {
           }
         }
       }
-    }
-  }
-
-  // copy forgotten data points for this frame to global scope
-
-  if (temp_forgotten_num > 0) {
-    memcpy(forgotten_norms, temp_forgotten_norms, (MAX_PEOPLE*sizeof(float)));
-    memcpy(forgotten_past_points, temp_forgotten_points, (MAX_PEOPLE*sizeof(uint8_t)));
-    memcpy(forgotten_starting_points, temp_forgotten_starting_points,
-                                                         (MAX_PEOPLE*sizeof(uint8_t)));
-    memcpy(forgotten_histories, temp_forgotten_histories, (MAX_PEOPLE*sizeof(uint16_t)));
-    memcpy(forgotten_crossed, temp_forgotten_crossed, (MAX_PEOPLE*sizeof(bool)));
-    forgotten_num = temp_forgotten_num;
-    cycles_since_forgotten = 0;
-    SERIAL_PRINTLN("saved");
-  } else if (cycles_since_forgotten < MAX_EMPTY_CYCLES) {
-    cycles_since_forgotten++;
-    if (cycles_since_forgotten == MAX_EMPTY_CYCLES && forgotten_num > 0) {
-      // clear forgotten points list
-      memset(forgotten_past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
-      forgotten_num = 0;
-      SERIAL_PRINTLN("forgot");
     }
   }
 
