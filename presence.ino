@@ -111,6 +111,7 @@ bool publish(char* msg, int8_t retries) {
 
     SERIAL_PRINT("published ");
     SERIAL_PRINT(sendBuf);
+    if (!success) SERIAL_PRINT(" (failed)");
     SERIAL_PRINTLN("\n\n");
     SERIAL_FLUSH;
 

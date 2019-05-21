@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.2b1"
+#define FIRMWARE_VERSION        "V0.2b2"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -369,7 +369,18 @@ void processSensor() {
   if (past_total_masses > 0) {
     for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
       if (past_points[idx] != UNDEF_POINT) {
-        float max_distance = MAX_DISTANCE + past_norms[idx] * DISTANCE_BONUS;
+        // if door just opened, drop any existing points on side 1
+        if (doorOpenedAgo(1) && SIDE1(past_points[idx])) {
+          FORGET_POINT;
+          continue;
+        }
+
+        float multiplier = past_norms[idx];
+        if (AXIS(past_points[idx]) == 1 || AXIS(past_points[idx]) == GRID_EXTENT) {
+          // make up for the fact that we already gimped confidence by 1/3
+          multiplier *= 2.0;
+        }
+        float max_distance = MAX_DISTANCE + multiplier * DISTANCE_BONUS;
         float min_distance = 0;
         float min_score = 100;
         uint8_t min_index = UNDEF_POINT;
@@ -438,6 +449,7 @@ void processSensor() {
             score = 0;
           } else {
             score *= max(totalDistance(idx), 0.5) + (crossed[idx] ? 4.0 : 0.0);
+            score *= (1 - abs(norm_pixels[points[i]] - past_norms[idx]));
             score /= max(euclidean_distance(past_points[idx], points[i]), 0.9);
           }
           if (score > max_score) {
