@@ -112,10 +112,12 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 #ifdef YAXIS
   #define pointOnBorder(i) ( (i) < (GRID_EXTENT * 3) || (i) >= (GRID_EXTENT * 5) )
   #define pointInMiddle(i) ( (i) >= (GRID_EXTENT * 2) && (i) < (GRID_EXTENT * 6) )
+  #define pointOnEdge(i)   ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
 #else
   #define pointOnBorder(i) ( AXIS(i) < (GRID_EXTENT/2) || AXIS(i) > (GRID_EXTENT/2 + 1) )
   #define pointInMiddle(i) ( AXIS(i) > BORDER_PADDING &&            \
                              AXIS(i) < (UPPER_BOUND-BORDER_PADDING) )
+  #define pointOnEdge(i)   ( AXIS(i) == 1 || AXIS(i) == GRID_EXTENT )
 #endif
 
 // check if point is on left or right edges
@@ -127,8 +129,7 @@ int sort_asc(const void *cmp1, const void *cmp2) {
 // xoooooox
 // xoooooox
 // xxxxxxxx
-#define pointOnOuterEdge(i) ( AXIS(i) == 1 || AXIS(i) == GRID_EXTENT ||      \
-                              NOT_AXIS(i) == 1 || NOT_AXIS(i) == GRID_EXTENT )
+#define pointOnOuterEdge(i)( pointOnEdge(i) || NOT_AXIS(i)==1 || NOT_AXIS(i)==GRID_EXTENT )
 
 uint8_t sortPixelsByConfidence(uint8_t *ordered_indexes) {
   uint8_t count = 0;
@@ -362,10 +363,8 @@ void processSensor() {
         }
 
         float multiplier = past_norms[idx];
-        if (AXIS(past_points[idx]) == 1 || AXIS(past_points[idx]) == GRID_EXTENT) {
-          // make up for the fact that we already gimped confidence by 1/3
-          multiplier *= 2.0;
-        }
+        // make up for the fact that we already gimped confidence by 1/3
+        if (pointOnEdge(past_points[idx])) multiplier *= 3.05;
         float max_distance = MAX_DISTANCE + multiplier * DISTANCE_BONUS;
         float min_distance = 0;
         float min_score = 100;
@@ -373,9 +372,9 @@ void processSensor() {
         for (uint8_t j=0; j<total_masses; j++) {
           // if more than a 3x difference between these points
           if ((norm_pixels[points[j]] < past_norms[idx] &&
-              norm_pixels[points[j]] * 3.0 + 0.05 < past_norms[idx]) ||
+              norm_pixels[points[j]] * 3.05 < past_norms[idx]) ||
               (past_norms[idx] < norm_pixels[points[j]] &&
-              past_norms[idx] * 3.0 + 0.05 < norm_pixels[points[j]]) ||
+              past_norms[idx] * 3.05 < norm_pixels[points[j]]) ||
               // or if switching sides with low confidence
               (confidence(idx) < AVG_CONF_THRESHOLD &&
               SIDE(points[j]) != SIDE(past_points[idx]))) {
@@ -469,27 +468,37 @@ void processSensor() {
       for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
         if (past_points[idx] != UNDEF_POINT && pairs[idx] == i) {
           // closest point matched, update trackers
-          if (past_points[idx] != points[i]) {
-            if (SIDE(points[i]) != SIDE(past_points[idx])) {
-              if (confidence(idx) > 0.5) {
-                histories[idx]++;
-              } else {
-                // point just crossed threshold, let's reduce its history to force
-                // it to spend another cycle on this side before we count the event
-                histories[idx] = min(histories[idx] + 1, MIN_HISTORY);
-              }
-            } else {
-              if (points[i] == starting_points[idx]) {
-                histories[idx] = 1;
-              } else {
-                histories[idx]++;
-              }
-            }
+          if (pointOnEdge(points[i]) && SIDE(starting_points[idx]) == SIDE(points[i])) {
+            // always consider a point on the outer edge as just starting off
             past_points[idx] = points[i];
+            starting_points[idx] = points[i];
+            past_norms[idx] = norm_pixels[points[i]];
+            histories[idx] = 1;
+            avg_norms[idx] = past_norms[idx];
+            count[idx] = 1;
+          } else {
+            if (past_points[idx] != points[i]) {
+              if (SIDE(points[i]) != SIDE(past_points[idx])) {
+                if (confidence(idx) > 0.5) {
+                  histories[idx]++;
+                } else {
+                  // point just crossed threshold, let's reduce its history to force
+                  // it to spend another cycle on this side before we count the event
+                  histories[idx] = min(histories[idx] + 1, MIN_HISTORY);
+                }
+              } else {
+                if (points[i] == starting_points[idx]) {
+                  histories[idx] = 1;
+                } else {
+                  histories[idx]++;
+                }
+              }
+              past_points[idx] = points[i];
+            }
+            past_norms[idx] = norm_pixels[points[i]];
+            avg_norms[idx] += past_norms[idx];
+            count[idx]++;
           }
-          past_norms[idx] = norm_pixels[points[i]];
-          avg_norms[idx] += past_norms[idx];
-          count[idx]++;
           break;
         }
       }
@@ -501,13 +510,13 @@ void processSensor() {
       float an = norm_pixels[points[i]];
       bool retroMatched = false;
 
-      if (temp_forgotten_num > 0) {
+      if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check forgotten points from this frame for a match
         for (uint8_t j=0; j<temp_forgotten_num; j++) {
           if (temp_forgotten_points[j] != UNDEF_POINT &&
               // point cannot be more than 3x warmer than forgotten point
-              ((temp_forgotten_norms[j] < an && temp_forgotten_norms[j]*3.0+0.05 > an) ||
-                (an < temp_forgotten_norms[j] && an*3.0+0.05 > temp_forgotten_norms[j])) &&
+              ((temp_forgotten_norms[j] < an && temp_forgotten_norms[j]*3.05 > an) ||
+                (an < temp_forgotten_norms[j] && an*3.05 > temp_forgotten_norms[j])) &&
               // point cannot have moved more than MAX_DISTANCE
               euclidean_distance(temp_forgotten_points[j], points[i]) < MAX_DISTANCE) {
             h = temp_forgotten_histories[j];
