@@ -385,7 +385,8 @@ void processSensor() {
 
           float d = euclidean_distance(past_points[idx], points[j]);
           if (d < max_distance) {
-            float score = (d/max_distance) - (norm_pixels[points[j]]/past_norms[idx]);
+            float score = (d/max_distance) - (norm_pixels[points[j]]/past_norms[idx]) +
+                            max(AVG_CONF_THRESHOLD - norm_pixels[points[j]], 0);
             if (score < min_score) {
               min_score = score;
               min_index = j;
