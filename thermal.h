@@ -1,11 +1,11 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.2.1"
+#define FIRMWARE_VERSION        "V0.2.2"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
-#define DISTANCE_BONUS          2.0  // max extra distance a hot point can move
+#define DISTANCE_BONUS          2.5  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define ALPHA                   0.01 // learning rate for background temp
@@ -370,19 +370,23 @@ void processSensor() {
         float min_score = 100;
         uint8_t min_index = UNDEF_POINT;
         for (uint8_t j=0; j<total_masses; j++) {
-          // if more than a 3x difference between these points
+          // if more than a 3x difference between these points, don't pair them
           if ((norm_pixels[points[j]] < past_norms[idx] &&
               norm_pixels[points[j]] * 3.05 < past_norms[idx]) ||
               (past_norms[idx] < norm_pixels[points[j]] &&
-              past_norms[idx] * 3.05 < norm_pixels[points[j]]) ||
-              // or if switching sides with low confidence
-              (confidence(idx) < AVG_CONF_THRESHOLD &&
-              SIDE(points[j]) != SIDE(past_points[idx]))) {
-            // don't pair them
+              past_norms[idx] * 3.05 < norm_pixels[points[j]])) {
             continue;
           }
 
           float d = euclidean_distance(past_points[idx], points[j]);
+
+          // if switching sides with low confidence, don't pair
+          if (SIDE(points[j]) != SIDE(past_points[idx]) &&
+              (confidence(idx) < AVG_CONF_THRESHOLD ||
+              norm_pixels[points[j]]/d < CONFIDENCE_THRESHOLD)) {
+            continue;
+          }
+
           if (d < max_distance) {
             float score = (d/max_distance) - (norm_pixels[points[j]]/past_norms[idx]) +
                             max(AVG_CONF_THRESHOLD - norm_pixels[points[j]], 0);
@@ -479,7 +483,7 @@ void processSensor() {
           } else {
             if (past_points[idx] != points[i]) {
               if (SIDE(points[i]) != SIDE(past_points[idx])) {
-                if (confidence(idx) > 0.5) {
+                if (confidence(idx) > 0.5 && norm_pixels[points[i]] > 0.5) {
                   histories[idx]++;
                 } else {
                   // point just crossed threshold, let's reduce its history to force
