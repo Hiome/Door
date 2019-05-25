@@ -8,8 +8,7 @@
 #define DISTANCE_BONUS          2.5  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
-#define ALPHA                   0.01 // learning rate for background temp
-#define SLOW_ALPHA              0.0099
+#define ALPHA                   0.0001
 #define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
 #define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
 #define GRADIENT_THRESHOLD      3    // 2º temp change gives us 100% confidence of person
@@ -213,7 +212,7 @@ bool normalizePixels() {
   // calculate hash for pixels
   float _hsh = 0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    _hsh += sq(cur_pixels[i]);
+    _hsh += sq(cur_pixels[i] + i);
   }
   if (_hsh == cur_pixels_hash) {
     // nothing changed, stop here
@@ -247,28 +246,12 @@ bool normalizePixels() {
   #endif
 
   // normalize points
-  float m1 = 0;
-  float m2 = 0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     norm_pixels[i] = sq(norm_pixels[i]-curr_avg)/fgm * sq(norm_pixels[i])/bgm;
     if (pointOnOuterEdge(i)) norm_pixels[i] /= 3;
 
-    if (SIDE1(i)) {
-      m1 = max(norm_pixels[i], m1);
-    } else {
-      m2 = max(norm_pixels[i], m2);
-    }
-  }
-
-  // update baseline averages
-  float adjAlpha1 = ALPHA - SLOW_ALPHA*m1;
-  float adjAlpha2 = ALPHA - SLOW_ALPHA*m2;
-  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (SIDE1(i)) {
-      avg_pixels[i] += adjAlpha1 * (cur_pixels[i] - avg_pixels[i]);
-    } else {
-      avg_pixels[i] += adjAlpha2 * (cur_pixels[i] - avg_pixels[i]);
-    }
+    // update average baseline
+    avg_pixels[i] += ALPHA * (cur_pixels[i] - avg_pixels[i]);
   }
 
   return true;
@@ -565,7 +548,8 @@ void processSensor() {
 
       // ignore new points that showed up in middle 2 rows of grid
       if (retroMatched ||
-          (nobodyInMiddle && an >= 0.4 && pointOnBorder(sp)) || !pointInMiddle(sp)) {
+          (nobodyInMiddle && an > AVG_CONF_THRESHOLD && pointOnBorder(sp)) ||
+          !pointInMiddle(sp)) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
           if (past_points[j] == UNDEF_POINT) {
