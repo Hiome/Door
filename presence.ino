@@ -81,9 +81,8 @@ uint8_t packetCount = 1;
 bool publish(char* msg, int8_t retries) {
   if (retries == -1) {
     if (!radio.canSend()) {
-      SERIAL_PRINT("skipped ");
-      SERIAL_PRINT(msg);
-      SERIAL_PRINTLN("\n\n");
+      SERIAL_PRINT("s ");
+      SERIAL_PRINTLN(msg);
       SERIAL_FLUSH;
       return false;
     }
@@ -92,7 +91,7 @@ bool publish(char* msg, int8_t retries) {
     uint8_t len = sprintf(sendBuf, "%s;%d0", msg, BATTERY_LEVEL);
     radio.send(GATEWAYID, sendBuf, len, false);
 
-    SERIAL_PRINT("published ");
+    SERIAL_PRINT("p ");
     SERIAL_PRINT(sendBuf);
     SERIAL_PRINTLN("\n\n");
     SERIAL_FLUSH;
@@ -109,9 +108,9 @@ bool publish(char* msg, int8_t retries) {
         packetCount = 1;
     }
 
-    SERIAL_PRINT("published ");
+    SERIAL_PRINT("p ");
     SERIAL_PRINT(sendBuf);
-    if (!success) SERIAL_PRINT(" (failed)");
+    if (!success) SERIAL_PRINT(" x");
     SERIAL_PRINTLN("\n\n");
     SERIAL_FLUSH;
 
