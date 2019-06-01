@@ -3,17 +3,17 @@
 #define FIRMWARE_VERSION        "V0.3.0"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define MIN_DISTANCE            1.5  // min distance for 2 peaks to be separate people
+#define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
 #define DISTANCE_BONUS          2.5  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
-#define CONFIDENCE_THRESHOLD    0.3  // consider a point if we're 10% confident
-#define AVG_CONF_THRESHOLD      0.6  // consider a set of points if we're 30% confident
+#define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
+#define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 30% confident
 #define GRADIENT_THRESHOLD      5.0  // 2º temp change gives us 100% confidence of person
 #define T_THRESHOLD             5
-#define MIN_NEIGHBORS           3
+#define MIN_NEIGHBORS           4
 
 #define REED_PIN_CLOSE          3
 #define REED_PIN_AJAR           4
@@ -282,6 +282,16 @@ bool normalizePixels() {
   return true;
 }
 
+// insert element i into an array at position j, shift everything else over to make room
+#define INSERT_POINT_HERE ({                        \
+  for (uint8_t x=active_pixel_count; x>j; x--) {    \
+    ordered_indexes[x] = ordered_indexes[x-1];      \
+  }                                                 \
+  ordered_indexes[j] = i;                           \
+  added = true;                                     \
+  break;                                            \
+})
+
 uint8_t findCurrentPoints(uint8_t *points) {
   // sort pixels by confidence to find peaks
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
@@ -290,14 +300,30 @@ uint8_t findCurrentPoints(uint8_t *points) {
     if (PIXEL_ACTIVE(i)) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
-        if (norm_pixels[i] > norm_pixels[ordered_indexes[j]]) {
-          for (uint8_t x=active_pixel_count; x>j; x--) {
-            ordered_indexes[x] = ordered_indexes[x-1];
+        if (norm_pixels[i] > norm_pixels[ordered_indexes[j]] &&
+            (norm_pixels[i] - norm_pixels[ordered_indexes[j]] >= 0.1 ||
+            euclidean_distance(i, ordered_indexes[j]) > MIN_DISTANCE)) {
+          // point i has higher confidence, place it in front of existing point j
+          INSERT_POINT_HERE;
+        } else if (abs(norm_pixels[ordered_indexes[j]] - norm_pixels[i]) < 0.1 &&
+            euclidean_distance(i, ordered_indexes[j]) <= MIN_DISTANCE) {
+          // both points have similar confidence and are next to each other,
+          // place the point that's closer to a peak in front of the other
+          float d1 = 100;
+          float d2 = 100;
+          for (uint8_t x=0; x<j; x++) {
+            d1 = euclidean_distance(i, ordered_indexes[x]);
+            d2 = euclidean_distance(ordered_indexes[j], ordered_indexes[x]);
+            if (d1 <= MIN_DISTANCE || d2 <= MIN_DISTANCE) break;
           }
-          ordered_indexes[j] = i;
-          added = true;
-          break;
-        }
+          if (d1 <= MIN_DISTANCE || d2 <= MIN_DISTANCE) {
+            if (d1 <= d2) {
+              INSERT_POINT_HERE;
+            }
+          } else if (SIDE1(i)) { // prefer point that's closer to middle
+            INSERT_POINT_HERE;
+          }
+        } // else i is much less than j or points are far apart, so place it later in queue
       }
       if (!added) {
         ordered_indexes[active_pixel_count] = i;
@@ -616,7 +642,7 @@ void processSensor() {
 
       // ignore new points that showed up in middle 2 rows of grid
       if (retroMatched ||
-          (nobodyInMiddle && an > AVG_CONF_THRESHOLD && pointOnBorder(sp)) ||
+          (nobodyInMiddle && an > 0.3 && pointOnBorder(sp)) ||
           !pointInMiddle(sp)) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
