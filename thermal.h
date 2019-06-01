@@ -10,10 +10,11 @@
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
 #define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
-#define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 30% confident
+#define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 40% confident
+#define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
 #define GRADIENT_THRESHOLD      5.0  // 2º temp change gives us 100% confidence of person
-#define T_THRESHOLD             5
-#define MIN_NEIGHBORS           4
+#define T_THRESHOLD             5    // min squared standard deviations of change for a pixel
+#define MIN_NEIGHBORS           4    // min size of halo effect to consider a point legit
 
 #define REED_PIN_CLOSE          3
 #define REED_PIN_AJAR           4
@@ -160,7 +161,7 @@ void publishEvents() {
 void publishMaybeEvents(uint8_t idx) {
   if (CHECK_DOOR(past_points[idx]) && !crossed[idx] && histories[idx] > MIN_HISTORY &&
       totalDistance(idx) > MAX_DISTANCE) {
-    if (confidence(idx) > (0.9)) {
+    if (confidence(idx) > HIGH_CONF_THRESHOLD) {
       if (SIDE1(past_points[idx])) {
         publish("m1", -1);
       } else {
@@ -220,7 +221,7 @@ bool normalizePixels() {
       }
       if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-1, T_THRESHOLD)) neighbors++;
       if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+1, T_THRESHOLD)) neighbors++;
-  
+
       ignorable[i] = neighbors < (pointOnLREdge(i) ? 1 : MIN_NEIGHBORS);
     } else {
       ignorable[i] = true;
@@ -535,7 +536,8 @@ void processSensor() {
           } else {
             if (past_points[idx] != points[i]) {
               if (SIDE(points[i]) != SIDE(past_points[idx])) {
-                if (confidence(idx) > 0.8 && norm_pixels[points[i]] > 0.8) {
+                if (confidence(idx) > HIGH_CONF_THRESHOLD &&
+                    norm_pixels[points[i]] > HIGH_CONF_THRESHOLD) {
                   histories[idx]++;
                 } else {
                   // point just crossed threshold, let's reduce its history to force
