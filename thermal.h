@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.3.1"
+#define FIRMWARE_VERSION        "V0.3.2"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -10,10 +10,11 @@
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
 #define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
-#define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 40% confident
-#define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
-#define GRADIENT_THRESHOLD      5.0  // 2º temp change gives us 100% confidence of person
-#define T_THRESHOLD             4    // min squared standard deviations of change for a pixel
+#define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
+#define HIGH_CONF_THRESHOLD     0.7  // give points over 70% confidence extra benefits
+#define GRADIENT_THRESHOLD      3.0  // 2º temp change gives us 100% confidence of person
+#define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
+#define HIGH_T_THRESHOLD        5
 #define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
 
 #define REED_PIN_CLOSE          3
@@ -206,7 +207,7 @@ bool normalizePixels() {
   float cavg = 0.0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     cavg += norm_pixels[i];
-    if (MAHALANBOIS(i, (2*T_THRESHOLD))) {
+    if (MAHALANBOIS(i, HIGH_T_THRESHOLD)) {
       uint8_t neighbors = 0;
       if (AXIS(i) > 1) {
         // not top of row
