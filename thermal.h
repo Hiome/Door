@@ -13,8 +13,8 @@
 #define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 40% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
 #define GRADIENT_THRESHOLD      5.0  // 2º temp change gives us 100% confidence of person
-#define T_THRESHOLD             5    // min squared standard deviations of change for a pixel
-#define MIN_NEIGHBORS           4    // min size of halo effect to consider a point legit
+#define T_THRESHOLD             4    // min squared standard deviations of change for a pixel
+#define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
 
 #define REED_PIN_CLOSE          3
 #define REED_PIN_AJAR           4
@@ -134,11 +134,12 @@ void publishEvents() {
 
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     if (past_points[i] != UNDEF_POINT && histories[i] > MIN_HISTORY &&
+          SIDE(starting_points[i]) != SIDE(past_points[i]) &&
           confidence(i) > AVG_CONF_THRESHOLD) {
       int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
       // point cleanly crossed grid
-      if (abs(diff) >= (GRID_EXTENT/2)) {
-        if (diff > 0) {
+      if (abs(diff) >= 3 || totalDistance(i) >= 6) {
+        if (SIDE1(past_points[i])) {
           publish("1", 10);
           // artificially shift starting point ahead 1 row so that
           // if user turns around now, algorithm considers it an exit
@@ -161,7 +162,9 @@ void publishEvents() {
 void publishMaybeEvents(uint8_t idx) {
   if (CHECK_DOOR(past_points[idx]) && !crossed[idx] && histories[idx] > MIN_HISTORY &&
       totalDistance(idx) > MAX_DISTANCE) {
-    if (confidence(idx) > HIGH_CONF_THRESHOLD) {
+    int diff = AXIS(starting_points[idx]) - AXIS(past_points[idx]);
+    if ((abs(diff) >= 3 || totalDistance(idx) >= (5-diff)) &&
+        confidence(idx) > HIGH_CONF_THRESHOLD) {
       if (SIDE1(past_points[idx])) {
         publish("m1", -1);
       } else {
@@ -236,10 +239,12 @@ bool normalizePixels() {
   float bgmt;
   float fgmt;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    fgmt = sq(norm_pixels[i] - cavg);       // difference in points among foreground
-    bgmt = sq(norm_pixels[i] - bgPixel(i)); // difference in points from background
-    fgm = max(fgmt, fgm);
-    bgm = max(bgmt, bgm);
+    if (!ignorable[i]) {
+      fgmt = sq(norm_pixels[i] - cavg);       // difference in points among foreground
+      bgmt = sq(norm_pixels[i] - bgPixel(i)); // difference in points from background
+      fgm = max(fgmt, fgm);
+      bgm = max(bgmt, bgm);
+    }
   }
 
   float std;
@@ -302,11 +307,11 @@ uint8_t findCurrentPoints(uint8_t *points) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
         if (norm_pixels[i] > norm_pixels[ordered_indexes[j]] &&
-            (norm_pixels[i] - norm_pixels[ordered_indexes[j]] >= 0.1 ||
+            (norm_pixels[i] - norm_pixels[ordered_indexes[j]] >= 0.05 ||
             euclidean_distance(i, ordered_indexes[j]) > MIN_DISTANCE)) {
           // point i has higher confidence, place it in front of existing point j
           INSERT_POINT_HERE;
-        } else if (abs(norm_pixels[ordered_indexes[j]] - norm_pixels[i]) < 0.1 &&
+        } else if (abs(norm_pixels[ordered_indexes[j]] - norm_pixels[i]) < 0.05 &&
             euclidean_distance(i, ordered_indexes[j]) <= MIN_DISTANCE) {
           // both points have similar confidence and are next to each other,
           // place the point that's closer to a peak in front of the other
@@ -384,7 +389,6 @@ void processSensor() {
 
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT ({                                                         \
-    publishMaybeEvents(idx);                                                      \
     if (confidence(idx) > AVG_CONF_THRESHOLD && !pointOnEdge(past_points[idx])) { \
       temp_forgotten_points[temp_forgotten_num] = past_points[idx];               \
       temp_forgotten_norms[temp_forgotten_num] = past_norms[idx];                 \
@@ -598,9 +602,9 @@ void processSensor() {
         // second let's check past forgotten points for a match
         for (uint8_t j=0; j<forgotten_num; j++) {
           if (forgotten_past_points[j] != UNDEF_POINT &&
-              // point cannot be more than 2x warmer than forgotten point
-              ((forgotten_norms[j] < an && forgotten_norms[j]*2.0 > an) ||
-                (an < forgotten_norms[j] && an*2.0 > forgotten_norms[j])) &&
+              // point cannot be more than 3x warmer than forgotten point
+              ((forgotten_norms[j] < an && forgotten_norms[j]*3.0 > an) ||
+                (an < forgotten_norms[j] && an*3.0 > forgotten_norms[j])) &&
               // point cannot have moved more than MAX_DISTANCE
               euclidean_distance(forgotten_past_points[j], points[i]) < MAX_DISTANCE) {
             h = forgotten_histories[j];
