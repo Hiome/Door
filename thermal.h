@@ -272,10 +272,10 @@ bool normalizePixels() {
     // update average baseline
     var = max(var, 0.01) - stdPixel(i);
     // implicit alpha of 0.001
-    if (std < 1) {
+    if (abs(std) < 1) {
       // increase alpha to 0.01
       std *= 10.0;
-    } else if (std >= 10) {
+    } else if (abs(std) >= 10) {
       // lower alpha to 0.0001
       std *= 0.1;
     }
