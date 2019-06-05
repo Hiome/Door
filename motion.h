@@ -1,6 +1,8 @@
 #define FIRMWARE_VERSION     "V0.1"
 #define BATTERY_POWERED
 
+#define PIR    3
+
 void motionISR() {
   // do nothing
 }
@@ -16,4 +18,3 @@ void loop() {
   blink(1);
   LOWPOWER_DELAY(SLEEP_FOREVER);
 }
-

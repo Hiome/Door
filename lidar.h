@@ -11,6 +11,10 @@
 #define ALPHA       18UL    //  7% of 256
 #define PADDING     218UL   // 85% of 256
 
+#define PIR    3
+#define xshut1 6
+#define xshut2 7
+
 #include <Wire.h>
 #include <VL53L0X.h>
 
@@ -301,4 +305,3 @@ void loop() {
 
   run_sensor();
 }
-

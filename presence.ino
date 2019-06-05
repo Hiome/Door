@@ -15,9 +15,6 @@
 #define SERIAL_BAUD   115200
 
 /* Pin Connections */
-#define PIR    3
-#define xshut1 6
-#define xshut2 7
 #define FLASH  8
 #define LED    9
 #define BATT   A7

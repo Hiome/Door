@@ -1,6 +1,8 @@
 #define FIRMWARE_VERSION     "V0.1"
 #define BATTERY_POWERED
 
+#define PIR    3
+
 int state = LOW;
 
 void doorISR() {
@@ -21,4 +23,3 @@ void loop() {
   }
   LOWPOWER_DELAY(SLEEP_FOREVER);
 }
-

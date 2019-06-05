@@ -5,7 +5,7 @@ Then connect one end of a 10K resistor from Analog 0 to ground
 
 #define FIRMWARE_VERSION     "V0.1"
 #define FSR                  0     // the FSR and 10K pulldown are connected to a0
-#define PUBLISH_DELAY        15     // seconds to wait before publishing state change
+#define PUBLISH_DELAY        15    // seconds to wait before publishing state change
 
 uint16_t fsrReading;
 uint16_t calibratedReading = 0;
@@ -53,4 +53,3 @@ void loop() {
   SERIAL_FLUSH;
   LOWPOWER_DELAY(SLEEP_1S);
 }
-
