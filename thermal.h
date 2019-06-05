@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.3.2"
+#define FIRMWARE_VERSION        "V0.3.3"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -20,7 +20,6 @@
 #define REED_PIN_CLOSE          3
 #define REED_PIN_AJAR           4
 
-#include <Wire.h>
 #include <Adafruit_AMG88xx.h>
 
 Adafruit_AMG88xx amg;
@@ -206,6 +205,13 @@ bool normalizePixels() {
   bool ignorable[AMG88xx_PIXEL_ARRAY_SIZE];
   float cavg = 0.0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    // reading is invalid if less than -20 or greater than 100
+    if (norm_pixels[i] < -20 || norm_pixels[i] > 100) {
+      ignorable[i] = true;
+      cavg += bgPixel(i);
+      continue;
+    }
+
     cavg += norm_pixels[i];
     if (MAHALANBOIS(i, HIGH_T_THRESHOLD)) {
       uint8_t neighbors = 0;
@@ -627,8 +633,8 @@ void processSensor() {
       bool nobodyInMiddle = true;
       if (!retroMatched) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
-          if (past_points[j] != UNDEF_POINT && histories[j] > 1 &&
-                confidence(j) > AVG_CONF_THRESHOLD && pointInMiddle(past_points[j]) &&
+          if (past_points[j] != UNDEF_POINT && (histories[j] > 1 || crossed[j]) &&
+                pointInMiddle(past_points[j]) && confidence(j) > AVG_CONF_THRESHOLD &&
                 euclidean_distance(past_points[j], points[i]) < 5.0) {
             // there's already a person in the middle of the grid
             // so it's unlikely a new valid person just appeared in the middle

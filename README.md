@@ -11,10 +11,10 @@ Hiome Sensor code.
 ```bash
 cd ~/Documents/Arduino/libraries
 
-git clone -b lowpower git@github.com:neilgupta/Adafruit_AMG88xx.git
 git clone git@github.com:LowPowerLab/LowPower.git
 git clone git@github.com:LowPowerLab/SPIFlash.git
 git clone -b skipcansend git@github.com:hiome/RFM69-1.git # rename dir to RFM69
+git clone git@gitlab.com:hiome/Adafruit_AMG88xx.git
 
 cd ..
 
