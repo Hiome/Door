@@ -16,6 +16,7 @@
 #define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
 #define HIGH_T_THRESHOLD        5
 #define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
+#define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
 
 #define REED_PIN_CLOSE          3
 #define REED_PIN_AJAR           4
@@ -203,17 +204,18 @@ bool normalizePixels() {
 
   // ignore points that don't have enough neighbors
   bool ignorable[AMG88xx_PIXEL_ARRAY_SIZE];
-  float cavg = 0.0;
+  float x_sum = 0.0;
+  float sq_sum = 0.0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    // reading is invalid if less than -20 or greater than 100
-    if (norm_pixels[i] < -20 || norm_pixels[i] > 100) {
-      ignorable[i] = true;
-      cavg += bgPixel(i);
-      continue;
+    // reading is invalid if less than -20 or greater than 100,
+    // but we use a smaller range than that to determine validity
+    if (norm_pixels[i] < 0 || norm_pixels[i] > 80) {
+      norm_pixels[i] = bgPixel(i);
     }
 
-    cavg += norm_pixels[i];
-    if (MAHALANBOIS(i, HIGH_T_THRESHOLD)) {
+    x_sum += norm_pixels[i];
+    sq_sum += sq(norm_pixels[i]);
+    if (MAHALANBOIS(i, T_THRESHOLD)) {
       uint8_t neighbors = 0;
       if (AXIS(i) > 1) {
         // not top of row
@@ -238,7 +240,18 @@ bool normalizePixels() {
     }
   }
 
-  cavg /= 64.0;
+  // calculate trimmed average
+  float variance = sq_sum - sq(x_sum)/((float)AMG88xx_PIXEL_ARRAY_SIZE);
+  float spread = NUM_STD_DEV*(x_sum/((float)AMG88xx_PIXEL_ARRAY_SIZE) - sqrt(variance));
+  float cavg = 0.0;
+  uint8_t total = 0;
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    if (norm_pixels[i] < spread || norm_pixels[i] > spread) {
+      cavg += norm_pixels[i];
+      total++;
+    }
+  }
+  cavg /= (float)total;
 
   // calculate CSM gradient
   float bgm = GRADIENT_THRESHOLD;
