@@ -241,17 +241,24 @@ bool normalizePixels() {
   }
 
   // calculate trimmed average
+  float mean = x_sum/((float)AMG88xx_PIXEL_ARRAY_SIZE);
   float variance = sq_sum - sq(x_sum)/((float)AMG88xx_PIXEL_ARRAY_SIZE);
-  float spread = NUM_STD_DEV*(x_sum/((float)AMG88xx_PIXEL_ARRAY_SIZE) - sqrt(variance));
+  variance = NUM_STD_DEV * sqrt(variance);
   float cavg = 0.0;
   uint8_t total = 0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (norm_pixels[i] < spread || norm_pixels[i] > spread) {
+    if (norm_pixels[i] > (mean - variance) && norm_pixels[i] < (mean + variance)) {
       cavg += norm_pixels[i];
       total++;
     }
   }
-  cavg /= (float)total;
+
+  if (total > 0) {
+    cavg /= (float)total;
+  } else {
+    // somehow variance was perfectly 0, pretty much impossible to get here
+    cavg = mean;
+  }
 
   // calculate CSM gradient
   float bgm = GRADIENT_THRESHOLD;
@@ -597,7 +604,7 @@ void processSensor() {
         for (uint8_t j=0; j<temp_forgotten_num; j++) {
           if (temp_forgotten_points[j] != UNDEF_POINT &&
               // point cannot be more than 3x warmer than forgotten point
-              ((temp_forgotten_norms[j] < an && temp_forgotten_norms[j]*3.0 > an) ||
+              ((temp_forgotten_norms[j] <= an && temp_forgotten_norms[j]*3.0 > an) ||
                 (an < temp_forgotten_norms[j] && an*3.0 > temp_forgotten_norms[j])) &&
               // point cannot have moved more than MAX_DISTANCE
               euclidean_distance(temp_forgotten_points[j], points[i]) < MAX_DISTANCE) {
@@ -623,7 +630,7 @@ void processSensor() {
         for (uint8_t j=0; j<forgotten_num; j++) {
           if (forgotten_past_points[j] != UNDEF_POINT &&
               // point cannot be more than 3x warmer than forgotten point
-              ((forgotten_norms[j] < an && forgotten_norms[j]*3.0 > an) ||
+              ((forgotten_norms[j] <= an && forgotten_norms[j]*3.0 > an) ||
                 (an < forgotten_norms[j] && an*3.0 > forgotten_norms[j])) &&
               // point cannot have moved more than MAX_DISTANCE
               euclidean_distance(forgotten_past_points[j], points[i]) < MAX_DISTANCE) {
