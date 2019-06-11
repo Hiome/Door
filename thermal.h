@@ -313,9 +313,11 @@ uint8_t findCurrentPoints(uint8_t *points) {
           }
           if (d1 <= MIN_DISTANCE || d2 <= MIN_DISTANCE) {
             if (d1 <= d2) {
+              norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
               INSERT_POINT_HERE;
             }
           } else if (SIDE1(i)) { // prefer point that's closer to middle
+            norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
             INSERT_POINT_HERE;
           }
         } // else i is much less than j or points are far apart, so place it later in queue
