@@ -18,9 +18,6 @@
 #define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
 #define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
 
-#define REED_PIN_CLOSE          3
-#define REED_PIN_AJAR           4
-
 #include <Adafruit_AMG88xx.h>
 
 Adafruit_AMG88xx amg;
@@ -45,13 +42,6 @@ uint16_t forgotten_histories[MAX_PEOPLE];
 bool forgotten_crossed[MAX_PEOPLE];
 uint8_t forgotten_num = 0;
 uint8_t cycles_since_forgotten = 0;
-
-#define DOOR_CLOSED 0
-#define DOOR_AJAR   1
-#define DOOR_OPEN   2
-uint8_t door_state = DOOR_CLOSED;
-uint8_t last_published_door_state = 9;
-uint8_t frames_since_door_open = 0;
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -99,12 +89,9 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define UPPER_BOUND     ( GRID_EXTENT+1 )
 #define BORDER_PADDING  ( GRID_EXTENT/4 )
 #define SIDE(p)         ( SIDE1(p) ? 1 : 2 )
-#define CHECK_TEMP(i)   ( norm_pixels[(i)] > CONFIDENCE_THRESHOLD )
-#define CHECK_DOOR(i)   ( door_state == DOOR_OPEN || (door_state == DOOR_CLOSED && SIDE1(i)) )
-#define PIXEL_ACTIVE(i) ( (CHECK_TEMP(i)) && (CHECK_DOOR(i)) )
+#define PIXEL_ACTIVE(i) ( norm_pixels[(i)] > CONFIDENCE_THRESHOLD )
 #define confidence(x)   ( avg_norms[(x)]/((float)count[(x)]) )
 #define totalDistance(x)( euclidean_distance(starting_points[(x)], past_points[(x)]) )
-#define doorOpenedAgo(x)( frames_since_door_open < (x) && door_state == DOOR_OPEN )
 #define bgPixel(x)      ( ((float)avg_pixels[(x)])/1000.0 )
 #define stdPixel(x)     ( ((float)std_pixels[(x)])/1000.0 )
 #define MAHALANBOIS(x,t)( sq(norm_pixels[(x)]-bgPixel(x))/stdPixel(x) >= (t) )
@@ -131,8 +118,6 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define pointOnLREdge(i) ( NOT_AXIS(i) == 1 || NOT_AXIS(i) == GRID_EXTENT )
 
 void publishEvents() {
-  if (door_state != DOOR_OPEN) return; // nothing happened if door is closed or ajar
-
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     if (past_points[i] != UNDEF_POINT && histories[i] > MIN_HISTORY &&
           SIDE(starting_points[i]) != SIDE(past_points[i]) &&
@@ -155,29 +140,6 @@ void publishEvents() {
         crossed[i] = true;
         avg_norms[i] = past_norms[i];
         count[i] = 1;
-      }
-    }
-  }
-}
-
-void publishMaybeEvents(uint8_t idx) {
-  if (CHECK_DOOR(past_points[idx]) && !crossed[idx] && histories[idx] > MIN_HISTORY &&
-      totalDistance(idx) > MAX_DISTANCE) {
-    int diff = AXIS(starting_points[idx]) - AXIS(past_points[idx]);
-    if ((abs(diff) >= 3 || totalDistance(idx) >= (5-diff)) &&
-        confidence(idx) > HIGH_CONF_THRESHOLD) {
-      if (SIDE1(past_points[idx])) {
-        publish("m1", -1);
-      } else {
-        publish("m2", -1);
-      }
-    } else if (count[idx] >= histories[idx] &&
-        (histories[idx] >= (2*MIN_HISTORY) || confidence(idx) > AVG_CONF_THRESHOLD)) {
-      // we don't know what happened, add door to suspicious list
-      if (SIDE1(past_points[idx])) {
-        publish("s1", -1);
-      } else {
-        publish("s2", -1);
       }
     }
   }
@@ -439,16 +401,6 @@ void processSensor() {
   if (past_total_masses > 0) {
     for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
       if (past_points[idx] != UNDEF_POINT) {
-        // if door just opened, drop any existing points on side 1
-        if (doorOpenedAgo(1) && SIDE1(past_points[idx])) {
-          forgotten_num_frd++;
-          pairs[idx] = UNDEF_POINT;
-          past_points[idx] = UNDEF_POINT;
-          histories[idx] = 0;
-          crossed[idx] = false;
-          continue;
-        }
-
         float max_distance = MAX_DISTANCE + past_norms[idx] * DISTANCE_BONUS;
         float min_distance = 0;
         float min_score = 100;
@@ -598,6 +550,7 @@ void processSensor() {
       bool cross = false;
       float an = norm_pixels[points[i]];
       bool retroMatched = false;
+      bool nobodyInMiddle = true;
 
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check forgotten points from this frame for a match
@@ -650,7 +603,6 @@ void processSensor() {
         }
       }
 
-      bool nobodyInMiddle = true;
       if (!retroMatched) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           if (past_points[j] != UNDEF_POINT && (histories[j] > 1 || crossed[j]) &&
@@ -664,18 +616,15 @@ void processSensor() {
           }
         }
 
-        if (doorOpenedAgo(3) && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
-          // if point is starting in row 5 right after door opens, move it back to row 6
-          sp += GRID_EXTENT;
+        if (nobodyInMiddle && an > 0.5 && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
+          // if point is starting in row 5, move it back to row 6
+          retroMatched = true;
         }
       }
 
-      // ignore new points on side 1 immediately after door opens
-      if (doorOpenedAgo(3) && SIDE1(sp)) continue;
-
       // ignore new points that showed up in middle 2 rows of grid
       if (retroMatched ||
-          (nobodyInMiddle && an > 0.3 && pointOnBorder(sp)) ||
+          (nobodyInMiddle && an > AVG_CONF_THRESHOLD && pointOnBorder(sp)) ||
           !pointInMiddle(sp)) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
@@ -720,10 +669,6 @@ void processSensor() {
 
   publishEvents();
 
-  if (frames_since_door_open < 5) {
-    frames_since_door_open++;
-  }
-
   // wrap up with debugging output
 
   #if defined(ENABLE_SERIAL) && defined(PRINT_RAW_DATA)
@@ -756,28 +701,8 @@ void processSensor() {
   #endif
 }
 
-void checkDoorState() {
-  uint8_t last_door_state = door_state;
-  if (digitalRead(REED_PIN_CLOSE) == LOW) {
-    door_state = DOOR_CLOSED;
-  } else {
-    door_state = digitalRead(REED_PIN_AJAR) == LOW ? DOOR_AJAR : DOOR_OPEN;
-  }
-  if (last_door_state != door_state) {
-    frames_since_door_open = 0;
-  }
-  if (((door_state == DOOR_CLOSED && last_published_door_state != DOOR_CLOSED) ||
-       (door_state != DOOR_CLOSED && last_published_door_state != DOOR_OPEN)) &&
-      publish(door_state == DOOR_CLOSED ? "d0" : "d1", 0)) {
-    last_published_door_state = door_state == DOOR_CLOSED ? DOOR_CLOSED : DOOR_OPEN;
-  }
-}
-
 void initialize() {
   amg.begin();
-
-  pinMode(REED_PIN_CLOSE, INPUT_PULLUP);
-  pinMode(REED_PIN_AJAR, INPUT_PULLUP);
 
   blink(2);
   publish(FIRMWARE_VERSION, 10);
@@ -819,6 +744,5 @@ void initialize() {
 }
 
 void loop_frd() {
-  checkDoorState();
   processSensor();
 }
