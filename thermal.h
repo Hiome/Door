@@ -195,7 +195,7 @@ bool normalizePixels() {
       if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-1, T_THRESHOLD)) neighbors++;
       if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+1, T_THRESHOLD)) neighbors++;
 
-      ignorable[i] = neighbors < (pointOnLREdge(i) ? 1 : MIN_NEIGHBORS);
+      ignorable[i] = neighbors < (pointOnLREdge(i) && !pointOnEdge(i) ? 2 : MIN_NEIGHBORS);
     } else {
       ignorable[i] = true;
     }
@@ -569,14 +569,20 @@ void processSensor() {
       bool nobodyInMiddle = true;
 
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
-        // first let's check forgotten points from this frame for a match
+        // first let's check points on death row from this frame for a match
         for (uint8_t j=0; j<temp_forgotten_num; j++) {
           if (temp_forgotten_points[j] != UNDEF_POINT &&
               // point cannot be more than 3x warmer than forgotten point
               ((temp_forgotten_norms[j] <= an && temp_forgotten_norms[j]*3.0 > an) ||
-                (an < temp_forgotten_norms[j] && an*3.0 > temp_forgotten_norms[j])) &&
-              // point cannot have moved more than MAX_DISTANCE
-              euclidean_distance(temp_forgotten_points[j], points[i]) < MAX_DISTANCE) {
+                (an < temp_forgotten_norms[j] && an*3.0 > temp_forgotten_norms[j]))) {
+            // if switching sides with low confidence or moving too far, don't pair
+            float d = euclidean_distance(temp_forgotten_points[j], points[i]);
+            if (d >= MAX_DISTANCE || (SIDE(points[i]) != SIDE(temp_forgotten_points[j]) &&
+                (temp_forgotten_norms[j] < AVG_CONF_THRESHOLD ||
+                norm_pixels[points[i]]/d < 0.2))) {
+              continue;
+            }
+
             h = temp_forgotten_histories[j];
             sp = temp_forgotten_starting_points[j];
             cross = temp_forgotten_crossed[j];
@@ -600,9 +606,15 @@ void processSensor() {
           if (forgotten_past_points[j] != UNDEF_POINT &&
               // point cannot be more than 3x warmer than forgotten point
               ((forgotten_norms[j] <= an && forgotten_norms[j]*3.0 > an) ||
-                (an < forgotten_norms[j] && an*3.0 > forgotten_norms[j])) &&
-              // point cannot have moved more than MAX_DISTANCE
-              euclidean_distance(forgotten_past_points[j], points[i]) < MAX_DISTANCE) {
+                (an < forgotten_norms[j] && an*3.0 > forgotten_norms[j]))) {
+            // if switching sides with low confidence or moving too far, don't pair
+            float d = euclidean_distance(forgotten_past_points[j], points[i]);
+            if (d >= MAX_DISTANCE || (SIDE(points[i]) != SIDE(forgotten_past_points[j]) &&
+                (forgotten_norms[j] < AVG_CONF_THRESHOLD ||
+                norm_pixels[points[i]]/d < 0.2))) {
+              continue;
+            }
+
             h = forgotten_histories[j];
             sp = forgotten_starting_points[j];
             cross = forgotten_crossed[j];
