@@ -14,7 +14,6 @@
 #define HIGH_CONF_THRESHOLD     0.7  // give points over 70% confidence extra benefits
 #define GRADIENT_THRESHOLD      3.0  // 2º temp change gives us 100% confidence of person
 #define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
-#define HIGH_T_THRESHOLD        5
 #define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
 #define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
 
@@ -312,13 +311,28 @@ uint8_t findCurrentPoints(uint8_t *points) {
             if (d1 <= MIN_DISTANCE || d2 <= MIN_DISTANCE) break;
           }
           if (d1 <= MIN_DISTANCE || d2 <= MIN_DISTANCE) {
+            // nearby peak found
             if (d1 <= d2) {
+              // new point is closer, insert it here and raise its confidence so we stay
+              // in sorted order
               norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
               INSERT_POINT_HERE;
+            } else {
+              // otherwise, raise confidence of other point to keep sorted order consistent
+              norm_pixels[ordered_indexes[j]] = max(norm_pixels[i],
+                                                    norm_pixels[ordered_indexes[j]]);
             }
-          } else if (SIDE1(i)) { // prefer point that's closer to middle
+          } else if (AXIS(i) == AXIS(ordered_indexes[j])) {
+            if (norm_pixels[i] > norm_pixels[ordered_indexes[j]]) {
+              INSERT_POINT_HERE;
+            }
+          } else if (SIDE1(i)) {
+            // prefer point that's closer to middle
             norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
             INSERT_POINT_HERE;
+          } else {
+            norm_pixels[ordered_indexes[j]] = max(norm_pixels[i],
+                                                  norm_pixels[ordered_indexes[j]]);
           }
         } // else i is much less than j or points are far apart, so place it later in queue
       }
