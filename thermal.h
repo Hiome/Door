@@ -1,18 +1,18 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.4.0"
+#define FIRMWARE_VERSION        "V0.4.1"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
 #define DISTANCE_BONUS          2.5  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
-#define MAX_PEOPLE              3    // most people we support in a single frame
+#define MAX_PEOPLE              4    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
-#define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
-#define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
-#define HIGH_CONF_THRESHOLD     0.7  // give points over 70% confidence extra benefits
-#define GRADIENT_THRESHOLD      3.0  // 2º temp change gives us 100% confidence of person
+#define CONFIDENCE_THRESHOLD    0.2  // consider a point if we're 20% confident
+#define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 40% confident
+#define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
+#define GRADIENT_THRESHOLD      3.0  // 3º temp change gives us 100% confidence of person
 #define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
 #define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
 #define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
@@ -114,7 +114,6 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
                              AXIS(i) < (UPPER_BOUND-BORDER_PADDING) )
   #define pointOnEdge(i)   ( AXIS(i) == 1 || AXIS(i) == GRID_EXTENT )
 #endif
-#define pointOnLREdge(i) ( NOT_AXIS(i) == 1 || NOT_AXIS(i) == GRID_EXTENT )
 
 void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
@@ -165,8 +164,6 @@ bool normalizePixels() {
 
   // ignore points that don't have enough neighbors
   bool ignorable[AMG88xx_PIXEL_ARRAY_SIZE];
-  float x_sum = 0.0;
-  float sq_sum = 0.0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     // reading is invalid if less than -20 or greater than 100,
     // but we use a smaller range than that to determine validity
@@ -174,8 +171,6 @@ bool normalizePixels() {
       norm_pixels[i] = bgPixel(i);
     }
 
-    x_sum += norm_pixels[i];
-    sq_sum += sq(norm_pixels[i]);
     if (MAHALANBOIS(i, T_THRESHOLD)) {
       uint8_t neighbors = 0;
       if (AXIS(i) > 1) {
@@ -195,30 +190,10 @@ bool normalizePixels() {
       if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-1, T_THRESHOLD)) neighbors++;
       if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+1, T_THRESHOLD)) neighbors++;
 
-      ignorable[i] = neighbors < (pointOnLREdge(i) && !pointOnEdge(i) ? 2 : MIN_NEIGHBORS);
+      ignorable[i] = neighbors < MIN_NEIGHBORS;
     } else {
       ignorable[i] = true;
     }
-  }
-
-  // calculate trimmed average
-  float mean = x_sum/((float)AMG88xx_PIXEL_ARRAY_SIZE);
-  float variance = sq_sum - sq(x_sum)/((float)AMG88xx_PIXEL_ARRAY_SIZE);
-  variance = NUM_STD_DEV * sqrt(variance);
-  float cavg = 0.0;
-  uint8_t total = 0;
-  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (norm_pixels[i] > (mean - variance) && norm_pixels[i] < (mean + variance)) {
-      cavg += norm_pixels[i];
-      total++;
-    }
-  }
-
-  if (total > 0) {
-    cavg /= (float)total;
-  } else {
-    // somehow variance was perfectly 0, pretty much impossible to get here
-    cavg = mean;
   }
 
   // calculate CSM gradient
@@ -226,32 +201,35 @@ bool normalizePixels() {
   float fgm = GRADIENT_THRESHOLD;
   float bgmt;
   float fgmt;
+  float std;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (!ignorable[i]) {
-      fgmt = sq(norm_pixels[i] - cavg);       // difference in points among foreground
-      bgmt = sq(norm_pixels[i] - bgPixel(i)); // difference in points from background
-      fgm = max(fgmt, fgm);
-      bgm = max(bgmt, bgm);
+    if (!ignorable[i] || (NOT_AXIS(i) < GRID_EXTENT && !ignorable[i+1])) {
+      std = norm_pixels[i] - bgPixel(i);
+
+      fgmt = NOT_AXIS(i) < GRID_EXTENT ? norm_pixels[i+1] - norm_pixels[i] : 0.0;
+      bgmt = NOT_AXIS(i) < GRID_EXTENT ? norm_pixels[i+1] - bgPixel(i+1) - std : 0.0;
+
+      fgm = max(abs(fgmt), fgm);
+      bgm = max(abs(bgmt), bgm);
     }
   }
 
-  float std;
   float var;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     std = norm_pixels[i] - bgPixel(i);
-    var = sq(std);
 
     // normalize points
-    if (ignorable[i]) {
+    if (ignorable[i] && (NOT_AXIS(i) == GRID_EXTENT || ignorable[i+1])) {
       norm_pixels[i] = 0.0;
     } else {
-      fgmt = sq(norm_pixels[i] - cavg)/fgm;
-      bgmt = var/bgm;
-      norm_pixels[i] = min(fgmt, bgmt);
+      fgmt = NOT_AXIS(i) < GRID_EXTENT ? norm_pixels[i+1] - norm_pixels[i] : 0.0;
+      bgmt = NOT_AXIS(i) < GRID_EXTENT ? norm_pixels[i+1] - bgPixel(i+1) - std : 0.0;
+
+      norm_pixels[i] = abs(fgmt) < abs(bgmt) ? fgmt/fgm : bgmt/bgm;
     }
 
     // update average baseline
-    var = max(var, 0.01) - stdPixel(i);
+    var = (abs(std) > 0.1 ? sq(std) : 0.01) - stdPixel(i);
     // implicit alpha of 0.001
     if (abs(std) < 1) {
       // increase alpha to 0.01
@@ -268,9 +246,28 @@ bool normalizePixels() {
       // lower alpha to 0.0001
       var *= 0.1;
     }
-    avg_pixels[i] += ((int)lroundf(std));
-    std_pixels[i] += ((int)lroundf(var));
+    avg_pixels[i] += ((int)round(std));
+    std_pixels[i] += ((int)round(var));
     if (std_pixels[i] < 10) std_pixels[i] = 10;
+  }
+
+  // flip signs based on which side has a higher gradient
+  for (uint8_t r=0; r<AMG88xx_PIXEL_ARRAY_SIZE; r += GRID_EXTENT) {
+    float maxPos = 0.0;
+    float maxNeg = 0.0;
+    for (uint8_t c=0; c<GRID_EXTENT; c++) {
+      uint8_t i = r + c;
+      if (norm_pixels[i] > maxPos) {
+        maxPos = norm_pixels[i];
+      } else if (norm_pixels[i] < maxNeg) {
+        maxNeg = norm_pixels[i];
+      }
+    }
+    if (abs(maxNeg) > maxPos) {
+      for (uint8_t c=0; c<GRID_EXTENT; c++) {
+        norm_pixels[r + c] = -norm_pixels[r + c];
+      }
+    }
   }
 
   return true;
@@ -322,19 +319,15 @@ uint8_t findCurrentPoints(uint8_t *points) {
               norm_pixels[ordered_indexes[j]] = max(norm_pixels[i],
                                                     norm_pixels[ordered_indexes[j]]);
             }
-          } else if (AXIS(i) == AXIS(ordered_indexes[j])) {
-            if (norm_pixels[i] > norm_pixels[ordered_indexes[j]]) {
-              INSERT_POINT_HERE;
-            }
-          } else if (SIDE1(i)) {
-            // prefer point that's closer to middle
+          } else {
+            // prefer later point because it might end up close to a future peak.
+            // note: this disadvantages points on side 2 because it's more likely to
+            // drag them back to the bottom edge, while points on side 1 will be dragged
+            // to middle.
             norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
             INSERT_POINT_HERE;
-          } else {
-            norm_pixels[ordered_indexes[j]] = max(norm_pixels[i],
-                                                  norm_pixels[ordered_indexes[j]]);
           }
-        } // else i is much less than j or points are far apart, so place it later in queue
+        } // else i is much less than j, so place it later in queue
       }
       if (!added) {
         ordered_indexes[active_pixel_count] = i;
@@ -435,7 +428,7 @@ void processSensor() {
           // if switching sides with low confidence, don't pair
           if (SIDE(points[j]) != SIDE(past_points[idx]) &&
               (confidence(idx) < AVG_CONF_THRESHOLD ||
-              norm_pixels[points[j]]/d < 0.2)) {
+              norm_pixels[points[j]]/d < 0.1)) {
             continue;
           }
 
@@ -579,7 +572,7 @@ void processSensor() {
             float d = euclidean_distance(temp_forgotten_points[j], points[i]);
             if (d >= MAX_DISTANCE || (SIDE(points[i]) != SIDE(temp_forgotten_points[j]) &&
                 (temp_forgotten_norms[j] < AVG_CONF_THRESHOLD ||
-                norm_pixels[points[i]]/d < 0.2))) {
+                norm_pixels[points[i]]/d < 0.1))) {
               continue;
             }
 
@@ -611,7 +604,7 @@ void processSensor() {
             float d = euclidean_distance(forgotten_past_points[j], points[i]);
             if (d >= MAX_DISTANCE || (SIDE(points[i]) != SIDE(forgotten_past_points[j]) &&
                 (forgotten_norms[j] < AVG_CONF_THRESHOLD ||
-                norm_pixels[points[i]]/d < 0.2))) {
+                norm_pixels[points[i]]/d < 0.1))) {
               continue;
             }
 
@@ -644,8 +637,8 @@ void processSensor() {
           }
         }
 
-        if (nobodyInMiddle && an > 0.5 && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
-          // if point is starting in row 5, move it back to row 6
+        if (nobodyInMiddle && an > AVG_CONF_THRESHOLD && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
+          // if point is starting in row 5, pretend it started in 6
           retroMatched = true;
         }
       }
@@ -749,7 +742,7 @@ void initialize() {
 
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     cur_pixels_hash += sq(norm_pixels[i] + i);
-    avg_pixels[i] = ((int)lroundf(norm_pixels[i] * 1000.0));
+    avg_pixels[i] = ((int)round(norm_pixels[i] * 1000.0));
   }
 
   float std;
@@ -762,10 +755,10 @@ void initialize() {
 
     for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
       std = norm_pixels[i] - bgPixel(i);
-      var = sq(std);
+      var = (abs(std) > 0.1 ? sq(std) : 0.01) - stdPixel(i);
       // implicit alpha of 0.1
-      avg_pixels[i] += ((int)lroundf(100.0 * std));
-      std_pixels[i] += ((int)lroundf(100.0 * (max(var, 0.01) - stdPixel(i))));
+      avg_pixels[i] += ((int)round(100.0 * std));
+      std_pixels[i] += ((int)round(100.0 * var));
       if (std_pixels[i] < 10) std_pixels[i] = 10;
     }
   }
