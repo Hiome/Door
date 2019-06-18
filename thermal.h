@@ -201,31 +201,33 @@ bool normalizePixels() {
   float fgm = GRADIENT_THRESHOLD;
   float bgmt;
   float fgmt;
-  float std;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (!ignorable[i] || (NOT_AXIS(i) < GRID_EXTENT && !ignorable[i+1])) {
-      std = norm_pixels[i] - bgPixel(i);
+    if (NOT_AXIS(i) < GRID_EXTENT && (!ignorable[i] || !ignorable[i+1])) {
+      fgmt = norm_pixels[i+1] - norm_pixels[i];
+      fgmt = abs(fgmt);
+      bgmt = (norm_pixels[i+1] - bgPixel(i+1)) - (norm_pixels[i] - bgPixel(i));
+      bgmt = abs(bgmt);
 
-      fgmt = NOT_AXIS(i) < GRID_EXTENT ? norm_pixels[i+1] - norm_pixels[i] : 0.0;
-      bgmt = NOT_AXIS(i) < GRID_EXTENT ? norm_pixels[i+1] - bgPixel(i+1) - std : 0.0;
-
-      fgm = max(abs(fgmt), fgm);
-      bgm = max(abs(bgmt), bgm);
+      fgm = max(fgmt, fgm);
+      bgm = max(bgmt, bgm);
     }
   }
 
+  float std;
   float var;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     std = norm_pixels[i] - bgPixel(i);
 
     // normalize points
-    if (ignorable[i] && (NOT_AXIS(i) == GRID_EXTENT || ignorable[i+1])) {
-      norm_pixels[i] = 0.0;
-    } else {
-      fgmt = NOT_AXIS(i) < GRID_EXTENT ? norm_pixels[i+1] - norm_pixels[i] : 0.0;
-      bgmt = NOT_AXIS(i) < GRID_EXTENT ? norm_pixels[i+1] - bgPixel(i+1) - std : 0.0;
+    if (NOT_AXIS(i) < GRID_EXTENT && (!ignorable[i] || !ignorable[i+1])) {
+      fgmt = norm_pixels[i+1] - norm_pixels[i];
+      fgmt = fgmt/fgm;
+      bgmt = norm_pixels[i+1] - bgPixel(i+1) - std;
+      bgmt = bgmt/bgm;
 
-      norm_pixels[i] = abs(fgmt) < abs(bgmt) ? fgmt/fgm : bgmt/bgm;
+      norm_pixels[i] = abs(fgmt) < abs(bgmt) ? fgmt : bgmt;
+    } else {
+      norm_pixels[i] = 0.0;
     }
 
     // update average baseline
@@ -355,7 +357,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
   return total_masses;
 }
 
-void processSensor() {
+void loop_frd() {
   if (!normalizePixels()) return;
 
   // find list of peaks in current frame
@@ -759,8 +761,4 @@ void initialize() {
       if (std_pixels[i] < 10) std_pixels[i] = 10;
     }
   }
-}
-
-void loop_frd() {
-  processSensor();
 }
