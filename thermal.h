@@ -252,21 +252,18 @@ bool normalizePixels() {
   }
 
   // flip signs based on which side has a higher gradient
-  for (uint8_t r=0; r<AMG88xx_PIXEL_ARRAY_SIZE; r += GRID_EXTENT) {
-    float maxPos = 0.0;
-    float maxNeg = 0.0;
-    for (uint8_t c=0; c<GRID_EXTENT; c++) {
-      uint8_t i = r + c;
-      if (norm_pixels[i] > maxPos) {
-        maxPos = norm_pixels[i];
-      } else if (norm_pixels[i] < maxNeg) {
-        maxNeg = norm_pixels[i];
-      }
+  float maxNeg = 0.0;
+  float maxPos = 0.0;
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    if (norm_pixels[i] < maxNeg) {
+      maxNeg = norm_pixels[i];
+    } else if (norm_pixels[i] > maxPos) {
+      maxPos = norm_pixels[i];
     }
-    if (abs(maxNeg) > maxPos) {
-      for (uint8_t c=0; c<GRID_EXTENT; c++) {
-        norm_pixels[r + c] = -norm_pixels[r + c];
-      }
+  }
+  if (-maxNeg > maxPos) {
+    for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+      norm_pixels[i] = -norm_pixels[i];
     }
   }
 
