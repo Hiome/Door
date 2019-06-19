@@ -9,9 +9,9 @@
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              4    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
-#define CONFIDENCE_THRESHOLD    0.2  // consider a point if we're 20% confident
-#define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 40% confident
-#define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
+#define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
+#define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
+#define HIGH_CONF_THRESHOLD     0.7  // give points over 70% confidence extra benefits
 #define GRADIENT_THRESHOLD      3.0  // 3º temp change gives us 100% confidence of person
 #define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
 #define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
@@ -213,17 +213,33 @@ bool normalizePixels() {
     }
   }
 
+  float offGrid[GRID_EXTENT];
   float std;
   float var;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     std = norm_pixels[i] - bgPixel(i);
 
+    if (NOT_AXIS(i) == 1) {
+      uint8_t x = AXIS(i)-1;
+      fgmt = std/fgm;
+      bgmt = std/bgm;
+      offGrid[x] = abs(fgmt) < abs(bgmt) ? fgmt : bgmt;
+      if (abs(offGrid[x]) > 1) {
+        offGrid[x] = offGrid[x] > 0 ? 1.0 : -1.0;
+      }
+    }
+
     // normalize points
-    if (NOT_AXIS(i) < GRID_EXTENT && (!ignorable[i] || !ignorable[i+1])) {
-      fgmt = norm_pixels[i+1] - norm_pixels[i];
-      fgmt = fgmt/fgm;
-      bgmt = norm_pixels[i+1] - bgPixel(i+1) - std;
-      bgmt = bgmt/bgm;
+    if (NOT_AXIS(i) == GRID_EXTENT) {
+      fgmt = -std/fgm;
+      bgmt = -std/bgm;
+      norm_pixels[i] = abs(fgmt) < abs(bgmt) ? fgmt : bgmt;
+      if (abs(norm_pixels[i]) > 1) {
+        norm_pixels[i] = norm_pixels[i] > 0 ? 1.0 : -1.0;
+      }
+    } else if (!ignorable[i] || !ignorable[i+1]) {
+      fgmt = (norm_pixels[i+1] - norm_pixels[i])/fgm;
+      bgmt = (norm_pixels[i+1] - bgPixel(i+1) - std)/bgm;
 
       norm_pixels[i] = abs(fgmt) < abs(bgmt) ? fgmt : bgmt;
     } else {
@@ -253,20 +269,95 @@ bool normalizePixels() {
     if (std_pixels[i] < 10) std_pixels[i] = 10;
   }
 
-  // flip signs based on which side has a higher gradient
-  float maxNeg = 0.0;
-  float maxPos = 0.0;
-  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (norm_pixels[i] < maxNeg) {
-      maxNeg = norm_pixels[i];
-    } else if (norm_pixels[i] > maxPos) {
-      maxPos = norm_pixels[i];
+  float pos;
+  float neg;
+  uint8_t maxi;
+  uint8_t mini;
+  bool positive;
+  for (uint8_t r=0; r<AMG88xx_PIXEL_ARRAY_SIZE; r+=GRID_EXTENT) {
+    pos = 0.0;
+    neg = 0.0;
+    maxi = UNDEF_POINT;
+    mini = UNDEF_POINT;
+    positive = true;
+
+    float start = offGrid[AXIS(r)-1];
+    if (abs(start) > CONFIDENCE_THRESHOLD) {
+      positive = start > 0;
+      if (positive) {
+        pos = start;
+        maxi = r;
+      } else {
+        neg = start;
+        mini = r;
+      }
     }
-  }
-  if (-maxNeg > maxPos) {
-    for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-      norm_pixels[i] = -norm_pixels[i];
+
+    for (uint8_t c=0; c<GRID_EXTENT; c++) {
+      uint8_t i = r + c;
+      if (abs(norm_pixels[i]) <= CONFIDENCE_THRESHOLD) {
+        norm_pixels[i] = 0;
+        continue;
+      }
+      bool new_positive = norm_pixels[i] > 0;
+      if (new_positive == positive) {
+        if (positive) {
+          if (norm_pixels[i] > pos) {
+            if (maxi != UNDEF_POINT) norm_pixels[maxi] = 0;
+            pos = norm_pixels[i];
+            maxi = i;
+          } else {
+            norm_pixels[i] = 0;
+          }
+        } else {
+          if (norm_pixels[i] < neg) {
+            if (mini != UNDEF_POINT) norm_pixels[mini] = 0;
+            neg = norm_pixels[i];
+            mini = i;
+          } else {
+            norm_pixels[i] = 0;
+          }
+        }
+      } else {
+        if (maxi != UNDEF_POINT && mini != UNDEF_POINT) {
+          // we found a pair, ship it
+          uint8_t diff = abs(maxi - mini);
+          if (diff < 7) {
+            uint8_t new_pos = max(maxi, mini) - diff/2;
+            norm_pixels[new_pos] = max(pos, -neg);
+          }
+          norm_pixels[maxi] = 0;
+          norm_pixels[mini] = 0;
+
+          // reset trackers for rest of row
+          pos = 0.0;
+          neg = 0.0;
+          maxi = UNDEF_POINT;
+          mini = UNDEF_POINT;
+        }
+
+        positive = new_positive;
+        if (positive) {
+          pos = norm_pixels[i];
+          maxi = i;
+        } else {
+          neg = norm_pixels[i];
+          mini = i;
+        }
+      }
     }
+
+    if (maxi != UNDEF_POINT && mini != UNDEF_POINT) {
+      // we found a pair, ship it
+      uint8_t diff = abs(maxi - mini);
+      if (diff < 7) {
+        uint8_t new_pos = max(maxi, mini) - diff/2;
+        norm_pixels[new_pos] = max(pos, -neg);
+      }
+    }
+
+    if (maxi != UNDEF_POINT) norm_pixels[maxi] = 0;
+    if (mini != UNDEF_POINT) norm_pixels[mini] = 0;
   }
 
   return true;
