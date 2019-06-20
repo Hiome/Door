@@ -1,21 +1,23 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.4.1"
+#define FIRMWARE_VERSION        "V0.4.2"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
+#define MIN_DISTANCE            1.5  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
 #define DISTANCE_BONUS          2.5  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              4    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
-#define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
-#define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
-#define HIGH_CONF_THRESHOLD     0.7  // give points over 70% confidence extra benefits
+#define CONFIDENCE_THRESHOLD    0.2  // consider a point if we're 20% confident
+#define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 40% confident
+#define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
 #define GRADIENT_THRESHOLD      3.0  // 3º temp change gives us 100% confidence of person
-#define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
+#define T_THRESHOLD             4    // min squared standard deviations of change for a pixel
 #define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
 #define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
+#define MATCH_MULTIPLIER        2.0  // max amount confidence can increase or decrease
+#define MAX_BLOB_WIDTH          6    // max number of rows a heat blob can occupy
 
 #include <Adafruit_AMG88xx.h>
 
@@ -115,6 +117,18 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
   #define pointOnEdge(i)   ( AXIS(i) == 1 || AXIS(i) == GRID_EXTENT )
 #endif
 
+uint8_t massWidth(uint8_t i) {
+  float base = norm_pixels[i] - 0.05;
+  uint8_t total = 0;
+  uint8_t startAxis = AXIS(i);
+  i++;
+  while (norm_pixels[i] == base && AXIS(i) == startAxis) {
+    total++;
+    i++;
+  }
+  return total*2 + 1;
+}
+
 void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     if (past_points[i] != UNDEF_POINT && histories[i] > MIN_HISTORY &&
@@ -124,13 +138,13 @@ void publishEvents() {
       // point cleanly crossed grid
       if (abs(diff) >= 3 || totalDistance(i) >= 6) {
         if (SIDE1(past_points[i])) {
-          publish("1", 10);
+          publish("1", massWidth(past_points[i]), 10);
           // artificially shift starting point ahead 1 row so that
           // if user turns around now, algorithm considers it an exit
           int s = past_points[i] - GRID_EXTENT;
           starting_points[i] = max(s, 0);
         } else {
-          publish("2", 10);
+          publish("2", massWidth(past_points[i]), 10);
           int s = past_points[i] + GRID_EXTENT;
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
@@ -216,13 +230,21 @@ bool normalizePixels() {
   float offGrid[GRID_EXTENT];
   float std;
   float var;
+  float rowAvg;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     std = norm_pixels[i] - bgPixel(i);
 
     if (NOT_AXIS(i) == 1) {
-      uint8_t x = AXIS(i)-1;
+      rowAvg = 0.0;
+      for (uint8_t ri=i; ri<i+GRID_EXTENT; ri++) {
+        rowAvg += norm_pixels[ri];
+      }
+      rowAvg /= (float)GRID_EXTENT;
+
       fgmt = std/fgm;
-      bgmt = std/bgm;
+      bgmt = (norm_pixels[i]-rowAvg)/bgm;
+
+      uint8_t x = AXIS(i)-1;
       offGrid[x] = abs(fgmt) < abs(bgmt) ? fgmt : bgmt;
       if (abs(offGrid[x]) > 1) {
         offGrid[x] = offGrid[x] > 0 ? 1.0 : -1.0;
@@ -232,7 +254,7 @@ bool normalizePixels() {
     // normalize points
     if (NOT_AXIS(i) == GRID_EXTENT) {
       fgmt = -std/fgm;
-      bgmt = -std/bgm;
+      bgmt = (rowAvg-norm_pixels[i])/bgm;
       norm_pixels[i] = abs(fgmt) < abs(bgmt) ? fgmt : bgmt;
       if (abs(norm_pixels[i]) > 1) {
         norm_pixels[i] = norm_pixels[i] > 0 ? 1.0 : -1.0;
@@ -302,16 +324,16 @@ bool normalizePixels() {
       bool new_positive = norm_pixels[i] > 0;
       if (new_positive == positive) {
         if (positive) {
-          if (norm_pixels[i] > pos) {
-            if (maxi != UNDEF_POINT) norm_pixels[maxi] = 0;
+          if (norm_pixels[i] >= pos) {
+            if (maxi != UNDEF_POINT && maxi != i) norm_pixels[maxi] = 0;
             pos = norm_pixels[i];
             maxi = i;
           } else {
             norm_pixels[i] = 0;
           }
         } else {
-          if (norm_pixels[i] < neg) {
-            if (mini != UNDEF_POINT) norm_pixels[mini] = 0;
+          if (norm_pixels[i] <= neg) {
+            if (mini != UNDEF_POINT && mini != i) norm_pixels[mini] = 0;
             neg = norm_pixels[i];
             mini = i;
           } else {
@@ -322,12 +344,21 @@ bool normalizePixels() {
         if (maxi != UNDEF_POINT && mini != UNDEF_POINT) {
           // we found a pair, ship it
           uint8_t diff = abs(maxi - mini);
-          if (diff < 7) {
-            uint8_t new_pos = max(maxi, mini) - diff/2;
+          if (diff < MAX_BLOB_WIDTH) {
+            uint8_t upper_pos = max(maxi, mini);
+            uint8_t lower_pos = min(maxi, mini);
+            uint8_t new_pos = upper_pos - diff/2;
             norm_pixels[new_pos] = max(pos, -neg);
+            for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
+              norm_pixels[x] = norm_pixels[new_pos] - 0.05;
+            }
+            for (uint8_t x = lower_pos; x < new_pos; x++) {
+              norm_pixels[x] = norm_pixels[new_pos] - 0.05;
+            }
+          } else {
+            norm_pixels[maxi] = 0;
+            norm_pixels[mini] = 0;
           }
-          norm_pixels[maxi] = 0;
-          norm_pixels[mini] = 0;
 
           // reset trackers for rest of row
           pos = 0.0;
@@ -350,14 +381,25 @@ bool normalizePixels() {
     if (maxi != UNDEF_POINT && mini != UNDEF_POINT) {
       // we found a pair, ship it
       uint8_t diff = abs(maxi - mini);
-      if (diff < 7) {
-        uint8_t new_pos = max(maxi, mini) - diff/2;
+      if (diff < MAX_BLOB_WIDTH) {
+        uint8_t upper_pos = max(maxi, mini);
+        uint8_t lower_pos = min(maxi, mini);
+        uint8_t new_pos = upper_pos - diff/2;
         norm_pixels[new_pos] = max(pos, -neg);
+        for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
+          norm_pixels[x] = norm_pixels[new_pos] - 0.05;
+        }
+        for (uint8_t x = lower_pos; x < new_pos; x++) {
+          norm_pixels[x] = norm_pixels[new_pos] - 0.05;
+        }
+      } else {
+        norm_pixels[maxi] = 0;
+        norm_pixels[mini] = 0;
       }
+    } else {
+      if (maxi != UNDEF_POINT) norm_pixels[maxi] = 0;
+      if (mini != UNDEF_POINT) norm_pixels[mini] = 0;
     }
-
-    if (maxi != UNDEF_POINT) norm_pixels[maxi] = 0;
-    if (mini != UNDEF_POINT) norm_pixels[mini] = 0;
   }
 
   return true;
@@ -410,12 +452,22 @@ uint8_t findCurrentPoints(uint8_t *points) {
                                                     norm_pixels[ordered_indexes[j]]);
             }
           } else {
-            // prefer later point because it might end up close to a future peak.
-            // note: this disadvantages points on side 2 because it's more likely to
-            // drag them back to the bottom edge, while points on side 1 will be dragged
-            // to middle.
-            norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
-            INSERT_POINT_HERE;
+            uint8_t mass1 = massWidth(i);
+            uint8_t mass2 = massWidth(ordered_indexes[j]);
+            if (mass1 > mass2) {
+              norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
+              INSERT_POINT_HERE;
+            } else if (mass2 > mass1) {
+              norm_pixels[ordered_indexes[j]] = max(norm_pixels[i],
+                                                    norm_pixels[ordered_indexes[j]]);
+            } else {
+              // prefer later point because it might end up close to a future peak.
+              // note: this disadvantages points on side 2 because it's more likely to
+              // drag them back to the bottom edge, while points on side 1 will be dragged
+              // to middle.
+              norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
+              INSERT_POINT_HERE;
+            }
           }
         } // else i is much less than j, so place it later in queue
       }
@@ -505,11 +557,11 @@ void loop_frd() {
         float min_score = 100;
         uint8_t min_index = UNDEF_POINT;
         for (uint8_t j=0; j<total_masses; j++) {
-          // if more than a 3x difference between these points, don't pair them
+          // if more than a 2x difference between these points, don't pair them
           if ((norm_pixels[points[j]] < past_norms[idx] &&
-              norm_pixels[points[j]] * 3.0 < past_norms[idx]) ||
+              norm_pixels[points[j]] * MATCH_MULTIPLIER < past_norms[idx]) ||
               (past_norms[idx] < norm_pixels[points[j]] &&
-              past_norms[idx] * 3.0 < norm_pixels[points[j]])) {
+              past_norms[idx] * MATCH_MULTIPLIER < norm_pixels[points[j]])) {
             continue;
           }
 
@@ -523,13 +575,14 @@ void loop_frd() {
           }
 
           if (d < max_distance) {
-            float score = (d/max_distance) - (norm_pixels[points[j]]/past_norms[idx]) +
+            float score = (d/max_distance) - min(norm_pixels[points[j]]/past_norms[idx],
+                                                 past_norms[idx]/norm_pixels[points[j]]) +
                             max(AVG_CONF_THRESHOLD - norm_pixels[points[j]], 0.0);
-            if (score < min_score) {
+            if (score + 0.05 < min_score) {
               min_score = score;
               min_index = j;
               min_distance = d;
-            } else if (min_index != UNDEF_POINT && abs(score - min_score) < 0.01) {
+            } else if (min_index != UNDEF_POINT && score - min_score < 0.05) {
               // score is the same, pick the point that lets this one move farthest
               float sd1 = euclidean_distance(starting_points[idx], points[j]);
               float sd2 = euclidean_distance(starting_points[idx], points[min_index]);
@@ -570,24 +623,24 @@ void loop_frd() {
       for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
         if (past_points[idx] != UNDEF_POINT && pairs[idx] == i) {
           float score = confidence(idx);
-          if (score < AVG_CONF_THRESHOLD) {
+          if (score + 0.05 < AVG_CONF_THRESHOLD) {
             score = 0.0;
           } else {
             score *= max(totalDistance(idx), 0.5) + (crossed[idx] ? 4.0 : 0.0);
             score *= (1.0 - abs(norm_pixels[points[i]] - past_norms[idx]));
             score /= max(euclidean_distance(past_points[idx], points[i]), 0.9);
           }
-          if (score > max_score) {
+          if (score - 0.05 > max_score) {
             max_score = score;
             max_idx = idx;
-          } else if (abs(score - max_score) < 0.01 ) {
+          } else if (max_score - score < 0.05 ) {
             if (max_idx == UNDEF_POINT) {
               max_idx = idx;
             } else {
               // if 2 competing points have the same score, pick the closer one
               float d1 = euclidean_distance(past_points[idx], points[i]);
               float d2 = euclidean_distance(past_points[max_idx], points[i]);
-              if (d1 < d2 || (abs(d1-d2) < 0.01 && past_norms[idx] > past_norms[max_idx])) {
+              if (d1 + 0.05 < d2 || (d1-d2 < 0.05 && past_norms[idx] > past_norms[max_idx])) {
                 max_idx = idx;
               }
             }
@@ -648,6 +701,7 @@ void loop_frd() {
       uint8_t sp = points[i];
       bool cross = false;
       float an = norm_pixels[points[i]];
+      uint8_t c = 1;
       bool retroMatched = false;
       bool nobodyInMiddle = true;
 
@@ -655,9 +709,11 @@ void loop_frd() {
         // first let's check points on death row from this frame for a match
         for (uint8_t j=0; j<temp_forgotten_num; j++) {
           if (temp_forgotten_points[j] != UNDEF_POINT &&
-              // point cannot be more than 3x warmer than forgotten point
-              ((temp_forgotten_norms[j] <= an && temp_forgotten_norms[j]*3.0 > an) ||
-                (an < temp_forgotten_norms[j] && an*3.0 > temp_forgotten_norms[j]))) {
+              // point cannot be more than 2x warmer than forgotten point
+              ((temp_forgotten_norms[j] <= an &&
+                temp_forgotten_norms[j]*MATCH_MULTIPLIER > an) ||
+              (an < temp_forgotten_norms[j] &&
+                an*MATCH_MULTIPLIER > temp_forgotten_norms[j]))) {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(temp_forgotten_points[j], points[i]);
             if (d >= MAX_DISTANCE || (SIDE(points[i]) != SIDE(temp_forgotten_points[j]) &&
@@ -669,6 +725,8 @@ void loop_frd() {
             h = temp_forgotten_histories[j];
             sp = temp_forgotten_starting_points[j];
             cross = temp_forgotten_crossed[j];
+            an += temp_forgotten_norms[j];
+            c++;
             if (points[i] == sp) {
               h = 1;
             } else if (SIDE(temp_forgotten_points[j]) != SIDE(points[i])) {
@@ -687,9 +745,9 @@ void loop_frd() {
         // second let's check past forgotten points for a match
         for (uint8_t j=0; j<forgotten_num; j++) {
           if (forgotten_past_points[j] != UNDEF_POINT &&
-              // point cannot be more than 3x warmer than forgotten point
-              ((forgotten_norms[j] <= an && forgotten_norms[j]*3.0 > an) ||
-                (an < forgotten_norms[j] && an*3.0 > forgotten_norms[j]))) {
+              // point cannot be more than 2x warmer than forgotten point
+              ((forgotten_norms[j] <= an && forgotten_norms[j]*MATCH_MULTIPLIER > an) ||
+                (an < forgotten_norms[j] && an*MATCH_MULTIPLIER > forgotten_norms[j]))) {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(forgotten_past_points[j], points[i]);
             if (d >= MAX_DISTANCE || (SIDE(points[i]) != SIDE(forgotten_past_points[j]) &&
@@ -701,7 +759,8 @@ void loop_frd() {
             h = forgotten_histories[j];
             sp = forgotten_starting_points[j];
             cross = forgotten_crossed[j];
-            an = 0.0;
+            an += forgotten_norms[j]/((float)cycles_since_forgotten + 1.0);
+            c++;
             if (points[i] == sp) {
               h = 1;
             } else if (SIDE(forgotten_past_points[j]) != SIDE(points[i])) {
@@ -746,7 +805,7 @@ void loop_frd() {
             crossed[j] = cross;
             past_norms[j] = norm_pixels[points[i]];
             avg_norms[j] = an;
-            count[j] = 1;
+            count[j] = c;
             break;
           }
         }

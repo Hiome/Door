@@ -76,6 +76,10 @@ void blink(uint8_t times) {
 
 uint8_t packetCount = 1;
 bool publish(char* msg, int8_t retries) {
+  return publish(msg, 0, retries);
+}
+
+bool publish(char* msg, uint8_t width, int8_t retries) {
   if (retries == -1) {
     if (!radio.canSend()) {
       SERIAL_PRINT(F("s "));
@@ -95,7 +99,7 @@ bool publish(char* msg, int8_t retries) {
     return true;
   } else {
     char sendBuf[15];
-    uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, BATTERY_LEVEL, packetCount);
+    uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, width, packetCount);
     bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries);
 
     if (success || retries > 0) {
