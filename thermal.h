@@ -13,11 +13,9 @@
 #define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 40% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
 #define GRADIENT_THRESHOLD      3.0  // 3º temp change gives us 100% confidence of person
-#define T_THRESHOLD             4    // min squared standard deviations of change for a pixel
-#define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
-#define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
+#define T_THRESHOLD             16   // min squared standard deviations of change for a pixel
 #define MATCH_MULTIPLIER        2.0  // max amount confidence can increase or decrease
-#define MAX_BLOB_WIDTH          6    // max number of rows a heat blob can occupy
+#define MAX_BLOB_WIDTH          6    // max number of columns a heat blob can occupy
 
 #include <Adafruit_AMG88xx.h>
 
@@ -95,7 +93,7 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define totalDistance(x)( euclidean_distance(starting_points[(x)], past_points[(x)]) )
 #define bgPixel(x)      ( ((float)avg_pixels[(x)])/1000.0 )
 #define stdPixel(x)     ( ((float)std_pixels[(x)])/1000.0 )
-#define MAHALANBOIS(x,t)( sq(norm_pixels[(x)]-bgPixel(x))/stdPixel(x) >= (t) )
+#define MAHALANBOIS(x)  ( sq(norm_pixels[(x)]-bgPixel(x))/stdPixel(x) >= T_THRESHOLD )
 
 // check if point is on the top or bottom edges
 // xxxxxxxx
@@ -118,15 +116,72 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #endif
 
 uint8_t massWidth(uint8_t i) {
-  float base = norm_pixels[i] - 0.05;
-  uint8_t total = 0;
   uint8_t startAxis = AXIS(i);
-  i++;
-  while (norm_pixels[i] == base && AXIS(i) == startAxis) {
-    total++;
-    i++;
+  uint8_t width = 1;
+  for (uint8_t x = i+1;
+        x < AMG88xx_PIXEL_ARRAY_SIZE && norm_pixels[x] > 0.001 && AXIS(x) == startAxis;
+        x++) {
+    width++;
   }
-  return total*2 + 1;
+  for (uint8_t x = i-1; x >= 0 && norm_pixels[x] > 0.001 && AXIS(x) == startAxis; x--) {
+    width++;
+  }
+
+  uint8_t height = 1;
+  for (uint8_t x = i+GRID_EXTENT;
+        x < AMG88xx_PIXEL_ARRAY_SIZE && norm_pixels[x] > 0.001;
+        x += GRID_EXTENT) {
+    height++;
+  }
+  for (int8_t x = i-GRID_EXTENT; x >= 0 && norm_pixels[x] > 0.001; x -= GRID_EXTENT) {
+    height++;
+  }
+
+  return max(width, height);
+}
+
+bool connectedPoints(uint8_t p1, uint8_t p2) {
+  uint8_t a = min(p1, p2);
+  uint8_t b = max(p1, p2);
+  uint8_t lowerb = b;
+  uint8_t upperb = b;
+
+  for (int8_t x = b-1; x >= 0 && norm_pixels[x] > 0.001 && AXIS(x) == AXIS(b); x--) {
+    lowerb = x;
+  }
+  for (uint8_t x = b+1;
+        x < AMG88xx_PIXEL_ARRAY_SIZE && norm_pixels[x] > 0.001 && AXIS(x) == AXIS(b);
+        x++) {
+    upperb = x;
+  }
+
+  // waterfall over left edge of blob until we get to the same axis as point b
+  while (AXIS(a) < AXIS(b)) {
+    // find left-most edge of this row
+    for (int8_t x = a-1; x >= 0 && AXIS(x) == AXIS(a); x--) {
+      a = x;
+      if (norm_pixels[a] < 0.001) break;
+    }
+    // find the row below
+    bool matched = false;
+    for (uint8_t x = a;
+          x < (AMG88xx_PIXEL_ARRAY_SIZE - GRID_EXTENT) && AXIS(x) == AXIS(a);
+          x++) {
+      if (norm_pixels[x + GRID_EXTENT] > 0.001) {
+        // a point from the row below was found!
+        a = x + GRID_EXTENT;
+        matched = true;
+        break;
+      }
+      // we reached other side of blob without finding a row below, must be bottom of blob
+      if (x > a && norm_pixels[x] < 0.001) return false;
+    }
+    // we ran out space on this row, must be bottom of blob
+    if (!matched) return false;
+  }
+
+  // a and b must be on same axis by the time we get here
+  return a >= lowerb && a <= upperb;
 }
 
 void publishEvents() {
@@ -177,37 +232,14 @@ bool normalizePixels() {
   if (!pixelsChanged()) return false;
 
   // ignore points that don't have enough neighbors
-  bool ignorable[AMG88xx_PIXEL_ARRAY_SIZE];
+  bool usable[AMG88xx_PIXEL_ARRAY_SIZE];
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     // reading is invalid if less than -20 or greater than 100,
     // but we use a smaller range than that to determine validity
     if (norm_pixels[i] < 0 || norm_pixels[i] > 80) {
       norm_pixels[i] = bgPixel(i);
     }
-
-    if (MAHALANBOIS(i, T_THRESHOLD)) {
-      uint8_t neighbors = 0;
-      if (AXIS(i) > 1) {
-        // not top of row
-        if (MAHALANBOIS(i - GRID_EXTENT, T_THRESHOLD)) neighbors++;
-        if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-(GRID_EXTENT+1), T_THRESHOLD)) neighbors++;
-        if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i-(GRID_EXTENT-1), T_THRESHOLD))
-          neighbors++;
-      }
-      if (AXIS(i) < GRID_EXTENT) {
-        // not bottom of row
-        if (MAHALANBOIS(i + GRID_EXTENT, T_THRESHOLD)) neighbors++;
-        if (NOT_AXIS(i) > 1 && MAHALANBOIS(i+(GRID_EXTENT-1), T_THRESHOLD)) neighbors++;
-        if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+(GRID_EXTENT+1), T_THRESHOLD))
-          neighbors++;
-      }
-      if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-1, T_THRESHOLD)) neighbors++;
-      if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+1, T_THRESHOLD)) neighbors++;
-
-      ignorable[i] = neighbors < MIN_NEIGHBORS;
-    } else {
-      ignorable[i] = true;
-    }
+    usable[i] = MAHALANBOIS(i);
   }
 
   // calculate CSM gradient
@@ -216,7 +248,7 @@ bool normalizePixels() {
   float bgmt;
   float fgmt;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (NOT_AXIS(i) < GRID_EXTENT && (!ignorable[i] || !ignorable[i+1])) {
+    if (NOT_AXIS(i) < GRID_EXTENT && (usable[i] || usable[i+1])) {
       fgmt = norm_pixels[i+1] - norm_pixels[i];
       fgmt = abs(fgmt);
       bgmt = (norm_pixels[i+1] - bgPixel(i+1)) - (norm_pixels[i] - bgPixel(i));
@@ -259,7 +291,7 @@ bool normalizePixels() {
       if (abs(norm_pixels[i]) > 1) {
         norm_pixels[i] = norm_pixels[i] > 0 ? 1.0 : -1.0;
       }
-    } else if (!ignorable[i] || !ignorable[i+1]) {
+    } else if (usable[i] || usable[i+1]) {
       fgmt = (norm_pixels[i+1] - norm_pixels[i])/fgm;
       bgmt = (norm_pixels[i+1] - bgPixel(i+1) - std)/bgm;
 
@@ -352,9 +384,10 @@ bool normalizePixels() {
             for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
               norm_pixels[x] = norm_pixels[new_pos] - 0.05;
             }
-            for (uint8_t x = lower_pos; x < new_pos; x++) {
+            for (uint8_t x = lower_pos + 1; x < new_pos; x++) {
               norm_pixels[x] = norm_pixels[new_pos] - 0.05;
             }
+            norm_pixels[lower_pos] = 0;
           } else {
             norm_pixels[maxi] = 0;
             norm_pixels[mini] = 0;
@@ -389,9 +422,10 @@ bool normalizePixels() {
         for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
           norm_pixels[x] = norm_pixels[new_pos] - 0.05;
         }
-        for (uint8_t x = lower_pos; x < new_pos; x++) {
+        for (uint8_t x = lower_pos + 1; x < new_pos; x++) {
           norm_pixels[x] = norm_pixels[new_pos] - 0.05;
         }
+        norm_pixels[lower_pos] = 0;
       } else {
         norm_pixels[maxi] = 0;
         norm_pixels[mini] = 0;
@@ -405,16 +439,6 @@ bool normalizePixels() {
   return true;
 }
 
-// insert element i into an array at position j, shift everything else over to make room
-#define INSERT_POINT_HERE ({                        \
-  for (uint8_t x=active_pixel_count; x>j; x--) {    \
-    ordered_indexes[x] = ordered_indexes[x-1];      \
-  }                                                 \
-  ordered_indexes[j] = i;                           \
-  added = true;                                     \
-  break;                                            \
-})
-
 uint8_t findCurrentPoints(uint8_t *points) {
   // sort pixels by confidence to find peaks
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
@@ -423,53 +447,16 @@ uint8_t findCurrentPoints(uint8_t *points) {
     if (PIXEL_ACTIVE(i)) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
-        if (norm_pixels[i] > norm_pixels[ordered_indexes[j]] &&
-            (norm_pixels[i] - norm_pixels[ordered_indexes[j]] >= 0.05 ||
-            euclidean_distance(i, ordered_indexes[j]) > MIN_DISTANCE)) {
+        if (norm_pixels[i] > norm_pixels[ordered_indexes[j]] ||
+            (!SIDE1(i) && abs(norm_pixels[i] - norm_pixels[ordered_indexes[j]]) < 0.01)) {
           // point i has higher confidence, place it in front of existing point j
-          INSERT_POINT_HERE;
-        } else if (abs(norm_pixels[ordered_indexes[j]] - norm_pixels[i]) < 0.05 &&
-            euclidean_distance(i, ordered_indexes[j]) <= MIN_DISTANCE) {
-          // both points have similar confidence and are next to each other,
-          // place the point that's closer to a peak in front of the other
-          float d1 = 100;
-          float d2 = 100;
-          for (uint8_t x=0; x<j; x++) {
-            d1 = euclidean_distance(i, ordered_indexes[x]);
-            d2 = euclidean_distance(ordered_indexes[j], ordered_indexes[x]);
-            if (d1 <= MIN_DISTANCE || d2 <= MIN_DISTANCE) break;
+          for (uint8_t x=active_pixel_count; x>j; x--) {
+            ordered_indexes[x] = ordered_indexes[x-1];
           }
-          if (d1 <= MIN_DISTANCE || d2 <= MIN_DISTANCE) {
-            // nearby peak found
-            if (d1 <= d2) {
-              // new point is closer, insert it here and raise its confidence so we stay
-              // in sorted order
-              norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
-              INSERT_POINT_HERE;
-            } else {
-              // otherwise, raise confidence of other point to keep sorted order consistent
-              norm_pixels[ordered_indexes[j]] = max(norm_pixels[i],
-                                                    norm_pixels[ordered_indexes[j]]);
-            }
-          } else {
-            uint8_t mass1 = massWidth(i);
-            uint8_t mass2 = massWidth(ordered_indexes[j]);
-            if (mass1 > mass2) {
-              norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
-              INSERT_POINT_HERE;
-            } else if (mass2 > mass1) {
-              norm_pixels[ordered_indexes[j]] = max(norm_pixels[i],
-                                                    norm_pixels[ordered_indexes[j]]);
-            } else {
-              // prefer later point because it might end up close to a future peak.
-              // note: this disadvantages points on side 2 because it's more likely to
-              // drag them back to the bottom edge, while points on side 1 will be dragged
-              // to middle.
-              norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
-              INSERT_POINT_HERE;
-            }
-          }
-        } // else i is much less than j, so place it later in queue
+          ordered_indexes[j] = i;
+          added = true;
+          break;
+        }
       }
       if (!added) {
         ordered_indexes[active_pixel_count] = i;
@@ -485,7 +472,9 @@ uint8_t findCurrentPoints(uint8_t *points) {
     bool distinct = true;
     for (uint8_t j=0; j<i; j++) {
       // make sure this point isn't close to another peak we already considered
-      if (euclidean_distance(ordered_indexes[j], idx) <= MIN_DISTANCE) {
+      // and that it isn't part of a blob we already registered
+      if (euclidean_distance(ordered_indexes[j], idx) <= MIN_DISTANCE ||
+           connectedPoints(ordered_indexes[j], idx)) {
         distinct = false;
         break;
       }
@@ -773,20 +762,25 @@ void loop_frd() {
         }
       }
 
-      if (!retroMatched) {
+      if (!retroMatched && pointInMiddle(sp)) {
+        bool nobodyOnSide1 = true;
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           if (past_points[j] != UNDEF_POINT && (histories[j] > 1 || crossed[j]) &&
-                pointInMiddle(past_points[j]) && confidence(j) > AVG_CONF_THRESHOLD &&
-                euclidean_distance(past_points[j], points[i]) < 5.0) {
+                confidence(j) > AVG_CONF_THRESHOLD) {
             // there's already a person in the middle of the grid
             // so it's unlikely a new valid person just appeared in the middle
             // (person can't be running and door wasn't closed)
-            nobodyInMiddle = false;
-            break;
+            if (nobodyInMiddle && pointInMiddle(past_points[j]) &&
+                euclidean_distance(past_points[j], points[i]) < 5.0) {
+              nobodyInMiddle = false;
+            }
+            if (nobodyOnSide1 && SIDE1(past_points[j])) nobodyOnSide1 = false;
+            if (!nobodyInMiddle && !nobodyOnSide1) break;
           }
         }
 
-        if (nobodyInMiddle && an > AVG_CONF_THRESHOLD && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
+        if (nobodyInMiddle && nobodyOnSide1 && an > AVG_CONF_THRESHOLD &&
+              AXIS(sp) == (GRID_EXTENT/2 + 1)) {
           // if point is starting in row 5, pretend it started in 6
           retroMatched = true;
         }
