@@ -7,15 +7,14 @@
 #define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
 #define DISTANCE_BONUS          2.5  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
-#define MAX_PEOPLE              4    // most people we support in a single frame
+#define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
 #define CONFIDENCE_THRESHOLD    0.2  // consider a point if we're 20% confident
 #define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 40% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
-#define GRADIENT_THRESHOLD      3.0  // 3º temp change gives us 100% confidence of person
-#define T_THRESHOLD             16   // min squared standard deviations of change for a pixel
+#define GRADIENT_THRESHOLD      5.0  // 3º temp change gives us 100% confidence of person
+#define T_THRESHOLD             5    // min squared standard deviations of change for a pixel
 #define MATCH_MULTIPLIER        2.0  // max amount confidence can increase or decrease
-#define MAX_BLOB_WIDTH          6    // max number of columns a heat blob can occupy
 
 #include <Adafruit_AMG88xx.h>
 
@@ -137,7 +136,7 @@ uint8_t massWidth(uint8_t i) {
     height++;
   }
 
-  return max(width, height);
+  return width*10 + height;
 }
 
 bool connectedPoints(uint8_t p1, uint8_t p2) {
@@ -164,9 +163,7 @@ bool connectedPoints(uint8_t p1, uint8_t p2) {
     }
     // find the row below
     bool matched = false;
-    for (uint8_t x = a;
-          x < (AMG88xx_PIXEL_ARRAY_SIZE - GRID_EXTENT) && AXIS(x) == AXIS(a);
-          x++) {
+    for (uint8_t x = a; AXIS(x) == AXIS(a); x++) {
       if (norm_pixels[x + GRID_EXTENT] > 0.001) {
         // a point from the row below was found!
         a = x + GRID_EXTENT;
@@ -181,6 +178,33 @@ bool connectedPoints(uint8_t p1, uint8_t p2) {
   }
 
   // a and b must be on same axis by the time we get here
+  if (a >= lowerb && a <= upperb) return true;
+  if (a > upperb) return false;
+
+  // did not find connection, try again from right side of blob in case we have a U shape
+  a = min(p1, p2);
+  while (AXIS(a) < AXIS(b)) {
+    // find right-most edge of this row
+    for (uint8_t x = a+1; AXIS(x) == AXIS(a); x++) {
+      a = x;
+      if (norm_pixels[a] < 0.001) break;
+    }
+    // find the row below
+    bool matched = false;
+    for (uint8_t x = a; x >= 0 && AXIS(x) == AXIS(a); x--) {
+      if (norm_pixels[x + GRID_EXTENT] > 0.001) {
+        // a point from the row below was found!
+        a = x + GRID_EXTENT;
+        matched = true;
+        break;
+      }
+      // we reached other side of blob without finding a row below, must be bottom of blob
+      if (x < a && norm_pixels[x] < 0.001) return false;
+    }
+    // we ran out space on this row, must be bottom of blob
+    if (!matched) return false;
+  }
+
   return a >= lowerb && a <= upperb;
 }
 
@@ -376,21 +400,15 @@ bool normalizePixels() {
         if (maxi != UNDEF_POINT && mini != UNDEF_POINT) {
           // we found a pair, ship it
           uint8_t diff = abs(maxi - mini);
-          if (diff < MAX_BLOB_WIDTH) {
-            uint8_t upper_pos = max(maxi, mini);
-            uint8_t lower_pos = min(maxi, mini);
-            uint8_t new_pos = upper_pos - diff/2;
-            norm_pixels[new_pos] = max(pos, -neg);
-            for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
-              norm_pixels[x] = norm_pixels[new_pos] - 0.05;
-            }
-            for (uint8_t x = lower_pos + 1; x < new_pos; x++) {
-              norm_pixels[x] = norm_pixels[new_pos] - 0.05;
-            }
-            norm_pixels[lower_pos] = 0;
-          } else {
-            norm_pixels[maxi] = 0;
-            norm_pixels[mini] = 0;
+          uint8_t upper_pos = max(maxi, mini);
+          uint8_t lower_pos = min(maxi, mini);
+          uint8_t new_pos = upper_pos - diff/2;
+          norm_pixels[new_pos] = max(pos, -neg);
+          for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
+            norm_pixels[x] = norm_pixels[new_pos] - 0.05;
+          }
+          for (uint8_t x = lower_pos; x < new_pos; x++) {
+            norm_pixels[x] = norm_pixels[new_pos] - 0.05;
           }
 
           // reset trackers for rest of row
@@ -414,21 +432,15 @@ bool normalizePixels() {
     if (maxi != UNDEF_POINT && mini != UNDEF_POINT) {
       // we found a pair, ship it
       uint8_t diff = abs(maxi - mini);
-      if (diff < MAX_BLOB_WIDTH) {
-        uint8_t upper_pos = max(maxi, mini);
-        uint8_t lower_pos = min(maxi, mini);
-        uint8_t new_pos = upper_pos - diff/2;
-        norm_pixels[new_pos] = max(pos, -neg);
-        for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
-          norm_pixels[x] = norm_pixels[new_pos] - 0.05;
-        }
-        for (uint8_t x = lower_pos + 1; x < new_pos; x++) {
-          norm_pixels[x] = norm_pixels[new_pos] - 0.05;
-        }
-        norm_pixels[lower_pos] = 0;
-      } else {
-        norm_pixels[maxi] = 0;
-        norm_pixels[mini] = 0;
+      uint8_t upper_pos = max(maxi, mini);
+      uint8_t lower_pos = min(maxi, mini);
+      uint8_t new_pos = upper_pos - diff/2;
+      norm_pixels[new_pos] = max(pos, -neg);
+      for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
+        norm_pixels[x] = norm_pixels[new_pos] - 0.05;
+      }
+      for (uint8_t x = lower_pos; x < new_pos; x++) {
+        norm_pixels[x] = norm_pixels[new_pos] - 0.05;
       }
     } else {
       if (maxi != UNDEF_POINT) norm_pixels[maxi] = 0;
@@ -448,7 +460,8 @@ uint8_t findCurrentPoints(uint8_t *points) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
         if (norm_pixels[i] > norm_pixels[ordered_indexes[j]] ||
-            (!SIDE1(i) && abs(norm_pixels[i] - norm_pixels[ordered_indexes[j]]) < 0.01)) {
+            (!SIDE1(i) && AXIS(i) > AXIS(ordered_indexes[j]) &&
+              abs(norm_pixels[i] - norm_pixels[ordered_indexes[j]]) < 0.01)) {
           // point i has higher confidence, place it in front of existing point j
           for (uint8_t x=active_pixel_count; x>j; x--) {
             ordered_indexes[x] = ordered_indexes[x-1];
@@ -518,7 +531,7 @@ void loop_frd() {
 
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT ({                                                         \
-    if (confidence(idx) > AVG_CONF_THRESHOLD && !pointOnEdge(past_points[idx])) { \
+    if (confidence(idx) > AVG_CONF_THRESHOLD) {                                   \
       temp_forgotten_points[temp_forgotten_num] = past_points[idx];               \
       temp_forgotten_norms[temp_forgotten_num] = past_norms[idx];                 \
       temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];  \
@@ -567,7 +580,7 @@ void loop_frd() {
             float score = (d/max_distance) - min(norm_pixels[points[j]]/past_norms[idx],
                                                  past_norms[idx]/norm_pixels[points[j]]) +
                             max(AVG_CONF_THRESHOLD - norm_pixels[points[j]], 0.0);
-            if (score + 0.05 < min_score) {
+            if (min_score - score > 0.05) {
               min_score = score;
               min_index = j;
               min_distance = d;
@@ -615,11 +628,11 @@ void loop_frd() {
           if (score + 0.05 < AVG_CONF_THRESHOLD) {
             score = 0.0;
           } else {
-            score *= max(totalDistance(idx), 0.5) + (crossed[idx] ? 4.0 : 0.0);
+            score *= max(totalDistance(idx), 0.2) + (crossed[idx] ? 4.0 : 0.0);
             score *= (1.0 - abs(norm_pixels[points[i]] - past_norms[idx]));
             score /= max(euclidean_distance(past_points[idx], points[i]), 0.9);
           }
-          if (score - 0.05 > max_score) {
+          if (score - max_score > 0.05) {
             max_score = score;
             max_idx = idx;
           } else if (max_score - score < 0.05 ) {
@@ -705,10 +718,28 @@ void loop_frd() {
                 an*MATCH_MULTIPLIER > temp_forgotten_norms[j]))) {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(temp_forgotten_points[j], points[i]);
-            if (d >= MAX_DISTANCE || (SIDE(points[i]) != SIDE(temp_forgotten_points[j]) &&
+            if (SIDE(points[i]) != SIDE(temp_forgotten_points[j]) &&
                 (temp_forgotten_norms[j] < AVG_CONF_THRESHOLD ||
-                norm_pixels[points[i]]/d < 0.1))) {
+                norm_pixels[points[i]]/d < 0.1)) {
               continue;
+            }
+
+            if (d >= MAX_DISTANCE) {
+              uint8_t height = 0;
+              if (AXIS(temp_forgotten_points[j]) > AXIS(points[i])) {
+                for (uint8_t x = points[i]+GRID_EXTENT;
+                      x < AMG88xx_PIXEL_ARRAY_SIZE && norm_pixels[x] > 0.001;
+                      x += GRID_EXTENT) {
+                  height++;
+                }
+              } else {
+                for (int8_t x = points[i]-GRID_EXTENT;
+                      x >= 0 && norm_pixels[x] > 0.001;
+                      x -= GRID_EXTENT) {
+                  height++;
+                }
+              }
+              if (d - height >= MAX_DISTANCE) continue;
             }
 
             h = temp_forgotten_histories[j];
@@ -781,8 +812,19 @@ void loop_frd() {
 
         if (nobodyInMiddle && nobodyOnSide1 && an > AVG_CONF_THRESHOLD &&
               AXIS(sp) == (GRID_EXTENT/2 + 1)) {
-          // if point is starting in row 5, pretend it started in 6
+          // if point is starting in row 5 and grid is empty, allow it
           retroMatched = true;
+        } else if (nobodyInMiddle && nobodyOnSide1 && an > HIGH_CONF_THRESHOLD &&
+              AXIS(sp) == (GRID_EXTENT/2)) {
+          uint8_t mass = massWidth(i);
+          uint8_t width = mass / 10;
+          uint8_t height = mass % 10;
+          if (width >= 3 && height >= 2) {
+            // if point is starting in row 4 and is sufficiently large, move it back to row 5
+            sp += GRID_EXTENT;
+            h = 0;
+            retroMatched = true;
+          }
         }
       }
 
