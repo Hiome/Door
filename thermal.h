@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.4.4"
+#define FIRMWARE_VERSION        "V0.4.5"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            1.5  // min distance for 2 peaks to be separate people
