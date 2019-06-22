@@ -4,7 +4,7 @@
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            1.5  // min distance for 2 peaks to be separate people
-#define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
+#define MAX_DISTANCE            2.0  // max distance that a point is allowed to move
 #define DISTANCE_BONUS          1.5  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
@@ -566,7 +566,7 @@ void loop_frd() {
   if (past_total_masses > 0) {
     for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
       if (past_points[idx] != UNDEF_POINT) {
-        float max_distance = MAX_DISTANCE + past_norms[idx] * DISTANCE_BONUS;
+        float max_distance = MAX_DISTANCE + past_norms[idx] * DISTANCE_BONUS + avgHeight(idx);
         float min_distance = 0;
         float min_score = 100;
         uint8_t min_index = UNDEF_POINT;
@@ -578,9 +578,6 @@ void loop_frd() {
               past_norms[idx] * MATCH_MULTIPLIER < norm_pixels[points[j]])) {
             continue;
           }
-
-          if (abs(norm_pixels[points[j]] - past_norms[idx]) < 0.2)
-            max_distance += avgHeight(idx) - 1;
 
           float d = euclidean_distance(past_points[idx], points[j]);
 
@@ -741,9 +738,8 @@ void loop_frd() {
                 an*MATCH_MULTIPLIER > temp_forgotten_norms[j]))) {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(temp_forgotten_points[j], points[i]);
-            float max_distance = MAX_DISTANCE;
-            if (abs(norm_pixels[points[i]] - temp_forgotten_norms[j]) < 0.2)
-              max_distance += temp_forgotten_heights[j] - 1;
+            float max_distance = MAX_DISTANCE + temp_forgotten_norms[j] * DISTANCE_BONUS +
+                                  temp_forgotten_heights[j];
             if (d >= max_distance || SIDE(points[i]) != SIDE(temp_forgotten_points[j]) &&
                 (temp_forgotten_norms[j] < AVG_CONF_THRESHOLD ||
                 norm_pixels[points[i]]/d < 0.1)) {
@@ -779,9 +775,8 @@ void loop_frd() {
                 (an < forgotten_norms[j] && an*MATCH_MULTIPLIER > forgotten_norms[j]))) {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(forgotten_past_points[j], points[i]);
-            float max_distance = MAX_DISTANCE;
-            if (abs(norm_pixels[points[i]] - forgotten_norms[j]) < 0.2)
-              max_distance += forgotten_heights[j] - 1;
+            float max_distance = MAX_DISTANCE + forgotten_norms[j] * DISTANCE_BONUS +
+                                  forgotten_heights[j];
             if (d >= max_distance || (SIDE(points[i]) != SIDE(forgotten_past_points[j]) &&
                 (forgotten_norms[j] < AVG_CONF_THRESHOLD ||
                 norm_pixels[points[i]]/d < 0.1))) {
