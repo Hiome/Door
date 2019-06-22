@@ -5,7 +5,7 @@
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            1.5  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
-#define DISTANCE_BONUS          2.5  // max extra distance a hot point can move
+#define DISTANCE_BONUS          1.5  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
@@ -86,8 +86,6 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
   #error Double check all your code, this is untested
 #endif
 #define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
-#define UPPER_BOUND     ( GRID_EXTENT+1 )
-#define BORDER_PADDING  ( GRID_EXTENT/4 )
 #define SIDE(p)         ( SIDE1(p) ? 1 : 2 )
 #define PIXEL_ACTIVE(i) ( norm_pixels[(i)] > CONFIDENCE_THRESHOLD )
 #define confidence(x)   ( avg_norms[(x)]/((float)count[(x)]) )
@@ -107,14 +105,15 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 // xxxxxxxx
 // xxxxxxxx
 #ifdef YAXIS
-  #define pointOnBorder(i) ( (i) < (GRID_EXTENT * 3) || (i) >= (GRID_EXTENT * 5) )
-  #define pointInMiddle(i) ( (i) >= (GRID_EXTENT * 2) && (i) < (GRID_EXTENT * 6) )
-  #define pointOnEdge(i)   ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
+  #define pointOnBorder(i)      ( (i) < (GRID_EXTENT * 3) || (i) >= (GRID_EXTENT * 5) )
+  #define pointOnSmallBorder(i) ( (i) < (GRID_EXTENT * 2) || (i) >= (GRID_EXTENT * 6) )
+  #define pointInMiddle(i)      ( (i) >= (GRID_EXTENT * 2) && (i) < (GRID_EXTENT * 6) )
+  #define pointOnEdge(i)        ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
 #else
-  #define pointOnBorder(i) ( AXIS(i) < (GRID_EXTENT/2) || AXIS(i) > (GRID_EXTENT/2 + 1) )
-  #define pointInMiddle(i) ( AXIS(i) > BORDER_PADDING &&            \
-                             AXIS(i) < (UPPER_BOUND-BORDER_PADDING) )
-  #define pointOnEdge(i)   ( AXIS(i) == 1 || AXIS(i) == GRID_EXTENT )
+  #define pointOnBorder(i)      ( AXIS(i) <= 3 || AXIS(i) >= 6 )
+  #define pointOnSmallBorder(i) ( AXIS(i) <= 2 || AXIS(i) >= 7 )
+  #define pointInMiddle(i)      ( AXIS(i) > 2 && AXIS(i) < 7 )
+  #define pointOnEdge(i)        ( AXIS(i) == 1 || AXIS(i) == 8 )
 #endif
 
 uint8_t massHeight(uint8_t i) {
@@ -614,13 +613,16 @@ void loop_frd() {
         }
 
         if (min_index != UNDEF_POINT && crossed[idx] &&
-            (total_masses + forgotten_num_frd) < past_total_masses &&
-            (AXIS(past_points[idx]) <= min(min_distance, BORDER_PADDING) ||
-            (UPPER_BOUND - AXIS(past_points[idx])) <= min(min_distance, BORDER_PADDING))) {
-          // we know some point disappeared in this frame, and we know this point already
-          // crossed the middle and was near the border on the other side. Most likely,
-          // it's the one that left the grid, so let's drop it.
-          min_index = UNDEF_POINT;
+            (total_masses + forgotten_num_frd) < past_total_masses) {
+          uint8_t a = AXIS(past_points[idx]);
+          float h = avgHeight(past_points[idx]);
+          h = min(h, 2.5); // don't force a giant blob off the grid too soon
+          if (a + h > GRID_EXTENT || a - h < 1) {
+            // we know some point disappeared in this frame, and we know this point already
+            // crossed the middle and was near the border on the other side. Most likely,
+            // it's the one that left the grid, so let's drop it.
+            min_index = UNDEF_POINT;
+          }
         }
 
         if (min_index == UNDEF_POINT) {
@@ -726,7 +728,7 @@ void loop_frd() {
       uint8_t c = 1;
       uint8_t ah = 0;
       bool retroMatched = false;
-      bool nobodyInMiddle = true;
+      bool nobodyInFront = true;
 
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
@@ -805,39 +807,52 @@ void loop_frd() {
       }
 
       if (!retroMatched && pointInMiddle(sp)) {
-        bool nobodyOnSide1 = true;
-        for (uint8_t j=0; j<MAX_PEOPLE; j++) {
-          if (past_points[j] != UNDEF_POINT && (histories[j] > 1 || crossed[j]) &&
-                confidence(j) > AVG_CONF_THRESHOLD) {
-            // there's already a person in the middle of the grid
-            // so it's unlikely a new valid person just appeared in the middle
-            // (person can't be running and door wasn't closed)
-            if (nobodyInMiddle && pointInMiddle(past_points[j]) &&
-                euclidean_distance(past_points[j], points[i]) < 5.0) {
-              nobodyInMiddle = false;
+        bool nobodyOnBoard = true;
+        if (past_total_masses > 0) {
+          for (uint8_t j=0; j<MAX_PEOPLE; j++) {
+            if (past_points[j] != UNDEF_POINT && (histories[j] > 1 || crossed[j]) &&
+                  confidence(j) > AVG_CONF_THRESHOLD) {
+              // there's already a person in the middle of the grid
+              // so it's unlikely a new valid person just appeared in the middle
+              // (person can't be running and door wasn't closed)
+              nobodyOnBoard = false;
+              if (SIDE1(sp)) {
+                if (AXIS(past_points[j]) >= AXIS(sp) &&
+                    euclidean_distance(past_points[j], sp) <
+                      (4.0 + avgHeight(past_points[j]))) {
+                  nobodyInFront = false;
+                  break;
+                }
+              } else if (AXIS(past_points[j]) <= AXIS(sp) &&
+                          euclidean_distance(past_points[j], sp) <
+                            (4.0 + avgHeight(past_points[j]))) {
+                nobodyInFront = false;
+                break;
+              }
             }
-            if (nobodyOnSide1 && SIDE1(past_points[j])) nobodyOnSide1 = false;
-            if (!nobodyInMiddle && !nobodyOnSide1) break;
           }
         }
 
-        if (nobodyInMiddle && nobodyOnSide1 && an > AVG_CONF_THRESHOLD &&
-              AXIS(sp) == (GRID_EXTENT/2 + 1)) {
+        if (nobodyInFront && an > AVG_CONF_THRESHOLD && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
           // if point is starting in row 5 and grid is empty, allow it
           retroMatched = true;
-        } else if (nobodyInMiddle && nobodyOnSide1 && an > HIGH_CONF_THRESHOLD &&
-              AXIS(sp) == (GRID_EXTENT/2) && massWidth(i) >= 3 && massHeight(i) >= 2) {
-          // if point is starting in row 4 and is sufficiently large, move it back to row 5
-          sp += GRID_EXTENT;
-          h = 0;
-          retroMatched = true;
+        } else if (nobodyOnBoard && an > HIGH_CONF_THRESHOLD &&
+              AXIS(sp) == (GRID_EXTENT/2)) {
+          uint8_t width = massWidth(sp);
+          uint8_t height = width >= 3 && width < 7 ? massHeight(sp) : 0;
+          if (height >= 2 && height < 5) {
+            // if point is starting in row 4 and is sufficiently large, move it back to row 5
+            sp += GRID_EXTENT;
+            h = 0;
+            retroMatched = true;
+          }
         }
       }
 
       // ignore new points that showed up in middle 2 rows of grid
       if (retroMatched ||
-          (nobodyInMiddle && an > AVG_CONF_THRESHOLD && pointOnBorder(sp)) ||
-          !pointInMiddle(sp)) {
+          (nobodyInFront && an > AVG_CONF_THRESHOLD && pointOnBorder(sp)) ||
+          pointOnSmallBorder(sp)) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
           if (past_points[j] == UNDEF_POINT) {
