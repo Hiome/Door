@@ -31,12 +31,14 @@ uint16_t histories[MAX_PEOPLE];
 bool crossed[MAX_PEOPLE];
 float past_norms[MAX_PEOPLE];
 float avg_norms[MAX_PEOPLE];
+uint16_t avg_heights[MAX_PEOPLE];
 uint16_t count[MAX_PEOPLE];
 
 float forgotten_norms[MAX_PEOPLE];
 uint8_t forgotten_past_points[MAX_PEOPLE];
 uint8_t forgotten_starting_points[MAX_PEOPLE];
 uint16_t forgotten_histories[MAX_PEOPLE];
+uint8_t forgotten_heights[MAX_PEOPLE];
 bool forgotten_crossed[MAX_PEOPLE];
 uint8_t forgotten_num = 0;
 uint8_t cycles_since_forgotten = 0;
@@ -89,6 +91,7 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define SIDE(p)         ( SIDE1(p) ? 1 : 2 )
 #define PIXEL_ACTIVE(i) ( norm_pixels[(i)] > CONFIDENCE_THRESHOLD )
 #define confidence(x)   ( avg_norms[(x)]/((float)count[(x)]) )
+#define avgHeight(x)    ( (float)avg_heights[(x)]/((float)count[x]) )
 #define totalDistance(x)( euclidean_distance(starting_points[(x)], past_points[(x)]) )
 #define bgPixel(x)      ( ((float)avg_pixels[(x)])/1000.0 )
 #define stdPixel(x)     ( ((float)std_pixels[(x)])/1000.0 )
@@ -114,6 +117,20 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
   #define pointOnEdge(i)   ( AXIS(i) == 1 || AXIS(i) == GRID_EXTENT )
 #endif
 
+uint8_t massHeight(uint8_t i) {
+  uint8_t height = 1;
+  for (uint8_t x = i+GRID_EXTENT;
+        x < AMG88xx_PIXEL_ARRAY_SIZE && norm_pixels[x] > 0.001;
+        x += GRID_EXTENT) {
+    height++;
+  }
+  for (int8_t x = i-GRID_EXTENT; x >= 0 && norm_pixels[x] > 0.001; x -= GRID_EXTENT) {
+    height++;
+  }
+
+  return height;
+}
+
 uint8_t massWidth(uint8_t i) {
   uint8_t startAxis = AXIS(i);
   uint8_t width = 1;
@@ -126,17 +143,11 @@ uint8_t massWidth(uint8_t i) {
     width++;
   }
 
-  uint8_t height = 1;
-  for (uint8_t x = i+GRID_EXTENT;
-        x < AMG88xx_PIXEL_ARRAY_SIZE && norm_pixels[x] > 0.001;
-        x += GRID_EXTENT) {
-    height++;
-  }
-  for (int8_t x = i-GRID_EXTENT; x >= 0 && norm_pixels[x] > 0.001; x -= GRID_EXTENT) {
-    height++;
-  }
+  return width;
+}
 
-  return width*10 + height;
+uint8_t massSize(uint8_t i) {
+  return massWidth(i)*10 + massHeight(i);
 }
 
 bool connectedPoints(uint8_t p1, uint8_t p2) {
@@ -217,13 +228,13 @@ void publishEvents() {
       // point cleanly crossed grid
       if (abs(diff) >= 3 || totalDistance(i) >= 6) {
         if (SIDE1(past_points[i])) {
-          publish("1", massWidth(past_points[i]), 10);
+          publish("1", massSize(past_points[i]), 10);
           // artificially shift starting point ahead 1 row so that
           // if user turns around now, algorithm considers it an exit
           int s = past_points[i] - GRID_EXTENT;
           starting_points[i] = max(s, 0);
         } else {
-          publish("2", massWidth(past_points[i]), 10);
+          publish("2", massSize(past_points[i]), 10);
           int s = past_points[i] + GRID_EXTENT;
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
@@ -525,6 +536,7 @@ void loop_frd() {
   float temp_forgotten_norms[MAX_PEOPLE];
   uint8_t temp_forgotten_starting_points[MAX_PEOPLE];
   uint16_t temp_forgotten_histories[MAX_PEOPLE];
+  uint8_t temp_forgotten_heights[MAX_PEOPLE];
   bool temp_forgotten_crossed[MAX_PEOPLE];
   uint8_t temp_forgotten_num = 0;
   uint8_t forgotten_num_frd = 0;
@@ -536,6 +548,7 @@ void loop_frd() {
       temp_forgotten_norms[temp_forgotten_num] = past_norms[idx];                 \
       temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];  \
       temp_forgotten_histories[temp_forgotten_num] = histories[idx];              \
+      temp_forgotten_heights[temp_forgotten_num] = (int)floor(avgHeight(idx));    \
       temp_forgotten_crossed[temp_forgotten_num] = crossed[idx];                  \
       temp_forgotten_num++;                                                       \
     }                                                                             \
@@ -567,6 +580,9 @@ void loop_frd() {
             continue;
           }
 
+          if (abs(norm_pixels[points[j]] - past_norms[idx]) < 0.2)
+            max_distance += avgHeight(idx) - 1;
+
           float d = euclidean_distance(past_points[idx], points[j]);
 
           // if switching sides with low confidence, don't pair
@@ -577,8 +593,9 @@ void loop_frd() {
           }
 
           if (d < max_distance) {
-            float score = (d/max_distance) - min(norm_pixels[points[j]]/past_norms[idx],
-                                                 past_norms[idx]/norm_pixels[points[j]]) +
+            float ratio = min(norm_pixels[points[j]]/past_norms[idx],
+                             past_norms[idx]/norm_pixels[points[j]]);
+            float score = (d/max_distance) - sq(ratio) +
                             max(AVG_CONF_THRESHOLD - norm_pixels[points[j]], 0.0);
             if (min_score - score > 0.05) {
               min_score = score;
@@ -669,6 +686,8 @@ void loop_frd() {
             past_norms[idx] = norm_pixels[points[i]];
             histories[idx] = 1;
             avg_norms[idx] = past_norms[idx];
+            avg_heights[idx] = ((int)floor((avg_heights[idx] + massHeight(points[i]))/
+                                            (count[idx] + 1)));
             count[idx] = 1;
           } else {
             if (past_points[idx] != points[i]) {
@@ -692,6 +711,7 @@ void loop_frd() {
             }
             past_norms[idx] = norm_pixels[points[i]];
             avg_norms[idx] += past_norms[idx];
+            avg_heights[idx] += massHeight(points[i]);
             count[idx]++;
           }
           break;
@@ -704,6 +724,7 @@ void loop_frd() {
       bool cross = false;
       float an = norm_pixels[points[i]];
       uint8_t c = 1;
+      uint8_t ah = 0;
       bool retroMatched = false;
       bool nobodyInMiddle = true;
 
@@ -718,34 +739,20 @@ void loop_frd() {
                 an*MATCH_MULTIPLIER > temp_forgotten_norms[j]))) {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(temp_forgotten_points[j], points[i]);
-            if (SIDE(points[i]) != SIDE(temp_forgotten_points[j]) &&
+            float max_distance = MAX_DISTANCE;
+            if (abs(norm_pixels[points[i]] - temp_forgotten_norms[j]) < 0.2)
+              max_distance += temp_forgotten_heights[j] - 1;
+            if (d >= max_distance || SIDE(points[i]) != SIDE(temp_forgotten_points[j]) &&
                 (temp_forgotten_norms[j] < AVG_CONF_THRESHOLD ||
                 norm_pixels[points[i]]/d < 0.1)) {
               continue;
-            }
-
-            if (d >= MAX_DISTANCE) {
-              uint8_t height = 0;
-              if (AXIS(temp_forgotten_points[j]) > AXIS(points[i])) {
-                for (uint8_t x = points[i]+GRID_EXTENT;
-                      x < AMG88xx_PIXEL_ARRAY_SIZE && norm_pixels[x] > 0.001;
-                      x += GRID_EXTENT) {
-                  height++;
-                }
-              } else {
-                for (int8_t x = points[i]-GRID_EXTENT;
-                      x >= 0 && norm_pixels[x] > 0.001;
-                      x -= GRID_EXTENT) {
-                  height++;
-                }
-              }
-              if (d - height >= MAX_DISTANCE) continue;
             }
 
             h = temp_forgotten_histories[j];
             sp = temp_forgotten_starting_points[j];
             cross = temp_forgotten_crossed[j];
             an += temp_forgotten_norms[j];
+            ah += temp_forgotten_heights[j];
             c++;
             if (points[i] == sp) {
               h = 1;
@@ -770,7 +777,10 @@ void loop_frd() {
                 (an < forgotten_norms[j] && an*MATCH_MULTIPLIER > forgotten_norms[j]))) {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(forgotten_past_points[j], points[i]);
-            if (d >= MAX_DISTANCE || (SIDE(points[i]) != SIDE(forgotten_past_points[j]) &&
+            float max_distance = MAX_DISTANCE;
+            if (abs(norm_pixels[points[i]] - forgotten_norms[j]) < 0.2)
+              max_distance += forgotten_heights[j] - 1;
+            if (d >= max_distance || (SIDE(points[i]) != SIDE(forgotten_past_points[j]) &&
                 (forgotten_norms[j] < AVG_CONF_THRESHOLD ||
                 norm_pixels[points[i]]/d < 0.1))) {
               continue;
@@ -780,6 +790,7 @@ void loop_frd() {
             sp = forgotten_starting_points[j];
             cross = forgotten_crossed[j];
             an += forgotten_norms[j]/((float)cycles_since_forgotten + 1.0);
+            ah += forgotten_heights[j];
             c++;
             if (points[i] == sp) {
               h = 1;
@@ -815,16 +826,11 @@ void loop_frd() {
           // if point is starting in row 5 and grid is empty, allow it
           retroMatched = true;
         } else if (nobodyInMiddle && nobodyOnSide1 && an > HIGH_CONF_THRESHOLD &&
-              AXIS(sp) == (GRID_EXTENT/2)) {
-          uint8_t mass = massWidth(i);
-          uint8_t width = mass / 10;
-          uint8_t height = mass % 10;
-          if (width >= 3 && height >= 2) {
-            // if point is starting in row 4 and is sufficiently large, move it back to row 5
-            sp += GRID_EXTENT;
-            h = 0;
-            retroMatched = true;
-          }
+              AXIS(sp) == (GRID_EXTENT/2) && massWidth(i) >= 3 && massHeight(i) >= 2) {
+          // if point is starting in row 4 and is sufficiently large, move it back to row 5
+          sp += GRID_EXTENT;
+          h = 0;
+          retroMatched = true;
         }
       }
 
@@ -841,6 +847,7 @@ void loop_frd() {
             crossed[j] = cross;
             past_norms[j] = norm_pixels[points[i]];
             avg_norms[j] = an;
+            avg_heights[j] = ah + massHeight(points[i]);
             count[j] = c;
             break;
           }
@@ -857,6 +864,7 @@ void loop_frd() {
     memcpy(forgotten_starting_points, temp_forgotten_starting_points,
                                                          (MAX_PEOPLE*sizeof(uint8_t)));
     memcpy(forgotten_histories, temp_forgotten_histories, (MAX_PEOPLE*sizeof(uint16_t)));
+    memcpy(forgotten_heights, temp_forgotten_heights, (MAX_PEOPLE*sizeof(uint8_t)));
     memcpy(forgotten_crossed, temp_forgotten_crossed, (MAX_PEOPLE*sizeof(bool)));
     forgotten_num = temp_forgotten_num;
     cycles_since_forgotten = 0;
