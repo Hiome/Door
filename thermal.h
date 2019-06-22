@@ -12,9 +12,11 @@
 #define CONFIDENCE_THRESHOLD    0.2  // consider a point if we're 20% confident
 #define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 40% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
-#define GRADIENT_THRESHOLD      5.0  // 3º temp change gives us 100% confidence of person
+#define GRADIENT_THRESHOLD      3.0  // 3º temp change gives us 100% confidence of person
 #define T_THRESHOLD             5    // min squared standard deviations of change for a pixel
+#define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
 #define MATCH_MULTIPLIER        2.0  // max amount confidence can increase or decrease
+#define MAX_BLOB_SIZE           7    // max width of a blob before we discard it as noise
 
 #include <Adafruit_AMG88xx.h>
 
@@ -267,13 +269,38 @@ bool normalizePixels() {
 
   // ignore points that don't have enough neighbors
   bool usable[AMG88xx_PIXEL_ARRAY_SIZE];
+  bool mahalanbois[AMG88xx_PIXEL_ARRAY_SIZE];
+  uint8_t neighbors;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     // reading is invalid if less than -20 or greater than 100,
     // but we use a smaller range than that to determine validity
     if (norm_pixels[i] < 0 || norm_pixels[i] > 80) {
       norm_pixels[i] = bgPixel(i);
     }
-    usable[i] = MAHALANBOIS(i);
+    mahalanbois[i] = MAHALANBOIS(i);
+  }
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    if (mahalanbois[i]) {
+      neighbors = 0;
+      if (i >= GRID_EXTENT) {
+        // not top of row
+        if (mahalanbois[i-GRID_EXTENT]) neighbors++;
+        if (NOT_AXIS(i) > 1 && mahalanbois[i-(GRID_EXTENT+1)]) neighbors++;
+        if (NOT_AXIS(i) < GRID_EXTENT && mahalanbois[i-(GRID_EXTENT-1)]) neighbors++;
+      }
+      if (i < (GRID_EXTENT*7)) {
+        // not bottom of row
+        if (mahalanbois[i+GRID_EXTENT]) neighbors++;
+        if (NOT_AXIS(i) > 1 && mahalanbois[i+(GRID_EXTENT-1)]) neighbors++;
+        if (NOT_AXIS(i) < GRID_EXTENT && mahalanbois[i+(GRID_EXTENT+1)]) neighbors++;
+      }
+      if (NOT_AXIS(i) > 1 && mahalanbois[i-1]) neighbors++;
+      if (NOT_AXIS(i) < GRID_EXTENT && mahalanbois[i+1]) neighbors++;
+
+      usable[i] = neighbors >= MIN_NEIGHBORS;
+    } else {
+      usable[i] = false;
+    }
   }
 
   // calculate CSM gradient
@@ -307,8 +334,8 @@ bool normalizePixels() {
       }
       rowAvg /= (float)GRID_EXTENT;
 
-      fgmt = std/fgm;
-      bgmt = (norm_pixels[i]-rowAvg)/bgm;
+      fgmt = std/(2.0*fgm);
+      bgmt = (norm_pixels[i]-rowAvg)/(2.0*bgm);
 
       uint8_t x = AXIS(i)-1;
       offGrid[x] = abs(fgmt) < abs(bgmt) ? fgmt : bgmt;
@@ -319,8 +346,8 @@ bool normalizePixels() {
 
     // normalize points
     if (NOT_AXIS(i) == GRID_EXTENT) {
-      fgmt = -std/fgm;
-      bgmt = (rowAvg-norm_pixels[i])/bgm;
+      fgmt = -std/(2.0*fgm);
+      bgmt = (rowAvg-norm_pixels[i])/(2.0*bgm);
       norm_pixels[i] = abs(fgmt) < abs(bgmt) ? fgmt : bgmt;
       if (abs(norm_pixels[i]) > 1) {
         norm_pixels[i] = norm_pixels[i] > 0 ? 1.0 : -1.0;
@@ -412,13 +439,18 @@ bool normalizePixels() {
           uint8_t diff = abs(maxi - mini);
           uint8_t upper_pos = max(maxi, mini);
           uint8_t lower_pos = min(maxi, mini);
-          uint8_t new_pos = upper_pos - diff/2;
-          norm_pixels[new_pos] = max(pos, -neg);
-          for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
-            norm_pixels[x] = norm_pixels[new_pos] - 0.05;
-          }
-          for (uint8_t x = lower_pos; x < new_pos; x++) {
-            norm_pixels[x] = norm_pixels[new_pos] - 0.05;
+          if (diff < MAX_BLOB_SIZE) {
+            uint8_t new_pos = upper_pos - diff/2;
+            norm_pixels[new_pos] = max(pos, -neg);
+            for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
+              norm_pixels[x] = norm_pixels[new_pos] - 0.05;
+            }
+            for (uint8_t x = lower_pos; x < new_pos; x++) {
+              norm_pixels[x] = norm_pixels[new_pos] - 0.05;
+            }
+          } else {
+            norm_pixels[upper_pos] = 0;
+            norm_pixels[lower_pos] = 0;
           }
 
           // reset trackers for rest of row
@@ -444,13 +476,18 @@ bool normalizePixels() {
       uint8_t diff = abs(maxi - mini);
       uint8_t upper_pos = max(maxi, mini);
       uint8_t lower_pos = min(maxi, mini);
-      uint8_t new_pos = upper_pos - diff/2;
-      norm_pixels[new_pos] = max(pos, -neg);
-      for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
-        norm_pixels[x] = norm_pixels[new_pos] - 0.05;
-      }
-      for (uint8_t x = lower_pos; x < new_pos; x++) {
-        norm_pixels[x] = norm_pixels[new_pos] - 0.05;
+      if (diff < MAX_BLOB_SIZE) {
+        uint8_t new_pos = upper_pos - diff/2;
+        norm_pixels[new_pos] = max(pos, -neg);
+        for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
+          norm_pixels[x] = norm_pixels[new_pos] - 0.05;
+        }
+        for (uint8_t x = lower_pos; x < new_pos; x++) {
+          norm_pixels[x] = norm_pixels[new_pos] - 0.05;
+        }
+      } else {
+        norm_pixels[upper_pos] = 0;
+        norm_pixels[lower_pos] = 0;
       }
     } else {
       if (maxi != UNDEF_POINT) norm_pixels[maxi] = 0;
@@ -804,9 +841,11 @@ void loop_frd() {
       if (!retroMatched && pointInMiddle(sp)) {
         bool nobodyOnBoard = true;
         if (past_total_masses > 0) {
+          uint8_t height = massHeight(sp);
           for (uint8_t j=0; j<MAX_PEOPLE; j++) {
-            if (past_points[j] != UNDEF_POINT && (histories[j] > 1 || crossed[j]) &&
-                  confidence(j) > AVG_CONF_THRESHOLD) {
+            if (past_points[j] != UNDEF_POINT && confidence(j) > AVG_CONF_THRESHOLD &&
+                  (histories[j] > 1 || crossed[j] || avgHeight(j) >= height ||
+                    avgHeight(j) < massHeight(past_points[j]))) {
               // there's already a person in the middle of the grid
               // so it's unlikely a new valid person just appeared in the middle
               // (person can't be running and door wasn't closed)
