@@ -525,6 +525,16 @@ bool normalizePixels() {
   return true;
 }
 
+// insert element i into an array at position j, shift everything else over to make room
+#define INSERT_POINT_HERE ({                        \
+  for (uint8_t x=active_pixel_count; x>j; x--) {    \
+    ordered_indexes[x] = ordered_indexes[x-1];      \
+  }                                                 \
+  ordered_indexes[j] = i;                           \
+  added = true;                                     \
+  break;                                            \
+})
+
 uint8_t findCurrentPoints(uint8_t *points) {
   // sort pixels by confidence to find peaks
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
@@ -533,17 +543,37 @@ uint8_t findCurrentPoints(uint8_t *points) {
     if (PIXEL_ACTIVE(i)) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
-        bool sameAxis = AXIS(i) == AXIS(ordered_indexes[j]);
         float diff = norm_pixels[i] - norm_pixels[ordered_indexes[j]];
-        if ((sameAxis && (SIDEL(i) && diff > -0.001) || (SIDER(i) && diff > 0.01)) ||
-           (!sameAxis && (SIDE1(i) && diff > -0.001) || (SIDE2(i) && diff > 0.01))) {
+        if (diff > 0.01) {
           // point i has higher confidence, place it in front of existing point j
-          for (uint8_t x=active_pixel_count; x>j; x--) {
-            ordered_indexes[x] = ordered_indexes[x-1];
+          INSERT_POINT_HERE;
+        } else if (diff > -0.001) { // both points are equal...
+          if (euclidean_distance(i, ordered_indexes[j]) <= MIN_DISTANCE) {
+            // place the point that's closer to a peak in front of the other
+            float d1 = 100;
+            float d2 = 100;
+            for (uint8_t x=0; x<j; x++) {
+              d1 = euclidean_distance(i, ordered_indexes[x]);
+              d2 = euclidean_distance(ordered_indexes[j], ordered_indexes[x]);
+              if (d1 <= MIN_DISTANCE || d2 <= MIN_DISTANCE) break;
+            }
+            if (d1 <= MIN_DISTANCE || d2 <= MIN_DISTANCE) {
+              // nearby peak found
+              if (d1 <= d2) {
+                // this point is closer to peak, so insert it first
+                INSERT_POINT_HERE;
+              }
+            } else {
+              // insert point in hopes of finding a peak later
+              INSERT_POINT_HERE;
+            }
+          } else {
+            // points aren't nearby, prefer points that are closer to middle of grid
+            bool sameAxis = AXIS(i) == AXIS(ordered_indexes[j]);
+            if ((!sameAxis && SIDE1(i)) || (sameAxis && SIDEL(i))) {
+              INSERT_POINT_HERE;
+            }
           }
-          ordered_indexes[j] = i;
-          added = true;
-          break;
         }
       }
       if (!added) {
@@ -562,9 +592,26 @@ uint8_t findCurrentPoints(uint8_t *points) {
       // make sure this point isn't close to another peak we already considered
       // and that it isn't part of a blob we already registered
       if (euclidean_distance(ordered_indexes[j], idx) <= MIN_DISTANCE ||
-           connectedPoints(ordered_indexes[j], idx)) {
+           (cycles_since_forgotten > 0 && connectedPoints(ordered_indexes[j], idx))) {
         distinct = false;
         break;
+      }
+    }
+    if (distinct && cycles_since_forgotten == 0) {
+      bool maybe_forgotten = false;
+      for (uint8_t f = 0; f < forgotten_num; f++) {
+        if (euclidean_distance(forgotten_past_points[f], idx) < 3) {
+          maybe_forgotten = true;
+          break;
+        }
+      }
+      if (!maybe_forgotten) {
+        for (uint8_t j=0; j<total_masses; j++) {
+          if (connectedPoints(points[j], idx)) {
+            distinct = false;
+            break;
+          }
+        }
       }
     }
     if (distinct) {
@@ -606,7 +653,7 @@ void loop_frd() {
 
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT ({                                                         \
-    if (confidence(idx) > AVG_CONF_THRESHOLD) {                                   \
+    if (histories[idx] > 1 && confidence(idx) > AVG_CONF_THRESHOLD) {             \
       temp_forgotten_points[temp_forgotten_num] = past_points[idx];               \
       temp_forgotten_norms[temp_forgotten_num] = past_norms[idx];                 \
       temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];  \
@@ -652,9 +699,8 @@ void loop_frd() {
           }
 
           if (d < max_distance) {
-            float ratio = min(norm_pixels[points[j]]/past_norms[idx],
-                             past_norms[idx]/norm_pixels[points[j]]);
-            float score = (d/max_distance) - sq(ratio) +
+            float score = (d/max_distance) - min(norm_pixels[points[j]]/past_norms[idx],
+                                                 past_norms[idx]/norm_pixels[points[j]]) +
                             max(AVG_CONF_THRESHOLD - norm_pixels[points[j]], 0.0);
             if (min_score - score > 0.05) {
               min_score = score;
@@ -718,7 +764,7 @@ void loop_frd() {
               // if 2 competing points have the same score, pick the closer one
               float d1 = euclidean_distance(past_points[idx], points[i]);
               float d2 = euclidean_distance(past_points[max_idx], points[i]);
-              if (d1 + 0.05 < d2 || (d1-d2 < 0.05 && past_norms[idx] > past_norms[max_idx])) {
+              if (d1+0.05 < d2 || (d1-d2 < 0.05 && past_norms[idx] > past_norms[max_idx])) {
                 max_idx = idx;
               }
             }
