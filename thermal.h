@@ -3,7 +3,7 @@
 #define FIRMWARE_VERSION        "V0.4.7"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define MIN_DISTANCE            1.5  // min distance for 2 peaks to be separate people
+#define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            2.0  // max distance that a point is allowed to move
 #define DISTANCE_BONUS          2.5  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
@@ -15,8 +15,7 @@
 #define GRADIENT_THRESHOLD      3.0  // 3º temp change gives us 100% confidence of person
 #define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
 #define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
-#define MATCH_MULTIPLIER        2.0  // max amount confidence can increase or decrease
-#define MAX_BLOB_SIZE           7    // max width of a blob before we discard it as noise
+#define MATCH_MULTIPLIER        3.0  // max amount confidence can increase or decrease
 
 #include <Adafruit_AMG88xx.h>
 
@@ -172,18 +171,21 @@ bool connectedPoints(uint8_t p1, uint8_t p2) {
   // waterfall over left edge of blob until we get to the same axis as point b
   while (AXIS(a) < AXIS(b)) {
     // find left-most edge of this row
-    for (int8_t x = a-1; x >= 0 && norm_pixels[x] > 0.001 && AXIS(x) == AXIS(a); x--) {
+    for (int8_t x = a-1; x >= 0 && AXIS(x) == AXIS(a); x--) {
       a = x;
+      if (norm_pixels[a] < 0.001) break;
     }
     // find the row below
     bool matched = false;
-    for (uint8_t x = a; norm_pixels[x] > 0.001 && AXIS(x) == AXIS(a); x++) {
+    for (uint8_t x = a; AXIS(x) == AXIS(a); x++) {
       if (norm_pixels[x + GRID_EXTENT] > 0.001) {
         // a point from the row below was found!
         a = x + GRID_EXTENT;
         matched = true;
         break;
       }
+      // we reached other side of blob without finding a row below, must be bottom of blob
+      if (x > a && norm_pixels[x] < 0.001) return false;
     }
     // we ran out space on this row, must be bottom of blob
     if (!matched) return false;
@@ -197,18 +199,21 @@ bool connectedPoints(uint8_t p1, uint8_t p2) {
   a = min(p1, p2);
   while (AXIS(a) < AXIS(b)) {
     // find right-most edge of this row
-    for (uint8_t x = a+1; norm_pixels[x] > 0.001 && AXIS(x) == AXIS(a); x++) {
+    for (uint8_t x = a+1; AXIS(x) == AXIS(a); x++) {
       a = x;
+      if (norm_pixels[a] < 0.001) break;
     }
     // find the row below
     bool matched = false;
-    for (uint8_t x = a; x >= 0 && norm_pixels[x] > 0.001 && AXIS(x) == AXIS(a); x--) {
+    for (uint8_t x = a; x >= 0 && AXIS(x) == AXIS(a); x--) {
       if (norm_pixels[x + GRID_EXTENT] > 0.001) {
         // a point from the row below was found!
         a = x + GRID_EXTENT;
         matched = true;
         break;
       }
+      // we reached other side of blob without finding a row below, must be bottom of blob
+      if (x < a && norm_pixels[x] < 0.001) return false;
     }
     // we ran out space on this row, must be bottom of blob
     if (!matched) return false;
@@ -431,18 +436,13 @@ bool normalizePixels() {
           uint8_t diff = abs(maxi - mini);
           uint8_t upper_pos = max(maxi, mini);
           uint8_t lower_pos = min(maxi, mini);
-          if (diff < MAX_BLOB_SIZE) {
-            uint8_t new_pos = upper_pos - diff/2;
-            norm_pixels[new_pos] = max(pos, -neg);
-            for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
-              norm_pixels[x] = norm_pixels[new_pos] - 0.05;
-            }
-            for (uint8_t x = lower_pos; x < new_pos; x++) {
-              norm_pixels[x] = norm_pixels[new_pos] - 0.05;
-            }
-          } else {
-            norm_pixels[upper_pos] = 0;
-            norm_pixels[lower_pos] = 0;
+          uint8_t new_pos = upper_pos - diff/2;
+          norm_pixels[new_pos] = max(pos, -neg);
+          for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
+            norm_pixels[x] = norm_pixels[new_pos] - 0.05;
+          }
+          for (uint8_t x = lower_pos; x < new_pos; x++) {
+            norm_pixels[x] = norm_pixels[new_pos] - 0.05;
           }
 
           // reset trackers for rest of row
@@ -468,18 +468,13 @@ bool normalizePixels() {
       uint8_t diff = abs(maxi - mini);
       uint8_t upper_pos = max(maxi, mini);
       uint8_t lower_pos = min(maxi, mini);
-      if (diff < MAX_BLOB_SIZE) {
-        uint8_t new_pos = upper_pos - diff/2;
-        norm_pixels[new_pos] = max(pos, -neg);
-        for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
-          norm_pixels[x] = norm_pixels[new_pos] - 0.05;
-        }
-        for (uint8_t x = lower_pos; x < new_pos; x++) {
-          norm_pixels[x] = norm_pixels[new_pos] - 0.05;
-        }
-      } else {
-        norm_pixels[upper_pos] = 0;
-        norm_pixels[lower_pos] = 0;
+      uint8_t new_pos = upper_pos - diff/2;
+      norm_pixels[new_pos] = max(pos, -neg);
+      for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
+        norm_pixels[x] = norm_pixels[new_pos] - 0.05;
+      }
+      for (uint8_t x = lower_pos; x < new_pos; x++) {
+        norm_pixels[x] = norm_pixels[new_pos] - 0.05;
       }
     } else {
       if (maxi != UNDEF_POINT) norm_pixels[maxi] = 0;
@@ -600,7 +595,13 @@ uint8_t findCurrentPoints(uint8_t *points) {
     if (distinct && cycles_since_forgotten == 0) {
       bool maybe_forgotten = false;
       for (uint8_t f = 0; f < forgotten_num; f++) {
-        if (euclidean_distance(forgotten_past_points[f], idx) < 3) {
+        if (forgotten_past_points[f] != UNDEF_POINT &&
+              // point cannot be more than 2x warmer than forgotten point
+              ((forgotten_norms[f] <= norm_pixels[idx] &&
+                forgotten_norms[f]*MATCH_MULTIPLIER > norm_pixels[idx]) ||
+              (norm_pixels[idx] < forgotten_norms[f] &&
+                norm_pixels[idx]*MATCH_MULTIPLIER > forgotten_norms[f])) &&
+              euclidean_distance(forgotten_past_points[f], idx) < 3) {
           maybe_forgotten = true;
           break;
         }
