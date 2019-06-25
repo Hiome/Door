@@ -9,13 +9,12 @@
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              4    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
-#define CONFIDENCE_THRESHOLD    0.2  // consider a point if we're 20% confident
+#define CONFIDENCE_THRESHOLD    0.3  // consider a point if we're 30% confident
 #define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 40% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
 #define GRADIENT_THRESHOLD      3.0  // 3º temp change gives us 100% confidence of person
 #define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
 #define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
-#define MATCH_MULTIPLIER        3.0  // max amount confidence can increase or decrease
 
 #include <Adafruit_AMG88xx.h>
 
@@ -596,12 +595,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
       bool maybe_forgotten = false;
       for (uint8_t f = 0; f < forgotten_num; f++) {
         if (forgotten_past_points[f] != UNDEF_POINT &&
-              // point cannot be more than 2x warmer than forgotten point
-              ((forgotten_norms[f] <= norm_pixels[idx] &&
-                forgotten_norms[f]*MATCH_MULTIPLIER > norm_pixels[idx]) ||
-              (norm_pixels[idx] < forgotten_norms[f] &&
-                norm_pixels[idx]*MATCH_MULTIPLIER > forgotten_norms[f])) &&
-              euclidean_distance(forgotten_past_points[f], idx) < 3) {
+            euclidean_distance(forgotten_past_points[f], idx) < 3) {
           maybe_forgotten = true;
           break;
         }
@@ -682,14 +676,6 @@ void loop_frd() {
         float min_score = 100;
         uint8_t min_index = UNDEF_POINT;
         for (uint8_t j=0; j<total_masses; j++) {
-          // if more than a 2x difference between these points, don't pair them
-          if ((norm_pixels[points[j]] < past_norms[idx] &&
-              norm_pixels[points[j]] * MATCH_MULTIPLIER < past_norms[idx]) ||
-              (past_norms[idx] < norm_pixels[points[j]] &&
-              past_norms[idx] * MATCH_MULTIPLIER < norm_pixels[points[j]])) {
-            continue;
-          }
-
           float d = euclidean_distance(past_points[idx], points[j]);
 
           // if switching sides with low confidence, don't pair
@@ -833,12 +819,7 @@ void loop_frd() {
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
         for (uint8_t j=0; j<temp_forgotten_num; j++) {
-          if (temp_forgotten_points[j] != UNDEF_POINT &&
-              // point cannot be more than 2x warmer than forgotten point
-              ((temp_forgotten_norms[j] <= an &&
-                temp_forgotten_norms[j]*MATCH_MULTIPLIER > an) ||
-              (an < temp_forgotten_norms[j] &&
-                an*MATCH_MULTIPLIER > temp_forgotten_norms[j]))) {
+          if (temp_forgotten_points[j] != UNDEF_POINT) {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(temp_forgotten_points[j], points[i]);
             float max_distance = MAX_DISTANCE + temp_forgotten_norms[j] * DISTANCE_BONUS;
@@ -870,10 +851,7 @@ void loop_frd() {
       if (!retroMatched && cycles_since_forgotten < MAX_EMPTY_CYCLES) {
         // second let's check past forgotten points for a match
         for (uint8_t j=0; j<forgotten_num; j++) {
-          if (forgotten_past_points[j] != UNDEF_POINT &&
-              // point cannot be more than 2x warmer than forgotten point
-              ((forgotten_norms[j] <= an && forgotten_norms[j]*MATCH_MULTIPLIER > an) ||
-                (an < forgotten_norms[j] && an*MATCH_MULTIPLIER > forgotten_norms[j]))) {
+          if (forgotten_past_points[j] != UNDEF_POINT) {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(forgotten_past_points[j], points[i]);
             float max_distance = MAX_DISTANCE + forgotten_norms[j] * DISTANCE_BONUS;
