@@ -13,6 +13,7 @@
 #define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 40% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
 #define GRADIENT_THRESHOLD      3.0  // 3º temp change gives us 100% confidence of person
+#define MIN_TRAVEL_RATIO        0.2  // ratio of norm/distance that a point must pass
 
 #include <Adafruit_AMG88xx.h>
 
@@ -273,6 +274,7 @@ bool normalizePixels() {
     // but we use a smaller range than that to determine validity
     if (norm_pixels[i] < 0 || norm_pixels[i] > 65) {
       norm_pixels[i] = bgPixel(i);
+      continue;
     }
 
     if (NOT_AXIS(i) < GRID_EXTENT) {
@@ -326,7 +328,10 @@ bool normalizePixels() {
 
     // update average baseline
     // implicit alpha of 0.001
-    if (abs(std) >= 10) {
+    if (std < 1 && norm_pixels[i] < AVG_CONF_THRESHOLD) {
+      // increase alpha to 0.01
+      std *= 10.0;
+    } else if (std >= 10 && norm_pixels[i] >= HIGH_CONF_THRESHOLD) {
       // lower alpha to 0.0001
       std *= 0.1;
     }
@@ -601,20 +606,20 @@ void loop_frd() {
   uint8_t forgotten_num_frd = 0;
 
   // track forgotten point states in temporary local variables and reset global ones
-  #define FORGET_POINT ({                                                         \
-    if (confidence(idx) > AVG_CONF_THRESHOLD) {                                   \
-      temp_forgotten_points[temp_forgotten_num] = past_points[idx];               \
-      temp_forgotten_norms[temp_forgotten_num] = past_norms[idx];                 \
-      temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];  \
-      temp_forgotten_histories[temp_forgotten_num] = histories[idx];              \
-      temp_forgotten_crossed[temp_forgotten_num] = crossed[idx];                  \
-      temp_forgotten_num++;                                                       \
-    }                                                                             \
-    forgotten_num_frd++;                                                          \
-    pairs[idx] = UNDEF_POINT;                                                     \
-    past_points[idx] = UNDEF_POINT;                                               \
-    histories[idx] = 0;                                                           \
-    crossed[idx] = false;                                                         \
+  #define FORGET_POINT ({                                                                   \
+    if ((histories[idx] > 1 || pointOnEdge(idx)) && confidence(idx) > AVG_CONF_THRESHOLD) { \
+      temp_forgotten_points[temp_forgotten_num] = past_points[idx];                         \
+      temp_forgotten_norms[temp_forgotten_num] = past_norms[idx];                           \
+      temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];            \
+      temp_forgotten_histories[temp_forgotten_num] = histories[idx];                        \
+      temp_forgotten_crossed[temp_forgotten_num] = crossed[idx];                            \
+      temp_forgotten_num++;                                                                 \
+    }                                                                                       \
+    forgotten_num_frd++;                                                                    \
+    pairs[idx] = UNDEF_POINT;                                                               \
+    past_points[idx] = UNDEF_POINT;                                                         \
+    histories[idx] = 0;                                                                     \
+    crossed[idx] = false;                                                                   \
   })
 
   uint8_t past_total_masses = 0;
@@ -635,7 +640,8 @@ void loop_frd() {
           // if switching sides with low confidence, don't pair
           if (SIDE(points[j]) != SIDE(past_points[idx]) &&
               (confidence(idx) < AVG_CONF_THRESHOLD ||
-              norm_pixels[points[j]]/d < 0.1)) {
+              past_norms[idx]/d < MIN_TRAVEL_RATIO ||
+              norm_pixels[points[j]]/d < MIN_TRAVEL_RATIO)) {
             continue;
           }
 
@@ -779,7 +785,8 @@ void loop_frd() {
             float max_distance = MAX_DISTANCE + temp_forgotten_norms[j] * DISTANCE_BONUS;
             if (d >= max_distance || SIDE(points[i]) != SIDE(temp_forgotten_points[j]) &&
                 (temp_forgotten_norms[j] < AVG_CONF_THRESHOLD ||
-                norm_pixels[points[i]]/d < 0.1)) {
+                temp_forgotten_norms[j]/d < MIN_TRAVEL_RATIO ||
+                norm_pixels[points[i]]/d < MIN_TRAVEL_RATIO)) {
               continue;
             }
 
@@ -811,14 +818,15 @@ void loop_frd() {
             float max_distance = MAX_DISTANCE + forgotten_norms[j] * DISTANCE_BONUS;
             if (d >= max_distance || (SIDE(points[i]) != SIDE(forgotten_past_points[j]) &&
                 (forgotten_norms[j] < AVG_CONF_THRESHOLD ||
-                norm_pixels[points[i]]/d < 0.1))) {
+                forgotten_norms[j]/d < MIN_TRAVEL_RATIO ||
+                norm_pixels[points[i]]/d < MIN_TRAVEL_RATIO))) {
               continue;
             }
 
             h = forgotten_histories[j];
             sp = forgotten_starting_points[j];
             cross = forgotten_crossed[j];
-            an += forgotten_norms[j]/((float)cycles_since_forgotten + 1.0);
+            an += forgotten_norms[j]/((float)cycles_since_forgotten + 2.0);
             c++;
             if (points[i] == sp) {
               h = 1;
@@ -855,18 +863,9 @@ void loop_frd() {
           }
         }
 
-        if (nobodyInFront && an > AVG_CONF_THRESHOLD && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
+        if (nobodyInFront && an > 0.6 && AXIS(sp) == (GRID_EXTENT/2 + 1)) {
           // if point is starting in row 5 and grid is empty, allow it
           retroMatched = true;
-        } else if (nobodyInFront && an > 0.6 && AXIS(sp) == (GRID_EXTENT/2)) {
-          uint8_t width = massWidth(sp);
-          uint8_t height = width >= 3 && width < 7 ? massHeight(sp) : 0;
-          if (height >= 2 && height < 5) {
-            // if point is starting in row 4 and is sufficiently large, move it back to row 5
-            sp += GRID_EXTENT;
-            h = 0;
-            retroMatched = true;
-          }
         }
       }
 
