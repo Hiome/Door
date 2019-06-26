@@ -3,7 +3,7 @@
 #define FIRMWARE_VERSION        "V0.4.7"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
+#define MIN_DISTANCE            1.5  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            2.0  // max distance that a point is allowed to move
 #define DISTANCE_BONUS          2.5  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
@@ -13,15 +13,12 @@
 #define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 40% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
 #define GRADIENT_THRESHOLD      3.0  // 3º temp change gives us 100% confidence of person
-#define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
-#define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
 
 #include <Adafruit_AMG88xx.h>
 
 Adafruit_AMG88xx amg;
 
 uint16_t avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
-uint16_t std_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float norm_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float cur_pixels_hash = 0;
 
@@ -95,8 +92,6 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define confidence(x)   ( avg_norms[(x)]/((float)count[(x)]) )
 #define totalDistance(x)( euclidean_distance(starting_points[(x)], past_points[(x)]) )
 #define bgPixel(x)      ( ((float)avg_pixels[(x)])/1000.0 )
-#define stdPixel(x)     ( ((float)std_pixels[(x)])/1000.0 )
-#define MAHALANBOIS(x)  ( sq(norm_pixels[(x)]-bgPixel(x))/stdPixel(x) >= T_THRESHOLD )
 
 // check if point is on the top or bottom edges
 // xxxxxxxx
@@ -268,49 +263,19 @@ bool pixelsChanged() {
 bool normalizePixels() {
   if (!pixelsChanged()) return false;
 
-  // ignore points that don't have enough neighbors
-  bool usable[AMG88xx_PIXEL_ARRAY_SIZE];
-  bool mahalanbois[AMG88xx_PIXEL_ARRAY_SIZE];
-  uint8_t neighbors;
-  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    // reading is invalid if less than -20 or greater than 100,
-    // but we use a smaller range than that to determine validity
-    if (norm_pixels[i] < 0 || norm_pixels[i] > 80) {
-      norm_pixels[i] = bgPixel(i);
-    }
-    mahalanbois[i] = MAHALANBOIS(i);
-  }
-  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (mahalanbois[i]) {
-      neighbors = 0;
-      if (i >= GRID_EXTENT) {
-        // not top of row
-        if (mahalanbois[i-GRID_EXTENT]) neighbors++;
-        if (NOT_AXIS(i) > 1 && mahalanbois[i-(GRID_EXTENT+1)]) neighbors++;
-        if (NOT_AXIS(i) < GRID_EXTENT && mahalanbois[i-(GRID_EXTENT-1)]) neighbors++;
-      }
-      if (i < (GRID_EXTENT*7)) {
-        // not bottom of row
-        if (mahalanbois[i+GRID_EXTENT]) neighbors++;
-        if (NOT_AXIS(i) > 1 && mahalanbois[i+(GRID_EXTENT-1)]) neighbors++;
-        if (NOT_AXIS(i) < GRID_EXTENT && mahalanbois[i+(GRID_EXTENT+1)]) neighbors++;
-      }
-      if (NOT_AXIS(i) > 1 && mahalanbois[i-1]) neighbors++;
-      if (NOT_AXIS(i) < GRID_EXTENT && mahalanbois[i+1]) neighbors++;
-
-      usable[i] = neighbors >= MIN_NEIGHBORS;
-    } else {
-      usable[i] = false;
-    }
-  }
-
   // calculate CSM gradient
   float bgm = GRADIENT_THRESHOLD;
   float fgm = GRADIENT_THRESHOLD;
   float bgmt;
   float fgmt;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (NOT_AXIS(i) < GRID_EXTENT && (usable[i] || usable[i+1])) {
+    // reading is invalid if less than -20 or greater than 100,
+    // but we use a smaller range than that to determine validity
+    if (norm_pixels[i] < 0 || norm_pixels[i] > 65) {
+      norm_pixels[i] = bgPixel(i);
+    }
+
+    if (NOT_AXIS(i) < GRID_EXTENT) {
       fgmt = norm_pixels[i+1] - norm_pixels[i];
       fgmt = abs(fgmt);
       bgmt = (norm_pixels[i+1] - bgPixel(i+1)) - (norm_pixels[i] - bgPixel(i));
@@ -323,7 +288,6 @@ bool normalizePixels() {
 
   float offGrid[GRID_EXTENT];
   float std;
-  float var;
   float rowAvg;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     std = norm_pixels[i] - bgPixel(i);
@@ -353,30 +317,20 @@ bool normalizePixels() {
       if (abs(norm_pixels[i]) > 1) {
         norm_pixels[i] = norm_pixels[i] > 0 ? 1.0 : -1.0;
       }
-    } else if (usable[i] || usable[i+1]) {
+    } else {
       fgmt = (norm_pixels[i+1] - norm_pixels[i])/fgm;
       bgmt = (norm_pixels[i+1] - bgPixel(i+1) - std)/bgm;
 
       norm_pixels[i] = abs(fgmt) < abs(bgmt) ? fgmt : bgmt;
-    } else {
-      norm_pixels[i] = 0.0;
     }
 
     // update average baseline
-    var = (abs(std) > 0.1 ? sq(std) : 0.01) - stdPixel(i);
     // implicit alpha of 0.001
     if (abs(std) >= 10) {
       // lower alpha to 0.0001
       std *= 0.1;
     }
-    // implicit alpha of 0.001
-    if (var >= 10) {
-      // lower alpha to 0.0001
-      var *= 0.1;
-    }
     avg_pixels[i] += ((int)round(std));
-    std_pixels[i] += ((int)round(var));
-    if (std_pixels[i] < 10) std_pixels[i] = 10;
   }
 
   // find horizontal midpoint of blob
@@ -534,7 +488,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
   uint8_t active_pixel_count = 0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (PIXEL_ACTIVE(i)) {
+    if (PIXEL_ACTIVE(i) && massHeight(i) > 1 && massWidth(i) > 1) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
         float diff = norm_pixels[i] - norm_pixels[ordered_indexes[j]];
@@ -648,7 +602,7 @@ void loop_frd() {
 
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT ({                                                         \
-    if (histories[idx] > 1 && confidence(idx) > AVG_CONF_THRESHOLD) {             \
+    if (confidence(idx) > AVG_CONF_THRESHOLD) {                                   \
       temp_forgotten_points[temp_forgotten_num] = past_points[idx];               \
       temp_forgotten_norms[temp_forgotten_num] = past_norms[idx];                 \
       temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];  \
@@ -1009,17 +963,16 @@ void initialize() {
   memset(histories, 0, (MAX_PEOPLE*sizeof(uint16_t)));
   memset(crossed, false, (MAX_PEOPLE*sizeof(bool)));
   memset(past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
-  memset(std_pixels, 10, (AMG88xx_PIXEL_ARRAY_SIZE*sizeof(uint8_t)));
 
   amg.readPixels(norm_pixels);
 
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     cur_pixels_hash += sq(norm_pixels[i] + i);
+    if (norm_pixels[i] > 65) norm_pixels[i] = 65;
+    if (norm_pixels[i] < 0) norm_pixels[i] = 0;
     avg_pixels[i] = ((int)round(norm_pixels[i] * 1000.0));
   }
 
-  float std;
-  float var;
   for (uint8_t k=0; k < 10; k++) {
     while (!pixelsChanged()) {
       // wait for pixels to change
@@ -1027,12 +980,9 @@ void initialize() {
     }
 
     for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-      std = norm_pixels[i] - bgPixel(i);
-      var = (abs(std) > 0.1 ? sq(std) : 0.01) - stdPixel(i);
-      // implicit alpha of 0.1
-      avg_pixels[i] += ((int)round(100.0 * std));
-      std_pixels[i] += ((int)round(100.0 * var));
-      if (std_pixels[i] < 10) std_pixels[i] = 10;
+      if (norm_pixels[i] > 65) norm_pixels[i] = 65;
+      if (norm_pixels[i] < 0) norm_pixels[i] = 0;
+      avg_pixels[i] += ((int)round(100.0 * (norm_pixels[i] - bgPixel(i)))); // alpha of 0.1
     }
   }
 }
