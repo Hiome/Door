@@ -488,7 +488,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
   uint8_t active_pixel_count = 0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (PIXEL_ACTIVE(i) && massHeight(i) > 1 && massWidth(i) > 1) {
+    if (PIXEL_ACTIVE(i) && massHeight(i) > 1) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
         float diff = norm_pixels[i] - norm_pixels[ordered_indexes[j]];
