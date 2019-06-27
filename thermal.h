@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.4.9"
+#define FIRMWARE_VERSION        "V0.4.10"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            1.5  // min distance for 2 peaks to be separate people
@@ -493,7 +493,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
   uint8_t active_pixel_count = 0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (PIXEL_ACTIVE(i) && massHeight(i) > 1) {
+    if (PIXEL_ACTIVE(i)) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
         float diff = norm_pixels[i] - norm_pixels[ordered_indexes[j]];
@@ -607,7 +607,7 @@ void loop_frd() {
 
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT ({                                                                   \
-    if ((histories[idx] > 1 || pointOnEdge(idx)) && confidence(idx) > AVG_CONF_THRESHOLD) { \
+    if (histories[idx] > 1 && confidence(idx) > AVG_CONF_THRESHOLD) {                       \
       temp_forgotten_points[temp_forgotten_num] = past_points[idx];                         \
       temp_forgotten_norms[temp_forgotten_num] = past_norms[idx];                           \
       temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];            \
