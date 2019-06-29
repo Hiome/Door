@@ -541,7 +541,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
                 // this point is closer to peak, so insert it first
                 INSERT_POINT_HERE;
               }
-            } else {
+            } else if (AXIS(i) > AXIS(ordered_indexes[j]) || SIDEL(i)) {
               // insert point in hopes of finding a peak later
               INSERT_POINT_HERE;
             }
