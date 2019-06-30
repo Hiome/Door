@@ -31,8 +31,6 @@ float past_norms[MAX_PEOPLE];
 float avg_norms[MAX_PEOPLE];
 uint16_t avg_heights[MAX_PEOPLE];
 uint16_t avg_widths[MAX_PEOPLE];
-uint8_t heightCache[MAX_PEOPLE];
-uint8_t widthCache[MAX_PEOPLE];
 uint16_t count[MAX_PEOPLE];
 
 float forgotten_norms[MAX_PEOPLE];
@@ -99,6 +97,8 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define confidence(x)   ( avg_norms[(x)]/((float)count[(x)]) )
 #define avgHeight(x)    ( (float)avg_heights[(x)]/((float)count[x]) )
 #define avgWidth(x)     ( (float)avg_widths[(x)]/((float)count[x]) )
+#define iavgHeight(x)   ( (int)round(avgHeight(x)) )
+#define iavgWidth(x)    ( (int)round(avgWidth(x)) )
 #define totalDistance(x)( euclidean_distance(starting_points[(x)], past_points[(x)]) )
 #define bgPixel(x)      ( ((float)avg_pixels[(x)])/1000.0 )
 
@@ -150,10 +150,6 @@ uint8_t massWidth(uint8_t i) {
   }
 
   return width;
-}
-
-uint8_t massSize(uint8_t i) {
-  return ((int)avgWidth(i))*10 + ((int)avgHeight(i));
 }
 
 bool connectedPoints(uint8_t p1, uint8_t p2) {
@@ -233,20 +229,25 @@ void publishEvents() {
       int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
       // point cleanly crossed grid
       if (abs(diff) >= 3 || totalDistance(i) >= 6) {
+        uint8_t width = iavgWidth(i);
+        uint8_t height = iavgHeight(i);
+        uint8_t mass = width*10 + height;
         if (SIDE1(past_points[i])) {
-          publish("1", massSize(i), 10);
+          publish("1", mass, 10);
           // artificially shift starting point ahead 1 row so that
           // if user turns around now, algorithm considers it an exit
           int s = past_points[i] - GRID_EXTENT;
           starting_points[i] = max(s, 0);
         } else {
-          publish("2", massSize(i), 10);
+          publish("2", mass, 10);
           int s = past_points[i] + GRID_EXTENT;
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
         histories[i] = 1;
         crossed[i] = true;
         avg_norms[i] = confidence(i);
+        avg_heights[i] = height;
+        avg_widths[i] = width;
         count[i] = 1;
       }
     }
@@ -611,6 +612,8 @@ void loop_frd() {
   uint8_t total_masses = findCurrentPoints(points);
 
   // cache width and height for each point
+  uint8_t heightCache[MAX_PEOPLE];
+  uint8_t widthCache[MAX_PEOPLE];
   for (uint8_t i = 0; i<total_masses; i++) {
     heightCache[i] = massHeight(points[i]);
     widthCache[i] = massWidth(points[i]);
@@ -645,8 +648,8 @@ void loop_frd() {
       temp_forgotten_norms[temp_forgotten_num] = confidence(idx);                           \
       temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];            \
       temp_forgotten_histories[temp_forgotten_num] = histories[idx];                        \
-      temp_forgotten_heights[temp_forgotten_num] = (int)avgHeight(idx);                     \
-      temp_forgotten_widths[temp_forgotten_num] = (int)avgWidth(idx);                       \
+      temp_forgotten_heights[temp_forgotten_num] = iavgHeight(idx);                         \
+      temp_forgotten_widths[temp_forgotten_num] = iavgWidth(idx);                           \
       temp_forgotten_crossed[temp_forgotten_num] = crossed[idx];                            \
       temp_forgotten_num++;                                                                 \
     }                                                                                       \
@@ -780,9 +783,10 @@ void loop_frd() {
             past_norms[idx] = norm_pixels[points[i]];
             histories[idx] = 1;
             avg_norms[idx] = (avg_norms[idx] + past_norms[idx])/((float)count[idx] + 1.0);
-            // int math is good here
-            avg_heights[idx] = (avg_heights[idx] + heightCache[i])/(count[idx] + 1);
-            avg_widths[idx] = (avg_widths[idx] + widthCache[i])/(count[idx] + 1);
+            avg_heights[idx] = (int)round(((float)avg_heights[idx] + (float)heightCache[i])/
+                                          ((float)count[idx] + 1.0));
+            avg_widths[idx] = (int)round(((float)avg_widths[idx] + (float)widthCache[i])/
+                                          ((float)count[idx] + 1.0));
             count[idx] = 1;
           } else {
             if (past_points[idx] != points[i]) {
