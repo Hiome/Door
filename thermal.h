@@ -420,30 +420,26 @@ bool normalizePixels() {
 
     if (maxi != UNDEF_POINT && mini == UNDEF_POINT) {
       float edgePoint = offGrid[AXIS(r)-1];
-      if (abs(edgePoint) > CONFIDENCE_THRESHOLD && edgePoint < 0) {
+      if (-edgePoint > CONFIDENCE_THRESHOLD) {
         neg = edgePoint;
         mini = r;
-      } else {
-        edgePoint = norm_pixels[r+GRID_EXTENT-1];
-        if (abs(edgePoint) > CONFIDENCE_THRESHOLD && edgePoint < 0) {
-          neg = edgePoint;
-          mini = r+GRID_EXTENT-1;
-        }
+      }
+      edgePoint = norm_pixels[r+GRID_EXTENT-1];
+      if (-edgePoint > CONFIDENCE_THRESHOLD && (mini == UNDEF_POINT || edgePoint < neg)) {
+        neg = edgePoint;
+        mini = r+GRID_EXTENT-1;
       }
     } else if (maxi == UNDEF_POINT && mini != UNDEF_POINT) {
       float edgePoint = offGrid[AXIS(r)-1];
-      if (abs(edgePoint) > CONFIDENCE_THRESHOLD && edgePoint > 0) {
+      if (edgePoint > CONFIDENCE_THRESHOLD) {
         pos = edgePoint;
         maxi = r;
-      } else {
-        edgePoint = norm_pixels[r+GRID_EXTENT-1];
-        if (abs(edgePoint) > CONFIDENCE_THRESHOLD && edgePoint > 0) {
-          pos = edgePoint;
-          maxi = r+GRID_EXTENT-1;
-        }
       }
-    } else {
-      norm_pixels[r+GRID_EXTENT-1] = 0;
+      edgePoint = norm_pixels[r+GRID_EXTENT-1];
+      if (edgePoint > CONFIDENCE_THRESHOLD && (maxi == UNDEF_POINT || edgePoint > pos)) {
+        pos = edgePoint;
+        maxi = r+GRID_EXTENT-1;
+      }
     }
 
     if (maxi != UNDEF_POINT && mini != UNDEF_POINT) {
@@ -459,6 +455,7 @@ bool normalizePixels() {
       for (uint8_t x = lower_pos; x < new_pos; x++) {
         norm_pixels[x] = norm_pixels[new_pos] - 0.05;
       }
+      if (upper_pos != r+GRID_EXTENT-1) norm_pixels[r+GRID_EXTENT-1] = 0;
     } else {
       if (maxi != UNDEF_POINT) norm_pixels[maxi] = 0;
       if (mini != UNDEF_POINT) norm_pixels[mini] = 0;
@@ -829,14 +826,17 @@ void loop_frd() {
       bool retroMatched = false;
       bool nobodyInFront = true;
 
+      // ignore new points that are on border below average threshold, or too small
+      if ((an < AVG_CONF_THRESHOLD && pointOnEdge(sp)) ||
+            (widthCache[i] <= 2 && heightCache[i] == 1)) continue;
+
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
         for (uint8_t j=0; j<temp_forgotten_num; j++) {
           if (temp_forgotten_points[j] != UNDEF_POINT) {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(temp_forgotten_points[j], points[i]);
-            float max_distance = MAX_DISTANCE + temp_forgotten_norms[j] * DISTANCE_BONUS;
-            if (d >= max_distance || SIDE(points[i]) != SIDE(temp_forgotten_points[j]) &&
+            if (d >= 3.0 || SIDE(points[i]) != SIDE(temp_forgotten_points[j]) &&
                 (temp_forgotten_norms[j] < AVG_CONF_THRESHOLD ||
                 temp_forgotten_norms[j]/d < MIN_TRAVEL_RATIO ||
                 norm_pixels[points[i]]/d < MIN_TRAVEL_RATIO)) {
@@ -844,22 +844,7 @@ void loop_frd() {
             }
 
             sp = temp_forgotten_starting_points[j];
-            if (SIDE(points[i]) == SIDE(temp_forgotten_points[j])) {
-              if (temp_forgotten_norms[j] > HIGH_CONF_THRESHOLD &&
-                  norm_pixels[points[i]] > HIGH_CONF_THRESHOLD) {
-                h = temp_forgotten_histories[j] + 1;
-              } else {
-                // point just crossed threshold, let's reduce its history to force
-                // it to spend another cycle on this side before we count the event
-                h = min(temp_forgotten_histories[j] + 1, MIN_HISTORY);
-              }
-            } else {
-              if (points[i] == sp) {
-                h = 1;
-              } else {
-                h = min(temp_forgotten_histories[j] + 1, MIN_HISTORY);
-              }
-            }
+            h = points[i] == sp ? 1 : min(temp_forgotten_histories[j], MIN_HISTORY);
             cross = temp_forgotten_crossed[j];
             an += temp_forgotten_norms[j];
             ah += temp_forgotten_heights[j];
@@ -878,8 +863,7 @@ void loop_frd() {
           if (forgotten_past_points[j] != UNDEF_POINT) {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(forgotten_past_points[j], points[i]);
-            float max_distance = MAX_DISTANCE + forgotten_norms[j] * DISTANCE_BONUS;
-            if (d >= max_distance || (SIDE(points[i]) != SIDE(forgotten_past_points[j]) &&
+            if (d >= 3.0 || (SIDE(points[i]) != SIDE(forgotten_past_points[j]) &&
                 (forgotten_norms[j] < AVG_CONF_THRESHOLD ||
                 forgotten_norms[j]/d < MIN_TRAVEL_RATIO ||
                 norm_pixels[points[i]]/d < MIN_TRAVEL_RATIO))) {
@@ -887,22 +871,7 @@ void loop_frd() {
             }
 
             sp = forgotten_starting_points[j];
-            if (SIDE(points[i]) == SIDE(forgotten_past_points[j])) {
-              if (forgotten_norms[j] > HIGH_CONF_THRESHOLD &&
-                  norm_pixels[points[i]] > HIGH_CONF_THRESHOLD) {
-                h = forgotten_histories[j] + 1;
-              } else {
-                // point just crossed threshold, let's reduce its history to force
-                // it to spend another cycle on this side before we count the event
-                h = min(forgotten_histories[j] + 1, MIN_HISTORY);
-              }
-            } else {
-              if (points[i] == sp) {
-                h = 1;
-              } else {
-                h = min(forgotten_histories[j] + 1, MIN_HISTORY);
-              }
-            }
+            h = points[i] == sp ? 1 : min(forgotten_histories[j], MIN_HISTORY);
             cross = forgotten_crossed[j];
             an += forgotten_norms[j]/((float)cycles_since_forgotten + 2.0);
             ah += forgotten_heights[j];
@@ -915,17 +884,14 @@ void loop_frd() {
         }
       }
 
-      // ignore new points that are on border below average threshold, or too small
-      if ((pointOnEdge(points[i]) && norm_pixels[points[i]] < AVG_CONF_THRESHOLD) ||
-          (widthCache[i] <= 2 && heightCache[i] == 1)) continue;
-
       if (!retroMatched && pointInMiddle(sp)) {
         bool nobodyOnBoard = true;
         if (past_total_masses > 0) {
           for (uint8_t j=0; j<MAX_PEOPLE; j++) {
-            if (past_points[j] != UNDEF_POINT && confidence(j) > AVG_CONF_THRESHOLD &&
-                euclidean_distance(past_points[j], sp) < 5.0 &&
-                (histories[j] > 1 || crossed[j] || avgHeight(j) >= heightCache[i])) {
+            if (past_points[j] != UNDEF_POINT &&
+                (count[j] > 1 || crossed[j] || avgHeight(j) >= heightCache[i]) &&
+                euclidean_distance(past_points[j], sp) <
+                  max(avgHeight(j), avgWidth(j)) + MAX_DISTANCE + DISTANCE_BONUS) {
               // there's already a person in the middle of the grid
               // so it's unlikely a new valid person just appeared in the middle
               // (person can't be running and door wasn't closed)
@@ -947,8 +913,8 @@ void loop_frd() {
           // if point is starting in row 5 and grid is empty, allow it
           if (AXIS(sp) == (GRID_EXTENT/2 + 1)) {
             retroMatched = true;
-          } else if (nobodyOnBoard && AXIS(sp) == (GRID_EXTENT/2) &&
-                      PIXEL_ACTIVE(sp+GRID_EXTENT)) {
+          } else if (nobodyOnBoard && an > HIGH_CONF_THRESHOLD &&
+                      AXIS(sp) == (GRID_EXTENT/2) && PIXEL_ACTIVE(sp+GRID_EXTENT)) {
             retroMatched = true;
             sp += GRID_EXTENT;
           }
