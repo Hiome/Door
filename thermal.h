@@ -15,6 +15,9 @@
 #define GRADIENT_THRESHOLD      3.0  // 3º temp change gives us 100% confidence of person
 #define MIN_TRAVEL_RATIO        0.2  // ratio of norm/distance that a point must pass
 
+#define REED_PIN_CLOSE          3
+#define REED_PIN_AJAR           4
+
 #include <Adafruit_AMG88xx.h>
 
 Adafruit_AMG88xx amg;
@@ -42,6 +45,13 @@ uint8_t forgotten_widths[MAX_PEOPLE];
 bool forgotten_crossed[MAX_PEOPLE];
 uint8_t forgotten_num = 0;
 uint8_t cycles_since_forgotten = 0;
+
+#define DOOR_CLOSED 0
+#define DOOR_AJAR   1
+#define DOOR_OPEN   2
+uint8_t door_state = DOOR_CLOSED;
+uint8_t last_published_door_state = 9;
+uint8_t frames_since_door_open = 0;
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -100,6 +110,8 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define iavgHeight(x)   ( (int)round(avgHeight(x)) )
 #define iavgWidth(x)    ( (int)round(avgWidth(x)) )
 #define totalDistance(x)( euclidean_distance(starting_points[(x)], past_points[(x)]) )
+#define doorOpenedAgo(x)( frames_since_door_open < (x) && door_state == DOOR_OPEN )
+#define doorClosedAgo(x)( frames_since_door_open < (x) && door_state == DOOR_CLOSED )
 #define bgPixel(x)      ( ((float)avg_pixels[(x)])/1000.0 )
 
 // check if point is on the top or bottom edges
@@ -249,6 +261,28 @@ void publishEvents() {
         avg_heights[i] = height;
         avg_widths[i] = width;
         count[i] = 1;
+      }
+    }
+  }
+}
+
+void publishMaybeEvents(uint8_t idx) {
+  if (!crossed[idx] && histories[idx] > MIN_HISTORY && totalDistance(idx) > 3) {
+    int diff = AXIS(starting_points[idx]) - AXIS(past_points[idx]);
+    if ((abs(diff) >= 3 || totalDistance(idx) >= (5-diff)) &&
+        confidence(idx) > HIGH_CONF_THRESHOLD) {
+      if (SIDE1(past_points[idx])) {
+        publish("s1", -1);
+      } else {
+        publish("s2", -1);
+      }
+    } else if (count[idx] >= histories[idx] &&
+        (histories[idx] >= (2*MIN_HISTORY) || confidence(idx) > AVG_CONF_THRESHOLD)) {
+      // we don't know what happened, add door to suspicious list
+      if (SIDE1(past_points[idx])) {
+        publish("s1", -1);
+      } else {
+        publish("s2", -1);
       }
     }
   }
@@ -601,7 +635,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
   return total_masses;
 }
 
-void loop_frd() {
+void processSensor() {
   if (!normalizePixels()) return;
 
   // find list of peaks in current frame
@@ -640,7 +674,9 @@ void loop_frd() {
 
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT ({                                                                   \
-    if ((count[idx] > 1 || crossed[idx]) && confidence(idx) > AVG_CONF_THRESHOLD) {         \
+    if (frames_since_door_open > 0 && (count[idx] > 1 || crossed[idx]) &&                   \
+          confidence(idx) > AVG_CONF_THRESHOLD) {                                           \
+      publishMaybeEvents(idx);                                                              \
       temp_forgotten_points[temp_forgotten_num] = past_points[idx];                         \
       temp_forgotten_norms[temp_forgotten_num] = confidence(idx);                           \
       temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];            \
@@ -668,6 +704,12 @@ void loop_frd() {
   if (past_total_masses > 0) {
     for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
       if (past_points[idx] != UNDEF_POINT) {
+        // if door just opened/closed, drop any existing points
+        if (frames_since_door_open < 1) {
+          FORGET_POINT;
+          continue;
+        }
+
         float conf = confidence(idx);
         float max_distance = MAX_DISTANCE + conf * DISTANCE_BONUS;
         float min_distance = 0;
@@ -909,7 +951,7 @@ void loop_frd() {
           }
         }
 
-        if (nobodyInFront && an > 0.6) {
+        if (nobodyInFront && an > 0.6 && doorOpenedAgo(3)) {
           // if point is starting in row 5 and grid is empty, allow it
           if (AXIS(sp) == (GRID_EXTENT/2 + 1)) {
             retroMatched = true;
@@ -920,6 +962,10 @@ void loop_frd() {
           }
         }
       }
+
+      // ignore new points on side 1 immediately after door opens,
+      // or all new points immediately after door closes
+      if ((doorOpenedAgo(1) && SIDE1(sp)) || doorClosedAgo(3)) continue;
 
       // ignore new points that showed up in middle 2 rows of grid
       if (retroMatched ||
@@ -972,6 +1018,10 @@ void loop_frd() {
 
   publishEvents();
 
+  if (frames_since_door_open < 5) {
+    frames_since_door_open++;
+  }
+
   // wrap up with debugging output
 
   #if defined(ENABLE_SERIAL) && defined(PRINT_RAW_DATA)
@@ -1004,8 +1054,28 @@ void loop_frd() {
   #endif
 }
 
+void checkDoorState() {
+  uint8_t last_door_state = door_state;
+  if (digitalRead(REED_PIN_CLOSE) == LOW) {
+    door_state = DOOR_CLOSED;
+  } else {
+    door_state = digitalRead(REED_PIN_AJAR) == LOW ? DOOR_AJAR : DOOR_OPEN;
+  }
+  if (last_door_state != door_state) {
+    frames_since_door_open = 0;
+  }
+  if (((door_state == DOOR_CLOSED && last_published_door_state != DOOR_CLOSED) ||
+       (door_state != DOOR_CLOSED && last_published_door_state != DOOR_OPEN)) &&
+      publish(door_state == DOOR_CLOSED ? "d0" : "d1", 0)) {
+    last_published_door_state = door_state == DOOR_CLOSED ? DOOR_CLOSED : DOOR_OPEN;
+  }
+}
+
 void initialize() {
   amg.begin();
+
+  pinMode(REED_PIN_CLOSE, INPUT_PULLUP);
+  pinMode(REED_PIN_AJAR, INPUT_PULLUP);
 
   blink(2);
   publish(FIRMWARE_VERSION, 10);
@@ -1040,4 +1110,9 @@ void initialize() {
       avg_pixels[i] += ((int)round(100.0 * (norm_pixels[i] - bgPixel(i)))); // alpha of 0.1
     }
   }
+}
+
+void loop_frd() {
+  checkDoorState();
+  processSensor();
 }
