@@ -75,50 +75,30 @@ void blink(uint8_t times) {
 #endif
 
 uint8_t packetCount = 1;
-bool publish(char* msg, int8_t retries) {
-  return publish(msg, 0, retries);
-}
+uint8_t publish(char* msg, uint16_t width, int8_t retries) {
+  char sendBuf[15];
+  uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, width, packetCount);
+  bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries);
 
-bool publish(char* msg, uint8_t width, int8_t retries) {
-  if (retries == -1) {
-    if (!radio.canSend()) {
-      SERIAL_PRINT(F("s "));
-      SERIAL_PRINTLN(msg);
-      SERIAL_FLUSH;
-      return false;
-    }
-
-    char sendBuf[15];
-    uint8_t len = sprintf(sendBuf, "%s;%d0", msg, BATTERY_LEVEL);
-    radio.send(GATEWAYID, sendBuf, len, false);
-
+  #ifdef ENABLE_SERIAL
     SERIAL_PRINT(F("p "));
     SERIAL_PRINT(sendBuf);
+    if (!success) SERIAL_PRINT(F(" x"));
     SERIAL_PRINTLN(F("\n\n"));
     SERIAL_FLUSH;
-    return true;
-  } else {
-    char sendBuf[15];
-    uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, width, packetCount);
-    bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries);
+  #endif
 
-    if (success || retries > 0) {
-      if (packetCount < 9)
-        packetCount++;
-      else
-        packetCount = 1;
+  if (success || retries > 0) {
+    if (packetCount < 9) {
+      packetCount++;
+      return packetCount-1;
+    } else {
+      packetCount = 1;
+      return 9;
     }
-
-    #ifdef ENABLE_SERIAL
-      SERIAL_PRINT(F("p "));
-      SERIAL_PRINT(sendBuf);
-      if (!success) SERIAL_PRINT(F(" x"));
-      SERIAL_PRINTLN(F("\n\n"));
-      SERIAL_FLUSH;
-    #endif
-
-    return success;
   }
+
+  return 0;
 }
 
 void setup() {

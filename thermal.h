@@ -3,8 +3,8 @@
 #define FIRMWARE_VERSION        "V0.4.13"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define MIN_DISTANCE            1.5  // min distance for 2 peaks to be separate people
-#define MAX_DISTANCE            2.0  // max distance that a point is allowed to move
+#define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
+#define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
 #define DISTANCE_BONUS          2.5  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              4    // most people we support in a single frame
@@ -13,7 +13,12 @@
 #define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 40% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
 #define GRADIENT_THRESHOLD      3.0  // 3º temp change gives us 100% confidence of person
-#define MIN_TRAVEL_RATIO        0.2  // ratio of norm/distance that a point must pass
+#define MIN_TRAVEL_RATIO        0.15 // ratio of norm/distance that a point must pass
+
+#define VERY_FAST_ALPHA         0.1
+#define FAST_ALPHA              0.01
+#define ALPHA                   0.001
+#define SLOW_ALPHA              0.0001
 
 #define REED_PIN_CLOSE          3
 #define REED_PIN_AJAR           4
@@ -22,27 +27,28 @@
 
 Adafruit_AMG88xx amg;
 
-uint16_t avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
+float avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float norm_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float cur_pixels_hash = 0;
 
 uint8_t past_points[MAX_PEOPLE];
 uint8_t starting_points[MAX_PEOPLE];
 uint16_t histories[MAX_PEOPLE];
-bool crossed[MAX_PEOPLE];
-float past_norms[MAX_PEOPLE];
+uint8_t crossed[MAX_PEOPLE];
+bool reverted[MAX_PEOPLE];
 float avg_norms[MAX_PEOPLE];
 uint16_t avg_heights[MAX_PEOPLE];
 uint16_t avg_widths[MAX_PEOPLE];
 uint16_t count[MAX_PEOPLE];
 
-float forgotten_norms[MAX_PEOPLE];
 uint8_t forgotten_past_points[MAX_PEOPLE];
 uint8_t forgotten_starting_points[MAX_PEOPLE];
 uint16_t forgotten_histories[MAX_PEOPLE];
+uint8_t forgotten_crossed[MAX_PEOPLE];
+bool forgotten_reverted[MAX_PEOPLE];
+float forgotten_norms[MAX_PEOPLE];
 uint8_t forgotten_heights[MAX_PEOPLE];
 uint8_t forgotten_widths[MAX_PEOPLE];
-bool forgotten_crossed[MAX_PEOPLE];
 uint8_t forgotten_num = 0;
 uint8_t cycles_since_forgotten = 0;
 
@@ -112,7 +118,6 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define totalDistance(x)( euclidean_distance(starting_points[(x)], past_points[(x)]) )
 #define doorOpenedAgo(x)( frames_since_door_open < (x) && door_state == DOOR_OPEN )
 #define doorClosedAgo(x)( frames_since_door_open < (x) && door_state == DOOR_CLOSED )
-#define bgPixel(x)      ( ((float)avg_pixels[(x)])/1000.0 )
 
 // check if point is on the top or bottom edges
 // xxxxxxxx
@@ -128,11 +133,13 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
   #define pointOnSmallBorder(i) ( (i) < (GRID_EXTENT * 2) || (i) >= (GRID_EXTENT * 6) )
   #define pointInMiddle(i)      ( (i) >= (GRID_EXTENT * 2) && (i) < (GRID_EXTENT * 6) )
   #define pointOnEdge(i)        ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
+  #define pointOnLREdge(i)      ( NOT_AXIS(i) == 1 || NOT_AXIS(1) == GRID_EXTENT )
 #else
   #define pointOnBorder(i)      ( AXIS(i) <= 3 || AXIS(i) >= 6 )
   #define pointOnSmallBorder(i) ( AXIS(i) <= 2 || AXIS(i) >= 7 )
   #define pointInMiddle(i)      ( AXIS(i) > 2 && AXIS(i) < 7 )
   #define pointOnEdge(i)        ( AXIS(i) == 1 || AXIS(i) == 8 )
+  #define pointOnLREdge(i)      ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
 #endif
 
 uint8_t massHeight(uint8_t i) {
@@ -233,6 +240,47 @@ bool connectedPoints(uint8_t p1, uint8_t p2) {
   return a >= lowerb && a <= upperb;
 }
 
+void checkDoorState() {
+  uint8_t last_door_state = door_state;
+  if (digitalRead(REED_PIN_CLOSE) == LOW) {
+    door_state = DOOR_CLOSED;
+  } else {
+    door_state = digitalRead(REED_PIN_AJAR) == LOW ? DOOR_AJAR : DOOR_OPEN;
+  }
+  if (last_door_state != door_state) {
+    frames_since_door_open = 0;
+    memset(past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
+  }
+  if (((door_state == DOOR_CLOSED && last_published_door_state != DOOR_CLOSED) ||
+       (door_state != DOOR_CLOSED && last_published_door_state != DOOR_OPEN)) &&
+      publish(door_state == DOOR_CLOSED ? "d0" : "d1", 0, 0)) {
+    last_published_door_state = door_state == DOOR_CLOSED ? DOOR_CLOSED : DOOR_OPEN;
+  }
+}
+
+void checkForRevert(uint8_t idx) {
+  if (!crossed[idx] || frames_since_door_open == 0) return;
+  if (reverted[idx] && (pointOnSmallBorder(past_points[idx]) ||
+        pointOnLREdge(past_points[idx]))) {
+    checkDoorState();
+    if (frames_since_door_open == 0) return;
+    char rBuf[3];
+    sprintf(rBuf, "r%d", crossed[idx]);
+    // we had previously reverted this point, but it came back and made it through
+    publish(rBuf, floor(confidence(idx)*100.0), 10);
+    reverted[idx] = false;
+  } else if (!reverted[idx] && confidence(idx) < HIGH_CONF_THRESHOLD &&
+      pointInMiddle(past_points[idx]) && !pointOnLREdge(past_points[idx])) {
+    checkDoorState();
+    if (frames_since_door_open == 0) return;
+    char rBuf[3];
+    sprintf(rBuf, "r%d", crossed[idx]);
+    // point disappeared in middle of grid, revert its crossing (probably noise or a hand)
+    publish(rBuf, floor(confidence(idx)*100.0), 10);
+    reverted[idx] = true;
+  }
+}
+
 void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     if (past_points[i] != UNDEF_POINT && histories[i] > MIN_HISTORY &&
@@ -243,46 +291,25 @@ void publishEvents() {
       if (abs(diff) >= 3 || totalDistance(i) >= 6) {
         uint8_t width = iavgWidth(i);
         uint8_t height = iavgHeight(i);
-        uint8_t mass = width*10 + height;
+        uint8_t conf = (int)floor(confidence(i) * 100.0);
+        uint16_t props = width*1000 + height*100 + conf;
         if (SIDE1(past_points[i])) {
-          publish("1", mass, 10);
+          crossed[i] = publish("1", props, 10);
           // artificially shift starting point ahead 1 row so that
           // if user turns around now, algorithm considers it an exit
           int s = past_points[i] - GRID_EXTENT;
           starting_points[i] = max(s, 0);
         } else {
-          publish("2", mass, 10);
+          crossed[i] = publish("2", props, 10);
           int s = past_points[i] + GRID_EXTENT;
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
         histories[i] = 1;
-        crossed[i] = true;
+        reverted[i] = false;
         avg_norms[i] = confidence(i);
         avg_heights[i] = height;
         avg_widths[i] = width;
         count[i] = 1;
-      }
-    }
-  }
-}
-
-void publishMaybeEvents(uint8_t idx) {
-  if (!crossed[idx] && histories[idx] > MIN_HISTORY && totalDistance(idx) > 3) {
-    int diff = AXIS(starting_points[idx]) - AXIS(past_points[idx]);
-    if ((abs(diff) >= 3 || totalDistance(idx) >= (5-diff)) &&
-        confidence(idx) > HIGH_CONF_THRESHOLD) {
-      if (SIDE1(past_points[idx])) {
-        publish("s1", -1);
-      } else {
-        publish("s2", -1);
-      }
-    } else if (count[idx] >= histories[idx] &&
-        (histories[idx] >= (2*MIN_HISTORY) || confidence(idx) > AVG_CONF_THRESHOLD)) {
-      // we don't know what happened, add door to suspicious list
-      if (SIDE1(past_points[idx])) {
-        publish("s1", -1);
-      } else {
-        publish("s2", -1);
       }
     }
   }
@@ -316,14 +343,14 @@ bool normalizePixels() {
     // reading is invalid if less than -20 or greater than 100,
     // but we use a smaller range than that to determine validity
     if (norm_pixels[i] < 0 || norm_pixels[i] > 65) {
-      norm_pixels[i] = bgPixel(i);
+      norm_pixels[i] = avg_pixels[i];
       continue;
     }
 
     if (NOT_AXIS(i) < GRID_EXTENT) {
       fgmt = norm_pixels[i+1] - norm_pixels[i];
       fgmt = abs(fgmt);
-      bgmt = (norm_pixels[i+1] - bgPixel(i+1)) - (norm_pixels[i] - bgPixel(i));
+      bgmt = (norm_pixels[i+1] - avg_pixels[i+1]) - (norm_pixels[i] - avg_pixels[i]);
       bgmt = abs(bgmt);
 
       fgm = max(fgmt, fgm);
@@ -335,7 +362,7 @@ bool normalizePixels() {
   float std;
   float rowAvg;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    std = norm_pixels[i] - bgPixel(i);
+    std = norm_pixels[i] - avg_pixels[i];
 
     if (NOT_AXIS(i) == 1) {
       rowAvg = 0.0;
@@ -364,21 +391,22 @@ bool normalizePixels() {
       }
     } else {
       fgmt = (norm_pixels[i+1] - norm_pixels[i])/fgm;
-      bgmt = (norm_pixels[i+1] - bgPixel(i+1) - std)/bgm;
+      bgmt = (norm_pixels[i+1] - avg_pixels[i+1] - std)/bgm;
 
       norm_pixels[i] = abs(fgmt) < abs(bgmt) ? fgmt : bgmt;
     }
 
     // update average baseline
-    // implicit alpha of 0.001
     if (std < 1 && norm_pixels[i] < AVG_CONF_THRESHOLD) {
-      // increase alpha to 0.01
-      std *= 10.0;
+      std *= FAST_ALPHA;
     } else if (std >= 10 && norm_pixels[i] >= HIGH_CONF_THRESHOLD) {
       // lower alpha to 0.0001
-      std *= 0.1;
+      std *= SLOW_ALPHA;
+    } else {
+      // implicit alpha of 0.001
+      std *= ALPHA;
     }
-    avg_pixels[i] += ((int)round(std));
+    avg_pixels[i] += std;
   }
 
   // find horizontal midpoint of blob
@@ -554,10 +582,10 @@ uint8_t findCurrentPoints(uint8_t *points) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
         float diff = norm_pixels[i] - norm_pixels[ordered_indexes[j]];
-        if (diff > 0.01) {
+        if (diff > 0.03) {
           // point i has higher confidence, place it in front of existing point j
           INSERT_POINT_HERE;
-        } else if (diff > -0.001) { // both points are equal...
+        } else if (diff > -0.03) { // both points are similar...
           if (euclidean_distance(i, ordered_indexes[j]) <= MIN_DISTANCE) {
             // place the point that's closer to a peak in front of the other
             float d1 = 100;
@@ -571,17 +599,33 @@ uint8_t findCurrentPoints(uint8_t *points) {
               // nearby peak found
               if (d1 <= d2) {
                 // this point is closer to peak, so insert it first
+                norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
                 INSERT_POINT_HERE;
               }
             } else if (AXIS(i) > AXIS(ordered_indexes[j]) || SIDEL(i)) {
               // insert point in hopes of finding a peak later
+              norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
               INSERT_POINT_HERE;
             }
           } else {
-            // points aren't nearby, prefer points that are closer to middle of grid
-            bool sameAxis = AXIS(i) == AXIS(ordered_indexes[j]);
-            if ((!sameAxis && SIDE1(i)) || (sameAxis && SIDEL(i))) {
+            // points aren't nearby, prefer larger masses
+            uint8_t h1 = massHeight(i);
+            uint8_t h2 = massHeight(ordered_indexes[j]);
+            if (h1 > h2) {
+              norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
               INSERT_POINT_HERE;
+            } else if (h1 == h2) {
+              uint8_t w1 = massWidth(i);
+              uint8_t w2 = massWidth(ordered_indexes[j]);
+              if (w1 > w2) {
+                norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
+                INSERT_POINT_HERE;
+              } else if (w1 == w2 && abs(diff) < 0.009) {
+                bool sameAxis = AXIS(i) == AXIS(ordered_indexes[j]);
+                if ((!sameAxis && SIDE1(i)) || (sameAxis && SIDEL(i))) {
+                  INSERT_POINT_HERE;
+                }
+              }
             }
           }
         }
@@ -601,28 +645,9 @@ uint8_t findCurrentPoints(uint8_t *points) {
     for (uint8_t j=0; j<i; j++) {
       // make sure this point isn't close to another peak we already considered
       // and that it isn't part of a blob we already registered
-      if (euclidean_distance(ordered_indexes[j], idx) <= MIN_DISTANCE ||
-           (cycles_since_forgotten > 0 && connectedPoints(ordered_indexes[j], idx))) {
+      if (euclidean_distance(ordered_indexes[j], idx) <= MIN_DISTANCE) {
         distinct = false;
         break;
-      }
-    }
-    if (distinct && cycles_since_forgotten == 0) {
-      bool maybe_forgotten = false;
-      for (uint8_t f = 0; f < forgotten_num; f++) {
-        if (forgotten_past_points[f] != UNDEF_POINT &&
-            euclidean_distance(forgotten_past_points[f], idx) < 3) {
-          maybe_forgotten = true;
-          break;
-        }
-      }
-      if (!maybe_forgotten) {
-        for (uint8_t j=0; j<total_masses; j++) {
-          if (connectedPoints(points[j], idx)) {
-            distinct = false;
-            break;
-          }
-        }
       }
     }
     if (distinct) {
@@ -668,15 +693,17 @@ void processSensor() {
   uint16_t temp_forgotten_histories[MAX_PEOPLE];
   uint8_t temp_forgotten_heights[MAX_PEOPLE];
   uint8_t temp_forgotten_widths[MAX_PEOPLE];
-  bool temp_forgotten_crossed[MAX_PEOPLE];
+  uint8_t temp_forgotten_crossed[MAX_PEOPLE];
+  bool temp_forgotten_reverted[MAX_PEOPLE];
   uint8_t temp_forgotten_num = 0;
   uint8_t forgotten_num_frd = 0;
 
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT ({                                                                   \
-    if (frames_since_door_open > 0 && (count[idx] > 1 || crossed[idx]) &&                   \
+    checkForRevert(idx);                                                                    \
+    if (((count[idx] > 1 && !crossed[idx]) ||                                               \
+          (crossed[idx] && pointInMiddle(past_points[idx]))) &&                             \
           confidence(idx) > AVG_CONF_THRESHOLD) {                                           \
-      publishMaybeEvents(idx);                                                              \
       temp_forgotten_points[temp_forgotten_num] = past_points[idx];                         \
       temp_forgotten_norms[temp_forgotten_num] = confidence(idx);                           \
       temp_forgotten_starting_points[temp_forgotten_num] = starting_points[idx];            \
@@ -684,35 +711,24 @@ void processSensor() {
       temp_forgotten_heights[temp_forgotten_num] = iavgHeight(idx);                         \
       temp_forgotten_widths[temp_forgotten_num] = iavgWidth(idx);                           \
       temp_forgotten_crossed[temp_forgotten_num] = crossed[idx];                            \
+      temp_forgotten_reverted[temp_forgotten_num] = reverted[idx];                          \
       temp_forgotten_num++;                                                                 \
     }                                                                                       \
     forgotten_num_frd++;                                                                    \
     pairs[idx] = UNDEF_POINT;                                                               \
     past_points[idx] = UNDEF_POINT;                                                         \
-    avg_heights[idx] = 0;                                                                   \
-    avg_widths[idx] = 0;                                                                    \
-    histories[idx] = 0;                                                                     \
-    count[idx] = 0;                                                                         \
-    crossed[idx] = false;                                                                   \
   })
 
   uint8_t past_total_masses = 0;
-  for (uint8_t i=0; i<MAX_PEOPLE; i++) {
-    if (past_points[i] != UNDEF_POINT) past_total_masses++;
+  for (uint8_t idx=0; idx<MAX_PEOPLE; idx++) {
+    if (past_points[idx] != UNDEF_POINT) past_total_masses++;
   }
 
   if (past_total_masses > 0) {
     for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
       if (past_points[idx] != UNDEF_POINT) {
-        // if door just opened/closed, drop any existing points
-        if (frames_since_door_open < 1) {
-          FORGET_POINT;
-          continue;
-        }
-
         float conf = confidence(idx);
         float max_distance = MAX_DISTANCE + conf * DISTANCE_BONUS;
-        float min_distance = 0;
         float min_score = 100;
         uint8_t min_index = UNDEF_POINT;
         for (uint8_t j=0; j<total_masses; j++) {
@@ -728,35 +744,21 @@ void processSensor() {
           if (d < max_distance) {
             float aHeight = avgHeight(idx);
             float aWidth = avgWidth(idx);
-            float ratioH = min(heightCache[j]/aHeight, aHeight/heightCache[j]);
-            float ratioW = min(widthCache[j]/aWidth, aWidth/widthCache[j]);
+            float ratioH = crossed[idx] ? aHeight/heightCache[j] : heightCache[j]/aHeight;
+            float ratioW = crossed[idx] ? aWidth/widthCache[j] : widthCache[j]/aWidth;
             float ratioP = min(norm_pixels[points[j]]/conf, conf/norm_pixels[points[j]]);
-            float score = (d/max_distance) - ratioP - ratioH - ratioW +
+            float score = (d/(2.0*max_distance)) - ratioP - min(ratioH, 1) - min(ratioW, 1) +
                               max(AVG_CONF_THRESHOLD - norm_pixels[points[j]], 0.0);
             if (min_score - score > 0.05) {
               min_score = score;
               min_index = j;
-              min_distance = d;
             } else if (min_index != UNDEF_POINT && score - min_score < 0.05) {
               // score is the same, pick the point that lets this one move farthest
               float sd1 = euclidean_distance(starting_points[idx], points[j]);
               float sd2 = euclidean_distance(starting_points[idx], points[min_index]);
-              if (sd1 > sd2) {
-                min_index = j;
-                min_distance = d;
-              }
+              if (sd1 > sd2) min_index = j;
             }
           }
-        }
-
-        if (min_index != UNDEF_POINT && crossed[idx] &&
-            (total_masses + forgotten_num_frd) < past_total_masses &&
-            (AXIS(past_points[idx]) <= min(min_distance, 2) ||
-            ((GRID_EXTENT+1) - AXIS(past_points[idx])) <= min(min_distance, 2))) {
-          // we know some point disappeared in this frame, and we know this point already
-          // crossed the middle and was near the border on the other side. Most likely,
-          // it's the one that left the grid, so let's drop it.
-          min_index = UNDEF_POINT;
         }
 
         if (min_index == UNDEF_POINT) {
@@ -777,13 +779,18 @@ void processSensor() {
       uint8_t max_idx = UNDEF_POINT;
       for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
         if (past_points[idx] != UNDEF_POINT && pairs[idx] == i) {
-          float score = confidence(idx);
-          if (score + 0.05 < AVG_CONF_THRESHOLD) {
+          float conf = confidence(idx);
+          float score = conf;
+          float d = euclidean_distance(past_points[idx], points[i]);
+          if (score + 0.05 < AVG_CONF_THRESHOLD || (crossed[idx] &&
+              (AXIS(past_points[idx]) <= min(d, 2) ||
+            ((GRID_EXTENT+1) - AXIS(past_points[idx])) <= min(d, 2)))) {
             score = 0.0;
           } else {
-            score *= max(totalDistance(idx), 0.2) + (crossed[idx] ? 4.0 : 0.0);
-            score *= (1.0 - abs(norm_pixels[points[i]] - past_norms[idx]));
-            score /= max(euclidean_distance(past_points[idx], points[i]), 0.9);
+            score *= max(totalDistance(idx), 0.2) + (crossed[idx] ? 3.0 : 0.0);
+            score *= (1.0 - abs(norm_pixels[points[i]] - conf));
+            score /= max(d, 0.9);
+            if (avgHeight(idx) == 1) score -= 0.3;
           }
           if (score - max_score > 0.05) {
             max_score = score;
@@ -793,9 +800,8 @@ void processSensor() {
               max_idx = idx;
             } else {
               // if 2 competing points have the same score, pick the closer one
-              float d1 = euclidean_distance(past_points[idx], points[i]);
               float d2 = euclidean_distance(past_points[max_idx], points[i]);
-              if (d1+0.05 < d2 || (d1-d2 < 0.05 && confidence(idx) > confidence(max_idx))) {
+              if (d+0.05 < d2 || (d-d2 < 0.05 && conf > confidence(max_idx))) {
                 max_idx = idx;
               }
             }
@@ -819,9 +825,11 @@ void processSensor() {
             // always consider a point on the outer edge as just starting off
             past_points[idx] = points[i];
             starting_points[idx] = points[i];
-            past_norms[idx] = norm_pixels[points[i]];
             histories[idx] = 1;
-            avg_norms[idx] = (avg_norms[idx] + past_norms[idx])/((float)count[idx] + 1.0);
+            crossed[idx] = 0;
+            reverted[idx] = false;
+            avg_norms[idx] = (avg_norms[idx] + norm_pixels[points[i]])/
+                                  ((float)count[idx] + 1.0);
             avg_heights[idx] = (int)round(((float)avg_heights[idx] + (float)heightCache[i])/
                                           ((float)count[idx] + 1.0));
             avg_widths[idx] = (int)round(((float)avg_widths[idx] + (float)widthCache[i])/
@@ -847,8 +855,7 @@ void processSensor() {
               }
               past_points[idx] = points[i];
             }
-            past_norms[idx] = norm_pixels[points[i]];
-            avg_norms[idx] += past_norms[idx];
+            avg_norms[idx] += norm_pixels[points[i]];
             avg_heights[idx] += heightCache[i];
             avg_widths[idx] += widthCache[i];
             count[idx]++;
@@ -860,17 +867,14 @@ void processSensor() {
       // new point appeared (no past point found), start tracking it
       uint16_t h = 1;
       uint8_t sp = points[i];
-      bool cross = false;
+      uint8_t cross = 0;
+      bool revert = false;
       float an = norm_pixels[points[i]];
       uint8_t ah = 0;
       uint8_t aw = 0;
       uint8_t c = 1;
       bool retroMatched = false;
       bool nobodyInFront = true;
-
-      // ignore new points that are on border below average threshold, or too small
-      if ((an < AVG_CONF_THRESHOLD && pointOnEdge(sp)) ||
-            (widthCache[i] <= 2 && heightCache[i] == 1)) continue;
 
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
@@ -888,6 +892,7 @@ void processSensor() {
             sp = temp_forgotten_starting_points[j];
             h = points[i] == sp ? 1 : min(temp_forgotten_histories[j], MIN_HISTORY);
             cross = temp_forgotten_crossed[j];
+            revert = temp_forgotten_reverted[j];
             an += temp_forgotten_norms[j];
             ah += temp_forgotten_heights[j];
             aw += temp_forgotten_widths[j];
@@ -915,6 +920,7 @@ void processSensor() {
             sp = forgotten_starting_points[j];
             h = points[i] == sp ? 1 : min(forgotten_histories[j], MIN_HISTORY);
             cross = forgotten_crossed[j];
+            revert = forgotten_reverted[j];
             an += forgotten_norms[j]/((float)cycles_since_forgotten + 2.0);
             ah += forgotten_heights[j];
             aw += forgotten_widths[j];
@@ -978,7 +984,7 @@ void processSensor() {
             histories[j] = h;
             starting_points[j] = sp;
             crossed[j] = cross;
-            past_norms[j] = norm_pixels[points[i]];
+            reverted[j] = revert;
             avg_norms[j] = an;
             avg_heights[j] = ah + heightCache[i];
             avg_widths[j] = aw + widthCache[i];
@@ -1000,7 +1006,8 @@ void processSensor() {
     memcpy(forgotten_histories, temp_forgotten_histories, (MAX_PEOPLE*sizeof(uint16_t)));
     memcpy(forgotten_heights, temp_forgotten_heights, (MAX_PEOPLE*sizeof(uint8_t)));
     memcpy(forgotten_widths, temp_forgotten_widths, (MAX_PEOPLE*sizeof(uint8_t)));
-    memcpy(forgotten_crossed, temp_forgotten_crossed, (MAX_PEOPLE*sizeof(bool)));
+    memcpy(forgotten_crossed, temp_forgotten_crossed, (MAX_PEOPLE*sizeof(uint8_t)));
+    memcpy(forgotten_reverted, temp_forgotten_reverted, (MAX_PEOPLE*sizeof(bool)));
     forgotten_num = temp_forgotten_num;
     cycles_since_forgotten = 0;
     SERIAL_PRINTLN(F("saved"));
@@ -1054,23 +1061,6 @@ void processSensor() {
   #endif
 }
 
-void checkDoorState() {
-  uint8_t last_door_state = door_state;
-  if (digitalRead(REED_PIN_CLOSE) == LOW) {
-    door_state = DOOR_CLOSED;
-  } else {
-    door_state = digitalRead(REED_PIN_AJAR) == LOW ? DOOR_AJAR : DOOR_OPEN;
-  }
-  if (last_door_state != door_state) {
-    frames_since_door_open = 0;
-  }
-  if (((door_state == DOOR_CLOSED && last_published_door_state != DOOR_CLOSED) ||
-       (door_state != DOOR_CLOSED && last_published_door_state != DOOR_OPEN)) &&
-      publish(door_state == DOOR_CLOSED ? "d0" : "d1", 0)) {
-    last_published_door_state = door_state == DOOR_CLOSED ? DOOR_CLOSED : DOOR_OPEN;
-  }
-}
-
 void initialize() {
   amg.begin();
 
@@ -1078,15 +1068,13 @@ void initialize() {
   pinMode(REED_PIN_AJAR, INPUT_PULLUP);
 
   blink(2);
-  publish(FIRMWARE_VERSION, 10);
+  publish(FIRMWARE_VERSION, 0, 10);
 
   // give sensor 12sec to stabilize
   blink(24);
   // let sensor calibrate with light off
   LOWPOWER_DELAY(SLEEP_1S);
 
-  memset(histories, 0, (MAX_PEOPLE*sizeof(uint16_t)));
-  memset(crossed, false, (MAX_PEOPLE*sizeof(bool)));
   memset(past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
 
   amg.readPixels(norm_pixels);
@@ -1095,8 +1083,8 @@ void initialize() {
     cur_pixels_hash += sq(norm_pixels[i] + i);
     if (norm_pixels[i] > 65) norm_pixels[i] = 65;
     if (norm_pixels[i] < 0) norm_pixels[i] = 0;
-    avg_pixels[i] = ((int)round(norm_pixels[i] * 1000.0));
   }
+  memcpy(avg_pixels, norm_pixels, (AMG88xx_PIXEL_ARRAY_SIZE*sizeof(float)));
 
   for (uint8_t k=0; k < 10; k++) {
     while (!pixelsChanged()) {
@@ -1107,7 +1095,7 @@ void initialize() {
     for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
       if (norm_pixels[i] > 65) norm_pixels[i] = 65;
       if (norm_pixels[i] < 0) norm_pixels[i] = 0;
-      avg_pixels[i] += ((int)round(100.0 * (norm_pixels[i] - bgPixel(i)))); // alpha of 0.1
+      avg_pixels[i] += VERY_FAST_ALPHA * (norm_pixels[i] - avg_pixels[i]);
     }
   }
 }
