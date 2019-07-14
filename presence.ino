@@ -13,17 +13,15 @@
 #define ENCRYPTKEY    "smarterisbetters" // exactly the same 16 characters/bytes on all nodes!
 #define ATC_RSSI      -75
 #define SERIAL_BAUD   115200
-
-/* Pin Connections */
-#define FLASH  8
-#define LED    9
-#define BATT   A7
+#define RETRY_TIME    50
 
 #include <RFM69_ATC.h>
 #include <RFM69_OTA.h>
 #include <SPIFlash.h>
-#include <SPI.h>
 #include <LowPower.h>
+
+RFM69_ATC radio;
+SPIFlash flash(8, 0xEF30); //EF30 for windbond 4mbit flash
 
 #ifdef ENABLE_SERIAL
   #define SERIAL_START      ( Serial.begin(SERIAL_BAUD) )
@@ -39,46 +37,11 @@
 
 #define LOWPOWER_DELAY(d) ( LowPower.powerDown(d, ADC_OFF, BOD_ON) )
 
-RFM69_ATC radio;
-SPIFlash flash(FLASH, 0xEF30); //EF30 for windbond 4mbit flash
-
-void blink(uint8_t times) {
-  while (times > 0) {
-    digitalWrite(LED, LOW);
-    LOWPOWER_DELAY(SLEEP_120MS);
-    digitalWrite(LED, HIGH);
-    LOWPOWER_DELAY(SLEEP_250MS);
-    digitalWrite(LED, LOW);
-    LOWPOWER_DELAY(SLEEP_120MS);
-    times--;
-  }
-}
-
-#if defined LIDAR
-  #include "lidar.h"
-#elif defined MOTION
-  #include "motion.h"
-#elif defined DOOR
-  #include "door.h"
-#elif defined THERMAL
-  #include "thermal.h"
-#elif defined BED
-  #include "bed.h"
-#else
-  #error Missing node type
-#endif
-
-#ifdef BATTERY_POWERED
-  #define BATTERY_LEVEL ( analogRead(BATT) )
-#else
-  #define BATTERY_LEVEL ( 0 )
-#endif
-
 uint8_t packetCount = 1;
 uint8_t publish(char* msg, uint16_t width, int8_t retries) {
   char sendBuf[15];
   uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, width, packetCount);
-  bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries);
+  bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries, RETRY_TIME);
 
   #ifdef ENABLE_SERIAL
     SERIAL_PRINT(F("p "));
@@ -101,11 +64,22 @@ uint8_t publish(char* msg, uint16_t width, int8_t retries) {
   return 0;
 }
 
+#if defined LIDAR
+  #include "lidar.h"
+#elif defined MOTION
+  #include "motion.h"
+#elif defined DOOR
+  #include "door.h"
+#elif defined THERMAL
+  #include "thermal.h"
+#elif defined BED
+  #include "bed.h"
+#else
+  #error Missing node type
+#endif
+
 void setup() {
   SERIAL_START;
-
-  pinMode(LED, OUTPUT);
-  digitalWrite(LED, HIGH);
 
   radio.initialize(RF69_915MHZ, NODEID, NETWORKID);
   radio.encrypt(ENCRYPTKEY);
@@ -114,8 +88,6 @@ void setup() {
   if (flash.initialize()) flash.sleep();
 
   initialize();
-
-  digitalWrite(LED, LOW);
 }
 
 void loop() {

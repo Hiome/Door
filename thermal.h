@@ -20,9 +20,6 @@
 #define ALPHA                   0.001
 #define SLOW_ALPHA              0.0001
 
-#define REED_PIN_CLOSE          3
-#define REED_PIN_AJAR           4
-
 #include <Adafruit_AMG88xx.h>
 
 Adafruit_AMG88xx amg;
@@ -40,6 +37,7 @@ float avg_norms[MAX_PEOPLE];
 uint16_t avg_heights[MAX_PEOPLE];
 uint16_t avg_widths[MAX_PEOPLE];
 uint16_t count[MAX_PEOPLE];
+uint16_t zombieCount[MAX_PEOPLE];
 
 uint8_t forgotten_past_points[MAX_PEOPLE];
 uint8_t forgotten_starting_points[MAX_PEOPLE];
@@ -108,16 +106,46 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
   #error Double check all your code, this is untested
 #endif
 #define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
-#define SIDE(p)         ( SIDE1(p) ? 1 : 2 )
-#define PIXEL_ACTIVE(i) ( norm_pixels[(i)] > CONFIDENCE_THRESHOLD )
-#define confidence(x)   ( avg_norms[(x)]/((float)count[(x)]) )
-#define avgHeight(x)    ( (float)avg_heights[(x)]/((float)count[x]) )
-#define avgWidth(x)     ( (float)avg_widths[(x)]/((float)count[x]) )
-#define iavgHeight(x)   ( (int)round(avgHeight(x)) )
-#define iavgWidth(x)    ( (int)round(avgWidth(x)) )
-#define totalDistance(x)( euclidean_distance(starting_points[(x)], past_points[(x)]) )
-#define doorOpenedAgo(x)( frames_since_door_open < (x) && door_state == DOOR_OPEN )
-#define doorClosedAgo(x)( frames_since_door_open < (x) && door_state == DOOR_CLOSED )
+
+bool sameSide(uint8_t a, uint8_t b) {
+  return SIDE1(a) ? SIDE1(b) : SIDE2(b);
+}
+
+bool pixelActive(uint8_t i) {
+  return norm_pixels[(i)] > CONFIDENCE_THRESHOLD;
+}
+
+float confidence(uint8_t x) {
+  return avg_norms[(x)]/((float)count[(x)]);
+}
+
+float avgHeight(uint8_t x) {
+  return (float)avg_heights[(x)]/((float)count[x]);
+}
+
+float avgWidth(uint8_t x) {
+  return (float)avg_widths[(x)]/((float)count[x]);
+}
+
+uint8_t iavgHeight(uint8_t x) {
+  return (int)round(avgHeight(x));
+}
+
+uint8_t iavgWidth(uint8_t x) {
+  return (int)round(avgWidth(x));
+}
+
+float totalDistance(uint8_t x) {
+  return euclidean_distance(starting_points[(x)], past_points[(x)]);
+}
+
+bool doorOpenedAgo(uint8_t x) {
+  return frames_since_door_open < (x) && door_state == DOOR_OPEN;
+}
+
+bool doorClosedAgo(uint8_t x) {
+  return frames_since_door_open < (x) && door_state == DOOR_CLOSED;
+}
 
 // check if point is on the top or bottom edges
 // xxxxxxxx
@@ -171,81 +199,13 @@ uint8_t massWidth(uint8_t i) {
   return width;
 }
 
-bool connectedPoints(uint8_t p1, uint8_t p2) {
-  uint8_t a = min(p1, p2);
-  uint8_t b = max(p1, p2);
-  uint8_t lowerb = b;
-  uint8_t upperb = b;
-
-  for (int8_t x = b-1; x >= 0 && norm_pixels[x] > 0.001 && AXIS(x) == AXIS(b); x--) {
-    lowerb = x;
-  }
-  for (uint8_t x = b+1;
-        x < AMG88xx_PIXEL_ARRAY_SIZE && norm_pixels[x] > 0.001 && AXIS(x) == AXIS(b);
-        x++) {
-    upperb = x;
-  }
-
-  // waterfall over left edge of blob until we get to the same axis as point b
-  while (AXIS(a) < AXIS(b)) {
-    // find left-most edge of this row
-    for (int8_t x = a-1; x >= 0 && AXIS(x) == AXIS(a); x--) {
-      a = x;
-      if (norm_pixels[a] < 0.001) break;
-    }
-    // find the row below
-    bool matched = false;
-    for (uint8_t x = a; AXIS(x) == AXIS(a); x++) {
-      if (norm_pixels[x + GRID_EXTENT] > 0.001) {
-        // a point from the row below was found!
-        a = x + GRID_EXTENT;
-        matched = true;
-        break;
-      }
-      // we reached other side of blob without finding a row below, must be bottom of blob
-      if (x > a && norm_pixels[x] < 0.001) return false;
-    }
-    // we ran out space on this row, must be bottom of blob
-    if (!matched) return false;
-  }
-
-  // a and b must be on same axis by the time we get here
-  if (a >= lowerb && a <= upperb) return true;
-  if (a > upperb) return false;
-
-  // did not find connection, try again from right side of blob in case we have a U shape
-  a = min(p1, p2);
-  while (AXIS(a) < AXIS(b)) {
-    // find right-most edge of this row
-    for (uint8_t x = a+1; AXIS(x) == AXIS(a); x++) {
-      a = x;
-      if (norm_pixels[a] < 0.001) break;
-    }
-    // find the row below
-    bool matched = false;
-    for (uint8_t x = a; x >= 0 && AXIS(x) == AXIS(a); x--) {
-      if (norm_pixels[x + GRID_EXTENT] > 0.001) {
-        // a point from the row below was found!
-        a = x + GRID_EXTENT;
-        matched = true;
-        break;
-      }
-      // we reached other side of blob without finding a row below, must be bottom of blob
-      if (x < a && norm_pixels[x] < 0.001) return false;
-    }
-    // we ran out space on this row, must be bottom of blob
-    if (!matched) return false;
-  }
-
-  return a >= lowerb && a <= upperb;
-}
-
 void checkDoorState() {
   uint8_t last_door_state = door_state;
-  if (digitalRead(REED_PIN_CLOSE) == LOW) {
-    door_state = DOOR_CLOSED;
+  if (PIND & 0b00001000) {  // true if reed 3 is high (normal state)
+    // door open
+    door_state = PIND & 0b00010000 ? DOOR_OPEN : DOOR_AJAR;
   } else {
-    door_state = digitalRead(REED_PIN_AJAR) == LOW ? DOOR_AJAR : DOOR_OPEN;
+    door_state = DOOR_CLOSED;
   }
   if (last_door_state != door_state) {
     frames_since_door_open = 0;
@@ -258,33 +218,33 @@ void checkDoorState() {
   }
 }
 
+void publishRevert(uint8_t idx) {
+  checkDoorState();
+  if (frames_since_door_open == 0) return;
+  char rBuf[3];
+  sprintf(rBuf, "r%d", crossed[idx]);
+  publish(rBuf, floor(confidence(idx)*100.0), 10);
+}
+
 void checkForRevert(uint8_t idx) {
-  if (!crossed[idx] || frames_since_door_open == 0) return;
+  if (!crossed[idx] || frames_since_door_open == 0 || zombieCount[idx] == 1) return;
   if (reverted[idx] && (pointOnSmallBorder(past_points[idx]) ||
         pointOnLREdge(past_points[idx]))) {
-    checkDoorState();
-    if (frames_since_door_open == 0) return;
-    char rBuf[3];
-    sprintf(rBuf, "r%d", crossed[idx]);
     // we had previously reverted this point, but it came back and made it through
-    publish(rBuf, floor(confidence(idx)*100.0), 10);
+    publishRevert(idx);
     reverted[idx] = false;
   } else if (!reverted[idx] && confidence(idx) < HIGH_CONF_THRESHOLD &&
       pointInMiddle(past_points[idx]) && !pointOnLREdge(past_points[idx])) {
-    checkDoorState();
-    if (frames_since_door_open == 0) return;
-    char rBuf[3];
-    sprintf(rBuf, "r%d", crossed[idx]);
     // point disappeared in middle of grid, revert its crossing (probably noise or a hand)
-    publish(rBuf, floor(confidence(idx)*100.0), 10);
+    publishRevert(idx);
     reverted[idx] = true;
   }
 }
 
 void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
-    if (past_points[i] != UNDEF_POINT && histories[i] > MIN_HISTORY &&
-          SIDE(starting_points[i]) != SIDE(past_points[i]) &&
+    if (past_points[i] != UNDEF_POINT && histories[i] > MIN_HISTORY && zombieCount[i] != 1 &&
+          !sameSide(starting_points[i], past_points[i]) &&
           confidence(i) > AVG_CONF_THRESHOLD) {
       int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
       // point cleanly crossed grid
@@ -563,14 +523,18 @@ bool normalizePixels() {
   return true;
 }
 
+void insertPointHere(uint8_t *arr, uint8_t active_pixel_count, uint8_t j, uint8_t i) {
+  for (uint8_t x=active_pixel_count; x>j; x--) {
+    arr[x] = arr[x-1];
+  }
+  arr[j] = i;
+}
+
 // insert element i into an array at position j, shift everything else over to make room
-#define INSERT_POINT_HERE ({                        \
-  for (uint8_t x=active_pixel_count; x>j; x--) {    \
-    ordered_indexes[x] = ordered_indexes[x-1];      \
-  }                                                 \
-  ordered_indexes[j] = i;                           \
-  added = true;                                     \
-  break;                                            \
+#define INSERT_POINT_HERE ({                                  \
+  insertPointHere(ordered_indexes, active_pixel_count, j, i); \
+  added = true;                                               \
+  break;                                                      \
 })
 
 uint8_t findCurrentPoints(uint8_t *points) {
@@ -578,7 +542,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
   uint8_t active_pixel_count = 0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (PIXEL_ACTIVE(i)) {
+    if (pixelActive(i)) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
         float diff = norm_pixels[i] - norm_pixels[ordered_indexes[j]];
@@ -735,17 +699,15 @@ void processSensor() {
           float d = euclidean_distance(past_points[idx], points[j]);
 
           // if switching sides with low confidence, don't pair
-          if (SIDE(points[j]) != SIDE(past_points[idx]) &&
+          if (!sameSide(points[j], past_points[idx]) &&
               (conf < AVG_CONF_THRESHOLD || conf/d < MIN_TRAVEL_RATIO ||
               norm_pixels[points[j]]/d < MIN_TRAVEL_RATIO)) {
             continue;
           }
 
           if (d < max_distance) {
-            float aHeight = avgHeight(idx);
-            float aWidth = avgWidth(idx);
-            float ratioH = crossed[idx] ? aHeight/heightCache[j] : heightCache[j]/aHeight;
-            float ratioW = crossed[idx] ? aWidth/widthCache[j] : widthCache[j]/aWidth;
+            float ratioH = crossed[idx] ? avgHeight(idx)/heightCache[j] : heightCache[j]/avgHeight(idx);
+            float ratioW = crossed[idx] ? avgWidth(idx)/widthCache[j] : widthCache[j]/avgWidth(idx);
             float ratioP = min(norm_pixels[points[j]]/conf, conf/norm_pixels[points[j]]);
             float score = (d/(2.0*max_distance)) - ratioP - min(ratioH, 1) - min(ratioW, 1) +
                               max(AVG_CONF_THRESHOLD - norm_pixels[points[j]], 0.0);
@@ -790,7 +752,7 @@ void processSensor() {
             score *= max(totalDistance(idx), 0.2) + (crossed[idx] ? 3.0 : 0.0);
             score *= (1.0 - abs(norm_pixels[points[i]] - conf));
             score /= max(d, 0.9);
-            if (avgHeight(idx) == 1) score -= 0.3;
+            if (iavgHeight(idx) == 1) score -= 0.3;
           }
           if (score - max_score > 0.05) {
             max_score = score;
@@ -821,7 +783,7 @@ void processSensor() {
       for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
         if (past_points[idx] != UNDEF_POINT && pairs[idx] == i) {
           // closest point matched, update trackers
-          if (pointOnEdge(points[i]) && SIDE(starting_points[idx]) == SIDE(points[i])) {
+          if (pointOnEdge(points[i]) && sameSide(starting_points[idx], points[i])) {
             // always consider a point on the outer edge as just starting off
             past_points[idx] = points[i];
             starting_points[idx] = points[i];
@@ -837,7 +799,7 @@ void processSensor() {
             count[idx] = 1;
           } else {
             if (past_points[idx] != points[i]) {
-              if (SIDE(points[i]) != SIDE(past_points[idx])) {
+              if (!sameSide(points[i], past_points[idx])) {
                 if (confidence(idx) > HIGH_CONF_THRESHOLD &&
                     norm_pixels[points[i]] > HIGH_CONF_THRESHOLD) {
                   histories[idx]++;
@@ -860,6 +822,7 @@ void processSensor() {
             avg_widths[idx] += widthCache[i];
             count[idx]++;
           }
+          if (zombieCount[idx]) zombieCount[idx]++;
           break;
         }
       }
@@ -873,6 +836,7 @@ void processSensor() {
       uint8_t ah = 0;
       uint8_t aw = 0;
       uint8_t c = 1;
+      uint8_t z = 0;
       bool retroMatched = false;
       bool nobodyInFront = true;
 
@@ -882,7 +846,7 @@ void processSensor() {
           if (temp_forgotten_points[j] != UNDEF_POINT) {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(temp_forgotten_points[j], points[i]);
-            if (d >= 3.0 || SIDE(points[i]) != SIDE(temp_forgotten_points[j]) &&
+            if (d >= 3.0 || !sameSide(points[i], temp_forgotten_points[j]) &&
                 (temp_forgotten_norms[j] < AVG_CONF_THRESHOLD ||
                 temp_forgotten_norms[j]/d < MIN_TRAVEL_RATIO ||
                 norm_pixels[points[i]]/d < MIN_TRAVEL_RATIO)) {
@@ -910,7 +874,7 @@ void processSensor() {
           if (forgotten_past_points[j] != UNDEF_POINT) {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(forgotten_past_points[j], points[i]);
-            if (d >= 3.0 || (SIDE(points[i]) != SIDE(forgotten_past_points[j]) &&
+            if (d >= 3.0 || (!sameSide(points[i], forgotten_past_points[j]) &&
                 (forgotten_norms[j] < AVG_CONF_THRESHOLD ||
                 forgotten_norms[j]/d < MIN_TRAVEL_RATIO ||
                 norm_pixels[points[i]]/d < MIN_TRAVEL_RATIO))) {
@@ -925,6 +889,7 @@ void processSensor() {
             ah += forgotten_heights[j];
             aw += forgotten_widths[j];
             c++;
+            z = 1;
             forgotten_past_points[j] = UNDEF_POINT;
             retroMatched = true;
             break;
@@ -962,7 +927,7 @@ void processSensor() {
           if (AXIS(sp) == (GRID_EXTENT/2 + 1)) {
             retroMatched = true;
           } else if (nobodyOnBoard && an > HIGH_CONF_THRESHOLD &&
-                      AXIS(sp) == (GRID_EXTENT/2) && PIXEL_ACTIVE(sp+GRID_EXTENT)) {
+                      AXIS(sp) == (GRID_EXTENT/2) && pixelActive(sp+GRID_EXTENT)) {
             retroMatched = true;
             sp += GRID_EXTENT;
           }
@@ -989,6 +954,7 @@ void processSensor() {
             avg_heights[j] = ah + heightCache[i];
             avg_widths[j] = aw + widthCache[i];
             count[j] = c;
+            zombieCount[j] = z;
             break;
           }
         }
@@ -1064,27 +1030,26 @@ void processSensor() {
 void initialize() {
   amg.begin();
 
-  pinMode(REED_PIN_CLOSE, INPUT_PULLUP);
-  pinMode(REED_PIN_AJAR, INPUT_PULLUP);
+  // setup reed switches
+   DDRD =  DDRD & B11100111;  // set pins 3 and 4 as inputs
+  PORTD = PORTD | B00011000;  // pull pins 3 and 4 high
 
-  blink(2);
+  LOWPOWER_DELAY(SLEEP_1S);
   publish(FIRMWARE_VERSION, 0, 10);
 
   // give sensor 12sec to stabilize
-  blink(24);
-  // let sensor calibrate with light off
-  LOWPOWER_DELAY(SLEEP_1S);
+  LOWPOWER_DELAY(SLEEP_8S);
+  LOWPOWER_DELAY(SLEEP_4S);
 
   memset(past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
 
-  amg.readPixels(norm_pixels);
+  amg.readPixels(avg_pixels);
 
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    cur_pixels_hash += sq(norm_pixels[i] + i);
-    if (norm_pixels[i] > 65) norm_pixels[i] = 65;
-    if (norm_pixels[i] < 0) norm_pixels[i] = 0;
+    cur_pixels_hash += sq(avg_pixels[i] + i);
+    if (avg_pixels[i] > 65) avg_pixels[i] = 65;
+    if (avg_pixels[i] < 0) avg_pixels[i] = 0;
   }
-  memcpy(avg_pixels, norm_pixels, (AMG88xx_PIXEL_ARRAY_SIZE*sizeof(float)));
 
   for (uint8_t k=0; k < 10; k++) {
     while (!pixelsChanged()) {
