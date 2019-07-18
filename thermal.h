@@ -139,7 +139,7 @@ float totalDistance(uint8_t x) {
 }
 
 bool doorOpenedAgo(uint8_t x) {
-  return frames_since_door_open < (x) && door_state == DOOR_OPEN;
+  return frames_since_door_open < (x) && door_state != DOOR_CLOSED;
 }
 
 bool doorClosedAgo(uint8_t x) {
@@ -373,7 +373,7 @@ void scanSegment(float *arr, uint8_t base, uint8_t inc, float edgePoint) {
     uint8_t lower_pos = min(maxi, mini);
 
     if (outerPoint) {
-      if ((upper_pos - lower_pos)/inc > 6) {
+      if ((upper_pos - lower_pos)/inc > 4) {
         if (maxi != UNDEF_POINT) arr[maxi] = 0;
         if (mini != UNDEF_POINT) arr[mini] = 0;
         arr[upper_bound] = 0;
@@ -518,7 +518,7 @@ bool normalizePixels() {
       }
 
       // update average baseline
-      if (abs(std) > 4 && norm_pixels[i] >= HIGH_CONF_THRESHOLD) {
+      if (abs(std) > 2 && norm_pixels[i] >= 0.6) {
         // lower alpha to 0.0001
         std *= SLOW_ALPHA;
       } else {
@@ -1068,28 +1068,21 @@ void processSensor() {
           }
         }
 
-        if (nobodyInFront && an > 0.6 && doorOpenedAgo(3)) {
-          // if point is starting in row 5 and grid is empty, allow it
-          if (AXIS(sp) == (GRID_EXTENT/2 + 1)) {
+        // if point is at least 2 rows high and has mid confidence with nobody ahead...
+        if (nobodyInFront && an > 0.6 && heightCache[i] > 1) {
+          // and it is in row 5, allow it (door might've just opened)
+          if (AXIS(sp) == (GRID_EXTENT/2 + 1) && pixelActive(sp + GRID_EXTENT)) {
             retroMatched = true;
-          } else if (nobodyOnBoard && an > HIGH_CONF_THRESHOLD &&
-                      AXIS(sp) == (GRID_EXTENT/2) && pixelActive(sp+GRID_EXTENT)) {
-            retroMatched = true;
-            sp += GRID_EXTENT;
-          }
-        } else if (nobodyInFront && !nobodyOnBoard && an > 0.6 &&
-                  frames_since_door_open > 4 && heightCache[i] > 1) {
-          if (AXIS(sp) == (GRID_EXTENT/2)) {
-            // point starting on axis 4, somebody is behind but nobody in front
-            // this could be from a person splitting
-            if (pixelActive(sp - GRID_EXTENT)) {
+          } else if (AXIS(sp) == (GRID_EXTENT/2)) {
+            // or if it's in row 4 and there is somebody behind, assume this is due
+            // to a splitting of the person behind
+            if (!nobodyOnBoard && pixelActive(sp-GRID_EXTENT)) {
               retroMatched = true;
-            }
-          } else if (AXIS(sp) == (GRID_EXTENT/2 + 1)) {
-            // point starting on axis 5, somebody is behind but nobody in front
-            // this could be from a person splitting
-            if (pixelActive(sp + GRID_EXTENT)) {
+            } else if (nobodyOnBoard && an > HIGH_CONF_THRESHOLD &&
+                        pixelActive(sp+GRID_EXTENT)) {
+              // or because person was already through door by the time it opened
               retroMatched = true;
+              sp += GRID_EXTENT;
             }
           }
         }
