@@ -53,8 +53,7 @@ uint8_t publish(char* msg, uint16_t width, int8_t retries) {
 
   if (success || retries > 0) {
     if (packetCount < 9) {
-      packetCount++;
-      return packetCount-1;
+      return packetCount++;
     } else {
       packetCount = 1;
       return 9;

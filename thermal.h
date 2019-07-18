@@ -3,7 +3,7 @@
 #define FIRMWARE_VERSION        "V0.4.14"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
+#define MIN_DISTANCE            1.5  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
 #define DISTANCE_BONUS          2.5  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
@@ -15,8 +15,7 @@
 #define GRADIENT_THRESHOLD      3.0  // 3º temp change gives us 100% confidence of person
 #define MIN_TRAVEL_RATIO        0.15 // ratio of norm/distance that a point must pass
 
-#define VERY_FAST_ALPHA         0.1
-#define FAST_ALPHA              0.01
+#define FAST_ALPHA              0.1
 #define ALPHA                   0.001
 #define SLOW_ALPHA              0.0001
 
@@ -192,7 +191,7 @@ uint8_t massWidth(uint8_t i) {
         x++) {
     width++;
   }
-  for (uint8_t x = i-1; x >= 0 && norm_pixels[x] > 0.001 && AXIS(x) == startAxis; x--) {
+  for (int8_t x = i-1; x >= 0 && norm_pixels[x] > 0.001 && AXIS(x) == startAxis; x--) {
     width++;
   }
 
@@ -202,7 +201,7 @@ uint8_t massWidth(uint8_t i) {
 void checkDoorState() {
   uint8_t last_door_state = door_state;
   if (PIND & 0b00001000) {  // true if reed 3 is high (normal state)
-    // door open
+    // door open if reed switch 4 is also high
     door_state = PIND & 0b00010000 ? DOOR_OPEN : DOOR_AJAR;
   } else {
     door_state = DOOR_CLOSED;
@@ -275,6 +274,140 @@ void publishEvents() {
   }
 }
 
+void scanSegment(float *arr, uint8_t base, uint8_t inc, float edgePoint) {
+  float pos = 0.0;
+  float neg = 0.0;
+  uint8_t maxi = UNDEF_POINT;
+  uint8_t mini = UNDEF_POINT;
+  bool positive = true;
+
+  uint8_t maxr = (GRID_EXTENT - 1)*inc;
+  for (uint8_t r=0; r<maxr; r+=inc) {
+    uint8_t i = base + r;
+    if (abs(arr[i]) <= CONFIDENCE_THRESHOLD) {
+      arr[i] = 0;
+      continue;
+    }
+    bool new_positive = arr[i] > 0;
+    if (new_positive == positive) {
+      if (positive) {
+        if (arr[i] >= pos) {
+          if (maxi != UNDEF_POINT) arr[maxi] = 0;
+          pos = arr[i];
+          maxi = i;
+        } else {
+          arr[i] = 0;
+        }
+      } else {
+        if (arr[i] <= neg) {
+          if (mini != UNDEF_POINT) arr[mini] = 0;
+          neg = arr[i];
+          mini = i;
+        } else {
+          arr[i] = 0;
+        }
+      }
+    } else {
+      if (maxi != UNDEF_POINT && mini != UNDEF_POINT) {
+        // we found a pair, ship it
+        uint8_t upper_pos = max(maxi, mini);
+        uint8_t lower_pos = min(maxi, mini);
+        // this depends on int math to round answer, otherwise we'd need to floor the eq
+        uint8_t new_pos = upper_pos - ((upper_pos - lower_pos)/(2*inc))*inc;
+        float new_val = max(pos, -neg);
+        float sub_val = new_val - 0.05;
+        for (uint8_t x = lower_pos+inc; x <= upper_pos; x+=inc) {
+          arr[x] = x == new_pos ? new_val + 1 : sub_val;
+        }
+        arr[lower_pos] = 0;
+
+        // reset trackers for rest of row
+        pos = 0.0;
+        neg = 0.0;
+        maxi = UNDEF_POINT;
+        mini = UNDEF_POINT;
+      }
+  
+      positive = new_positive;
+      if (positive) {
+        pos = arr[i];
+        maxi = i;
+      } else {
+        neg = arr[i];
+        mini = i;
+      }
+    }
+  }
+
+  bool outerPoint = false;
+  uint8_t upper_bound = base + (GRID_EXTENT-1)*inc;
+  if (maxi != UNDEF_POINT && mini == UNDEF_POINT) {
+    if (-edgePoint > 0.1) {
+      neg = edgePoint;
+      mini = base;
+      outerPoint = true;
+    }
+    edgePoint = arr[upper_bound];
+    if (-edgePoint > 0.1 && (mini == UNDEF_POINT || edgePoint < neg)) {
+      neg = edgePoint;
+      mini = upper_bound;
+      outerPoint = true;
+    }
+  } else if (maxi == UNDEF_POINT && mini != UNDEF_POINT) {
+    if (edgePoint > 0.1) {
+      pos = edgePoint;
+      maxi = base;
+      outerPoint = true;
+    }
+    edgePoint = arr[upper_bound];
+    if (edgePoint > 0.1 && (maxi == UNDEF_POINT || edgePoint > pos)) {
+      pos = edgePoint;
+      maxi = upper_bound;
+      outerPoint = true;
+    }
+  }
+
+  if (maxi != UNDEF_POINT && mini != UNDEF_POINT) {
+    // we found a pair, ship it
+    uint8_t upper_pos = max(maxi, mini);
+    uint8_t lower_pos = min(maxi, mini);
+
+    if (outerPoint) {
+      if ((upper_pos - lower_pos)/inc > 6) {
+        if (maxi != UNDEF_POINT) arr[maxi] = 0;
+        if (mini != UNDEF_POINT) arr[mini] = 0;
+        arr[upper_bound] = 0;
+        return;
+      }
+      float new_val = (pos - neg)/2.0;
+      float sub_val = new_val - 0.05;
+      uint8_t new_pos = upper_pos == upper_bound ? upper_pos : lower_pos;
+      for (uint8_t x = lower_pos; x <= upper_pos; x+=inc) {
+        arr[x] = x == new_pos ? new_val + 1 : sub_val;
+      }
+      if (new_pos == lower_pos) {
+        arr[upper_bound] = 0;
+      } else {
+        arr[lower_pos] = 0;
+      }
+    } else {
+      float new_val = max(pos, -neg);
+      float sub_val = new_val - 0.05;
+      // this depends on int math to round answer, otherwise we'd need to floor the eq
+      uint8_t new_pos = upper_pos - ((upper_pos - lower_pos)/(2*inc))*inc;
+      for (uint8_t x = lower_pos+inc; x <= upper_pos; x+=inc) {
+        arr[x] = x == new_pos ? new_val + 1 : sub_val;
+      }
+      arr[lower_pos] = 0;
+      arr[upper_bound] = 0;
+    }
+  } else {
+    if (maxi != UNDEF_POINT) arr[maxi] = 0;
+    if (mini != UNDEF_POINT) arr[mini] = 0;
+    arr[upper_bound] = 0;
+  }
+}
+
 bool pixelsChanged() {
   amg.readPixels(norm_pixels);
 
@@ -297,6 +430,7 @@ bool normalizePixels() {
   // calculate CSM gradient
   float bgm = GRADIENT_THRESHOLD;
   float fgm = GRADIENT_THRESHOLD;
+  float vfgm = GRADIENT_THRESHOLD;
   float bgmt;
   float fgmt;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
@@ -310,212 +444,142 @@ bool normalizePixels() {
     if (NOT_AXIS(i) < GRID_EXTENT) {
       fgmt = norm_pixels[i+1] - norm_pixels[i];
       fgmt = abs(fgmt);
-      bgmt = (norm_pixels[i+1] - avg_pixels[i+1]) - (norm_pixels[i] - avg_pixels[i]);
+      bgmt = abs(norm_pixels[i+1] - avg_pixels[i+1]) - abs(norm_pixels[i] - avg_pixels[i]);
       bgmt = abs(bgmt);
 
-      fgm = max(fgmt, fgm);
-      bgm = max(bgmt, bgm);
+      if (fgmt > fgm) fgm = fgmt;
+      if (bgmt > bgm) bgm = bgmt;
+    }
+
+    if (i < GRID_EXTENT*7) {
+      fgmt = norm_pixels[i+GRID_EXTENT] - norm_pixels[i];
+      fgmt = abs(fgmt);
+      if (fgmt > vfgm) vfgm = fgmt;
     }
   }
 
-  float offGrid[GRID_EXTENT];
-  float std;
+  float normv_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
+  memcpy(normv_pixels, norm_pixels, AMG88xx_PIXEL_ARRAY_SIZE*sizeof(float));
+
+  float offGrid;
   float rowAvg;
-  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    std = norm_pixels[i] - avg_pixels[i];
+  for (uint8_t r=0; r<AMG88xx_PIXEL_ARRAY_SIZE; r+=GRID_EXTENT) {
+    rowAvg = 0.0;
+    for (uint8_t ri=r; ri<r+GRID_EXTENT; ri++) {
+      rowAvg += norm_pixels[ri];
+    }
+    rowAvg /= (float)GRID_EXTENT;
 
-    if (NOT_AXIS(i) == 1) {
-      rowAvg = 0.0;
-      for (uint8_t ri=i; ri<i+GRID_EXTENT; ri++) {
-        rowAvg += norm_pixels[ri];
-      }
-      rowAvg /= (float)GRID_EXTENT;
+    fgmt = (norm_pixels[r] - avg_pixels[r])/fgm;
+    bgmt = (norm_pixels[r] - rowAvg)/bgm;
 
-      fgmt = std/fgm;
-      bgmt = (norm_pixels[i]-rowAvg)/bgm;
-
-      uint8_t x = AXIS(i)-1;
-      offGrid[x] = abs(fgmt) < abs(bgmt) ? fgmt : bgmt;
-      if (abs(offGrid[x]) > 1) {
-        offGrid[x] = offGrid[x] > 0 ? 1.0 : -1.0;
-      }
+    offGrid = abs(fgmt) < abs(bgmt) ? fgmt : bgmt;
+    if (abs(offGrid) > 1) {
+      offGrid = offGrid > 0 ? 1.0 : -1.0;
     }
 
-    // normalize points
-    if (NOT_AXIS(i) == GRID_EXTENT) {
-      fgmt = -std/fgm;
-      bgmt = (rowAvg-norm_pixels[i])/bgm;
-      norm_pixels[i] = abs(fgmt) < abs(bgmt) ? fgmt : bgmt;
-      if (abs(norm_pixels[i]) > 1) {
-        norm_pixels[i] = norm_pixels[i] > 0 ? 1.0 : -1.0;
-      }
-    } else {
+    for (uint8_t i=r; i<r+GRID_EXTENT-1; i++) {
       fgmt = (norm_pixels[i+1] - norm_pixels[i])/fgm;
-      bgmt = (norm_pixels[i+1] - avg_pixels[i+1] - std)/bgm;
+      bgmt = (abs(norm_pixels[i+1] - avg_pixels[i+1]) -
+              abs(norm_pixels[i] - avg_pixels[i]))/bgm;
 
       norm_pixels[i] = abs(fgmt) < abs(bgmt) ? fgmt : bgmt;
     }
 
-    // update average baseline
-    if (std < 1 && norm_pixels[i] < AVG_CONF_THRESHOLD) {
-      std *= FAST_ALPHA;
-    } else if (std >= 10 && norm_pixels[i] >= HIGH_CONF_THRESHOLD) {
-      // lower alpha to 0.0001
-      std *= SLOW_ALPHA;
-    } else {
-      // implicit alpha of 0.001
-      std *= ALPHA;
+    uint8_t i = r+GRID_EXTENT-1;
+    fgmt = (avg_pixels[i] - norm_pixels[i])/fgm;
+    bgmt = (rowAvg - norm_pixels[i])/bgm;
+
+    norm_pixels[i] = abs(fgmt) < abs(bgmt) ? fgmt : bgmt;
+    if (abs(norm_pixels[i]) > 1) {
+      norm_pixels[i] = norm_pixels[i] > 0 ? 1.0 : -1.0;
     }
-    avg_pixels[i] += std;
+
+    scanSegment(norm_pixels, r, 1, offGrid);
   }
 
-  // find horizontal midpoint of blob
-  float pos;
-  float neg;
-  uint8_t maxi;
-  uint8_t mini;
-  bool positive;
-  for (uint8_t r=0; r<AMG88xx_PIXEL_ARRAY_SIZE; r+=GRID_EXTENT) {
-    pos = 0.0;
-    neg = 0.0;
-    maxi = UNDEF_POINT;
-    mini = UNDEF_POINT;
-    positive = true;
+  float std;
+  for (uint8_t c=0; c<GRID_EXTENT; c++) {
+    offGrid = (normv_pixels[c] - avg_pixels[c])/vfgm;
+    if (abs(offGrid) > 1) {
+      offGrid = offGrid > 0 ? 1.0 : -1.0;
+    }
 
-    for (uint8_t c=0; c<GRID_EXTENT-1; c++) {
-      uint8_t i = r + c;
-      if (abs(norm_pixels[i]) <= CONFIDENCE_THRESHOLD) {
-        norm_pixels[i] = 0;
+    for (uint8_t i=c; i<AMG88xx_PIXEL_ARRAY_SIZE; i+=GRID_EXTENT) {
+      std = normv_pixels[i] - avg_pixels[i];
+
+      if (i >= GRID_EXTENT*7) {
+        normv_pixels[i] = -std/vfgm;
+        if (abs(normv_pixels[i]) > 1) {
+          normv_pixels[i] = normv_pixels[i] > 0 ? 1.0 : -1.0;
+        }
+      } else {
+        normv_pixels[i] = (normv_pixels[i+GRID_EXTENT] - normv_pixels[i])/vfgm;
+      }
+
+      // update average baseline
+      if (abs(std) > 4 && norm_pixels[i] >= HIGH_CONF_THRESHOLD) {
+        // lower alpha to 0.0001
+        std *= SLOW_ALPHA;
+      } else {
+        // implicit alpha of 0.001
+        std *= ALPHA;
+      }
+      avg_pixels[i] += std;
+    }
+
+    scanSegment(normv_pixels, c, GRID_EXTENT, offGrid);
+  }
+
+  for (uint8_t i = 0; i < AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    if (normv_pixels[i] < 0.001) {
+      norm_pixels[i] = 0;
+      continue;
+    }
+
+    if (norm_pixels[i] > 0.6) {
+      float bonus = 0;
+      if (norm_pixels[i] > 1.05) {
+        norm_pixels[i] -= 1.05;
+        bonus = 0.05;
+      }
+      uint8_t new_pos = UNDEF_POINT;
+      for (uint8_t x = i + GRID_EXTENT;
+          x < AMG88xx_PIXEL_ARRAY_SIZE && norm_pixels[x] > 0.001 && normv_pixels[x] > 0.001;
+          x += GRID_EXTENT) {
+        if (normv_pixels[x] > 1.05) {
+          new_pos = x;
+          break;
+        }
+      }
+      if (new_pos == UNDEF_POINT) {
+        for (int8_t x = i;
+            x >= 0 && norm_pixels[x] > 0.001 && normv_pixels[x] > 0.001; x -= GRID_EXTENT) {
+          if (normv_pixels[x] > 1.05) {
+            new_pos = x;
+            break;
+          }
+        }
+      }
+
+      if (new_pos == UNDEF_POINT || new_pos == i) {
+        // either we couldn't find vertical center or this is a perfect point
+        // that's already vertically centered. Either way, reset it and move along.
+        norm_pixels[i] += bonus;
         continue;
       }
-      bool new_positive = norm_pixels[i] > 0;
-      if (new_positive == positive) {
-        if (positive) {
-          if (norm_pixels[i] >= pos) {
-            if (maxi != UNDEF_POINT && maxi != i) norm_pixels[maxi] = 0;
-            pos = norm_pixels[i];
-            maxi = i;
-          } else {
-            norm_pixels[i] = 0;
-          }
-        } else {
-          if (norm_pixels[i] <= neg) {
-            if (mini != UNDEF_POINT && mini != i) norm_pixels[mini] = 0;
-            neg = norm_pixels[i];
-            mini = i;
-          } else {
-            norm_pixels[i] = 0;
-          }
+
+      float t;
+      float v;
+      int8_t inc = new_pos > i ? -GRID_EXTENT : GRID_EXTENT;
+      for (int8_t y = new_pos; y != i; y += inc) {
+        t = norm_pixels[y];
+        if (t > 1.05) t -= 1;
+        v = norm_pixels[i];
+        if (y == new_pos) v += bonus;
+        if (v > t) {
+          norm_pixels[y] = v;
         }
-      } else {
-        if (maxi != UNDEF_POINT && mini != UNDEF_POINT) {
-          // we found a pair, ship it
-          uint8_t diff = abs(maxi - mini);
-          uint8_t upper_pos = max(maxi, mini);
-          uint8_t lower_pos = min(maxi, mini);
-          uint8_t new_pos = upper_pos - diff/2;
-          norm_pixels[new_pos] = max(pos, -neg);
-          for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
-            norm_pixels[x] = norm_pixels[new_pos] - 0.05;
-          }
-          for (uint8_t x = lower_pos; x < new_pos; x++) {
-            norm_pixels[x] = norm_pixels[new_pos] - 0.05;
-          }
-
-          // reset trackers for rest of row
-          pos = 0.0;
-          neg = 0.0;
-          maxi = UNDEF_POINT;
-          mini = UNDEF_POINT;
-        }
-
-        positive = new_positive;
-        if (positive) {
-          pos = norm_pixels[i];
-          maxi = i;
-        } else {
-          neg = norm_pixels[i];
-          mini = i;
-        }
-      }
-    }
-
-    if (maxi != UNDEF_POINT && mini == UNDEF_POINT) {
-      float edgePoint = offGrid[AXIS(r)-1];
-      if (-edgePoint > CONFIDENCE_THRESHOLD) {
-        neg = edgePoint;
-        mini = r;
-      }
-      edgePoint = norm_pixels[r+GRID_EXTENT-1];
-      if (-edgePoint > CONFIDENCE_THRESHOLD && (mini == UNDEF_POINT || edgePoint < neg)) {
-        neg = edgePoint;
-        mini = r+GRID_EXTENT-1;
-      }
-    } else if (maxi == UNDEF_POINT && mini != UNDEF_POINT) {
-      float edgePoint = offGrid[AXIS(r)-1];
-      if (edgePoint > CONFIDENCE_THRESHOLD) {
-        pos = edgePoint;
-        maxi = r;
-      }
-      edgePoint = norm_pixels[r+GRID_EXTENT-1];
-      if (edgePoint > CONFIDENCE_THRESHOLD && (maxi == UNDEF_POINT || edgePoint > pos)) {
-        pos = edgePoint;
-        maxi = r+GRID_EXTENT-1;
-      }
-    }
-
-    if (maxi != UNDEF_POINT && mini != UNDEF_POINT) {
-      // we found a pair, ship it
-      uint8_t diff = abs(maxi - mini);
-      uint8_t upper_pos = max(maxi, mini);
-      uint8_t lower_pos = min(maxi, mini);
-      uint8_t new_pos = upper_pos - diff/2;
-      norm_pixels[new_pos] = max(pos, -neg);
-      for (uint8_t x = new_pos + 1; x <= upper_pos; x++) {
-        norm_pixels[x] = norm_pixels[new_pos] - 0.05;
-      }
-      for (uint8_t x = lower_pos; x < new_pos; x++) {
-        norm_pixels[x] = norm_pixels[new_pos] - 0.05;
-      }
-      if (upper_pos != r+GRID_EXTENT-1) norm_pixels[r+GRID_EXTENT-1] = 0;
-    } else {
-      if (maxi != UNDEF_POINT) norm_pixels[maxi] = 0;
-      if (mini != UNDEF_POINT) norm_pixels[mini] = 0;
-      norm_pixels[r+GRID_EXTENT-1] = 0;
-    }
-  }
-
-  // find vertical midpoint of blob
-  for (uint8_t c = 0; c < GRID_EXTENT; c++) {
-    pos = 0;
-    mini = UNDEF_POINT;
-    for (uint8_t r = 0; r < AMG88xx_PIXEL_ARRAY_SIZE; r += GRID_EXTENT) {
-      uint8_t i = c + r;
-      if (norm_pixels[i] < 0.001) {
-        if (mini != UNDEF_POINT) {
-          // set maxNorm
-          uint8_t diff = i - mini;
-          diff /= 16;
-          uint8_t new_pos = i - (diff + 1)*GRID_EXTENT;
-          for (uint8_t x = mini; x < i; x += GRID_EXTENT) {
-            norm_pixels[x] = x == new_pos ? pos : pos - 0.05;
-          }
-
-          mini = UNDEF_POINT;
-          pos = 0;
-        }
-      } else {
-        if (mini == UNDEF_POINT) mini = i;
-        if (norm_pixels[i] > pos) pos = norm_pixels[i];
-      }
-    }
-    if (mini != UNDEF_POINT) {
-      uint8_t i = AMG88xx_PIXEL_ARRAY_SIZE + c;
-      uint8_t diff = i - mini;
-      diff /= 16;
-      uint8_t new_pos = i - (diff + 1)*GRID_EXTENT;
-      for (uint8_t x = mini; x < i; x += GRID_EXTENT) {
-        norm_pixels[x] = x == new_pos ? pos : pos - 0.05;
       }
     }
   }
@@ -523,8 +587,78 @@ bool normalizePixels() {
   return true;
 }
 
+bool connectedPoints(uint8_t p1, uint8_t p2) {
+  uint8_t a = min(p1, p2);
+  uint8_t b = max(p1, p2);
+  uint8_t lowerb = b;
+  uint8_t upperb = b;
+
+  for (int8_t x = b-1; x >= 0 && norm_pixels[x] > 0.001 && AXIS(x) == AXIS(b); x--) {
+    lowerb = x;
+  }
+  for (uint8_t x = b+1;
+        x < AMG88xx_PIXEL_ARRAY_SIZE && norm_pixels[x] > 0.001 && AXIS(x) == AXIS(b);
+        x++) {
+    upperb = x;
+  }
+
+  // waterfall over left edge of blob until we get to the same axis as point b
+  while (AXIS(a) < AXIS(b)) {
+    // find left-most edge of this row
+    for (int8_t x = a-1; x >= 0 && AXIS(x) == AXIS(a); x--) {
+      a = x;
+      if (norm_pixels[a] < 0.001) break;
+    }
+    // find the row below
+    bool matched = false;
+    for (uint8_t x = a; AXIS(x) == AXIS(a); x++) {
+      if (norm_pixels[x + GRID_EXTENT] > 0.001) {
+        // a point from the row below was found!
+        a = x + GRID_EXTENT;
+        matched = true;
+        break;
+      }
+      // we reached other side of blob without finding a row below, must be bottom of blob
+      if (x > a && norm_pixels[x] < 0.001) return false;
+    }
+    // we ran out space on this row, must be bottom of blob
+    if (!matched) return false;
+  }
+
+  // a and b must be on same axis by the time we get here
+  if (a >= lowerb && a <= upperb) return true;
+  if (a > upperb) return false;
+
+  // did not find connection, try again from right side of blob in case we have a U shape
+  a = min(p1, p2);
+  while (AXIS(a) < AXIS(b)) {
+    // find right-most edge of this row
+    for (uint8_t x = a+1; AXIS(x) == AXIS(a); x++) {
+      a = x;
+      if (norm_pixels[a] < 0.001) break;
+    }
+    // find the row below
+    bool matched = false;
+    for (uint8_t x = a; x >= 0 && AXIS(x) == AXIS(a); x--) {
+      if (norm_pixels[x + GRID_EXTENT] > 0.001) {
+        // a point from the row below was found!
+        a = x + GRID_EXTENT;
+        matched = true;
+        break;
+      }
+      // we reached other side of blob without finding a row below, must be bottom of blob
+      if (x < a && norm_pixels[x] < 0.001) return false;
+    }
+    // we ran out space on this row, must be bottom of blob
+    if (!matched) return false;
+  }
+
+  return a >= lowerb && a <= upperb;
+}
+
 void insertPointHere(uint8_t *arr, uint8_t active_pixel_count, uint8_t j, uint8_t i) {
-  for (uint8_t x=active_pixel_count; x>j; x--) {
+  if (norm_pixels[arr[j]] > norm_pixels[i]) norm_pixels[i] = norm_pixels[arr[j]];
+  for (int8_t x=active_pixel_count; x>j; x--) {
     arr[x] = arr[x-1];
   }
   arr[j] = i;
@@ -563,12 +697,19 @@ uint8_t findCurrentPoints(uint8_t *points) {
               // nearby peak found
               if (d1 <= d2) {
                 // this point is closer to peak, so insert it first
-                norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
                 INSERT_POINT_HERE;
               }
-            } else if (AXIS(i) > AXIS(ordered_indexes[j]) || SIDEL(i)) {
-              // insert point in hopes of finding a peak later
-              norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
+            } else if (abs(diff) < 0.0001) {
+              // identical points as part of a spectrum, prefer point closer to middle
+              bool sameAxis = AXIS(i) == AXIS(ordered_indexes[j]);
+              if ((!sameAxis && SIDE1(i)) || (sameAxis && SIDEL(i))) {
+                INSERT_POINT_HERE;
+              }
+            }
+          } else if (abs(diff) < 0.0001) {
+            // identical points as part of a spectrum, prefer point closer to middle
+            bool sameAxis = AXIS(i) == AXIS(ordered_indexes[j]);
+            if ((!sameAxis && SIDE1(i)) || (sameAxis && SIDEL(i))) {
               INSERT_POINT_HERE;
             }
           } else {
@@ -576,19 +717,12 @@ uint8_t findCurrentPoints(uint8_t *points) {
             uint8_t h1 = massHeight(i);
             uint8_t h2 = massHeight(ordered_indexes[j]);
             if (h1 > h2) {
-              norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
               INSERT_POINT_HERE;
             } else if (h1 == h2) {
               uint8_t w1 = massWidth(i);
               uint8_t w2 = massWidth(ordered_indexes[j]);
               if (w1 > w2) {
-                norm_pixels[i] = max(norm_pixels[i], norm_pixels[ordered_indexes[j]]);
                 INSERT_POINT_HERE;
-              } else if (w1 == w2 && abs(diff) < 0.009) {
-                bool sameAxis = AXIS(i) == AXIS(ordered_indexes[j]);
-                if ((!sameAxis && SIDE1(i)) || (sameAxis && SIDEL(i))) {
-                  INSERT_POINT_HERE;
-                }
               }
             }
           }
@@ -609,7 +743,8 @@ uint8_t findCurrentPoints(uint8_t *points) {
     for (uint8_t j=0; j<i; j++) {
       // make sure this point isn't close to another peak we already considered
       // and that it isn't part of a blob we already registered
-      if (euclidean_distance(ordered_indexes[j], idx) <= MIN_DISTANCE) {
+      if (euclidean_distance(ordered_indexes[j], idx) <= MIN_DISTANCE ||
+          connectedPoints(ordered_indexes[j], idx)) {
         distinct = false;
         break;
       }
@@ -700,16 +835,26 @@ void processSensor() {
 
           // if switching sides with low confidence, don't pair
           if (!sameSide(points[j], past_points[idx]) &&
-              (conf < AVG_CONF_THRESHOLD || conf/d < MIN_TRAVEL_RATIO ||
-              norm_pixels[points[j]]/d < MIN_TRAVEL_RATIO)) {
+              (conf < AVG_CONF_THRESHOLD || norm_pixels[points[j]]/d < MIN_TRAVEL_RATIO)) {
             continue;
           }
 
           if (d < max_distance) {
-            float ratioH = crossed[idx] ? avgHeight(idx)/heightCache[j] : heightCache[j]/avgHeight(idx);
-            float ratioW = crossed[idx] ? avgWidth(idx)/widthCache[j] : widthCache[j]/avgWidth(idx);
             float ratioP = min(norm_pixels[points[j]]/conf, conf/norm_pixels[points[j]]);
-            float score = (d/(2.0*max_distance)) - ratioP - min(ratioH, 1) - min(ratioW, 1) +
+            if (!crossed[idx]) ratioP *= 2.0; // ratio matters less once point is crossed
+            float directionBonus = 0;
+            uint8_t sp_axis = AXIS(past_points[idx]);
+            uint8_t np_axis = AXIS(points[j]);
+            if (SIDE1(starting_points[idx])) {
+              if (crossed[idx]) {
+                if (np_axis < sp_axis) directionBonus = 0.1;
+              } else if (np_axis > sp_axis) directionBonus = 0.1;
+            } else {
+              if (crossed[idx]) {
+                if (np_axis > sp_axis) directionBonus = 0.1;
+              } else if (np_axis < sp_axis) directionBonus = 0.1;
+            }
+            float score = (d/max_distance) - ratioP - directionBonus +
                               max(AVG_CONF_THRESHOLD - norm_pixels[points[j]], 0.0);
             if (min_score - score > 0.05) {
               min_score = score;
@@ -718,7 +863,10 @@ void processSensor() {
               // score is the same, pick the point that lets this one move farthest
               float sd1 = euclidean_distance(starting_points[idx], points[j]);
               float sd2 = euclidean_distance(starting_points[idx], points[min_index]);
-              if (sd1 > sd2) min_index = j;
+              if (crossed[idx] ? sd1 < sd2 : sd1 > sd2) {
+                min_score = score;
+                min_index = j;
+              }
             }
           }
         }
@@ -752,7 +900,6 @@ void processSensor() {
             score *= max(totalDistance(idx), 0.2) + (crossed[idx] ? 3.0 : 0.0);
             score *= (1.0 - abs(norm_pixels[points[i]] - conf));
             score /= max(d, 0.9);
-            if (iavgHeight(idx) == 1) score -= 0.3;
           }
           if (score - max_score > 0.05) {
             max_score = score;
@@ -848,7 +995,6 @@ void processSensor() {
             float d = euclidean_distance(temp_forgotten_points[j], points[i]);
             if (d >= 3.0 || !sameSide(points[i], temp_forgotten_points[j]) &&
                 (temp_forgotten_norms[j] < AVG_CONF_THRESHOLD ||
-                temp_forgotten_norms[j]/d < MIN_TRAVEL_RATIO ||
                 norm_pixels[points[i]]/d < MIN_TRAVEL_RATIO)) {
               continue;
             }
@@ -876,7 +1022,6 @@ void processSensor() {
             float d = euclidean_distance(forgotten_past_points[j], points[i]);
             if (d >= 3.0 || (!sameSide(points[i], forgotten_past_points[j]) &&
                 (forgotten_norms[j] < AVG_CONF_THRESHOLD ||
-                forgotten_norms[j]/d < MIN_TRAVEL_RATIO ||
                 norm_pixels[points[i]]/d < MIN_TRAVEL_RATIO))) {
               continue;
             }
@@ -902,9 +1047,10 @@ void processSensor() {
         if (past_total_masses > 0) {
           for (uint8_t j=0; j<MAX_PEOPLE; j++) {
             if (past_points[j] != UNDEF_POINT &&
-                (count[j] > 1 || crossed[j] || avgHeight(j) >= heightCache[i]) &&
-                euclidean_distance(past_points[j], sp) <
-                  max(avgHeight(j), avgWidth(j)) + MAX_DISTANCE + DISTANCE_BONUS) {
+                (count[j] > 1 || crossed[j] ||
+                  (pointOnEdge(past_points[j]) && confidence(j) > 0.6) ||
+                  avgHeight(j) > heightCache[i]) &&
+                euclidean_distance(past_points[j], sp) < MAX_DISTANCE + DISTANCE_BONUS) {
               // there's already a person in the middle of the grid
               // so it's unlikely a new valid person just appeared in the middle
               // (person can't be running and door wasn't closed)
@@ -930,6 +1076,21 @@ void processSensor() {
                       AXIS(sp) == (GRID_EXTENT/2) && pixelActive(sp+GRID_EXTENT)) {
             retroMatched = true;
             sp += GRID_EXTENT;
+          }
+        } else if (nobodyInFront && !nobodyOnBoard && an > 0.6 &&
+                  frames_since_door_open > 4 && heightCache[i] > 1) {
+          if (AXIS(sp) == (GRID_EXTENT/2)) {
+            // point starting on axis 4, somebody is behind but nobody in front
+            // this could be from a person splitting
+            if (pixelActive(sp - GRID_EXTENT)) {
+              retroMatched = true;
+            }
+          } else if (AXIS(sp) == (GRID_EXTENT/2 + 1)) {
+            // point starting on axis 5, somebody is behind but nobody in front
+            // this could be from a person splitting
+            if (pixelActive(sp + GRID_EXTENT)) {
+              retroMatched = true;
+            }
           }
         }
       }
@@ -1017,7 +1178,10 @@ void processSensor() {
       // print chart of what we saw in 8x8 grid
       for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
         SERIAL_PRINT(F(" "));
-        SERIAL_PRINT(norm_pixels[idx]);
+        if (norm_pixels[idx] < 0.001)
+          SERIAL_PRINT(F("----"));
+        else
+          SERIAL_PRINT(norm_pixels[idx]);
         SERIAL_PRINT(F(" "));
         if (x(idx) == GRID_EXTENT) SERIAL_PRINTLN();
       }
@@ -1047,8 +1211,8 @@ void initialize() {
 
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     cur_pixels_hash += sq(avg_pixels[i] + i);
-    if (avg_pixels[i] > 65) avg_pixels[i] = 65;
     if (avg_pixels[i] < 0) avg_pixels[i] = 0;
+    if (avg_pixels[i] > 65) avg_pixels[i] = 65;
   }
 
   for (uint8_t k=0; k < 10; k++) {
@@ -1058,9 +1222,8 @@ void initialize() {
     }
 
     for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-      if (norm_pixels[i] > 65) norm_pixels[i] = 65;
-      if (norm_pixels[i] < 0) norm_pixels[i] = 0;
-      avg_pixels[i] += VERY_FAST_ALPHA * (norm_pixels[i] - avg_pixels[i]);
+      if (norm_pixels[i] < 0 || norm_pixels[i] > 65) continue;
+      avg_pixels[i] += FAST_ALPHA * (norm_pixels[i] - avg_pixels[i]);
     }
   }
 }
