@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.0"
+#define FIRMWARE_VERSION        "V0.6.1"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -9,7 +9,7 @@
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
-#define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
+#define CONFIDENCE_THRESHOLD    0.2  // consider a point if we're 20% confident
 #define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
 #define GRADIENT_THRESHOLD      3.0  // 2º temp change gives us 100% confidence of person
@@ -17,7 +17,7 @@
 #define HIGH_T_THRESHOLD        5
 #define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
 #define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
-#define MIN_TRAVEL_RATIO        0.15
+#define MIN_TRAVEL_RATIO        0.1
 
 #include <Adafruit_AMG88xx.h>
 
@@ -149,6 +149,8 @@ void checkDoorState() {
   if (last_door_state != door_state) {
     frames_since_door_open = 0;
     memset(past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
+    SERIAL_PRINT(F("door "));
+    SERIAL_PRINTLN(door_state);
   }
   if (((door_state == DOOR_CLOSED && last_published_door_state != DOOR_CLOSED) ||
        (door_state != DOOR_CLOSED && last_published_door_state != DOOR_OPEN)) &&
@@ -203,28 +205,6 @@ void publishEvents() {
         reverted[i] = false;
         avg_norms[i] = past_norms[i];
         count[i] = 1;
-      }
-    }
-  }
-}
-
-void publishMaybeEvents(uint8_t idx) {
-  if (!crossed[idx] && histories[idx] > MIN_HISTORY && totalDistance(idx) > MAX_DISTANCE) {
-    int diff = AXIS(starting_points[idx]) - AXIS(past_points[idx]);
-    float conf = confidence(idx);
-    if ((abs(diff) >= 3 || totalDistance(idx) >= (5-diff)) && conf > HIGH_CONF_THRESHOLD) {
-      if (SIDE1(past_points[idx])) {
-        publish("m1", floor(conf*100.0), -1);
-      } else {
-        publish("m2", floor(conf*100.0), -1);
-      }
-    } else if (count[idx] >= histories[idx] &&
-        (histories[idx] >= (2*MIN_HISTORY) || conf > AVG_CONF_THRESHOLD)) {
-      // we don't know what happened, add door to suspicious list
-      if (SIDE1(past_points[idx])) {
-        publish("s1", floor(conf*100.0), -1);
-      } else {
-        publish("s2", floor(conf*100.0), -1);
       }
     }
   }
@@ -505,10 +485,8 @@ void processSensor() {
         uint8_t min_index = UNDEF_POINT;
         for (uint8_t j=0; j<total_masses; j++) {
           // if more than a 3x difference between these points, don't pair them
-          if ((norm_pixels[points[j]] < past_norms[idx] &&
-              norm_pixels[points[j]] * 3.0 < past_norms[idx]) ||
-              (past_norms[idx] < norm_pixels[points[j]] &&
-              past_norms[idx] * 3.0 < norm_pixels[points[j]])) {
+          if ((norm_pixels[points[j]] < conf && norm_pixels[points[j]] * 3.0 + 0.1 < conf) ||
+              (conf < norm_pixels[points[j]] && conf * 3.0 + 0.1 < norm_pixels[points[j]])) {
             continue;
           }
 
@@ -528,12 +506,12 @@ void processSensor() {
             uint8_t np_axis = AXIS(points[j]);
             if (SIDE1(starting_points[idx])) {
               if (crossed[idx]) {
-                if (np_axis < sp_axis) directionBonus = 0.1;
-              } else if (np_axis > sp_axis) directionBonus = 0.1;
+                if (np_axis <= sp_axis) directionBonus = 0.1;
+              } else if (np_axis >= sp_axis) directionBonus = 0.1;
             } else {
               if (crossed[idx]) {
-                if (np_axis > sp_axis) directionBonus = 0.1;
-              } else if (np_axis < sp_axis) directionBonus = 0.1;
+                if (np_axis >= sp_axis) directionBonus = 0.1;
+              } else if (np_axis <= sp_axis) directionBonus = 0.1;
             }
             float score = (d/max_distance) - ratioP - directionBonus +
                               max(AVG_CONF_THRESHOLD - norm_pixels[points[j]], 0.0);
@@ -581,8 +559,8 @@ void processSensor() {
             float directionBonus = 0;
             if (crossed[idx]) {
               if (SIDE1(starting_points[idx])) {
-                if (AXIS(points[i]) < AXIS(past_points[idx])) directionBonus = 3.0;
-              } else if (AXIS(points[i]) > AXIS(past_points[idx])) directionBonus = 3.0;
+                if (AXIS(points[i]) <= AXIS(past_points[idx])) directionBonus = 3.0;
+              } else if (AXIS(points[i]) >= AXIS(past_points[idx])) directionBonus = 3.0;
             }
             score *= (max(totalDistance(idx), 0.2) + directionBonus);
             score *= (1.0 - abs(norm_pixels[points[i]] - conf));
@@ -675,8 +653,8 @@ void processSensor() {
         for (uint8_t j=0; j<temp_forgotten_num; j++) {
           if (temp_forgotten_points[j] != UNDEF_POINT &&
               // point cannot be more than 3x warmer than forgotten point
-              ((temp_forgotten_norms[j] <= an && temp_forgotten_norms[j]*3.0 > an) ||
-                (an < temp_forgotten_norms[j] && an*3.0 > temp_forgotten_norms[j]))) {
+              ((temp_forgotten_norms[j] <= an && temp_forgotten_norms[j]*3.0 + 0.1 > an) ||
+                (an < temp_forgotten_norms[j] && an*3.0 + 0.1 > temp_forgotten_norms[j]))) {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(temp_forgotten_points[j], points[i]);
             if (d >= MAX_DISTANCE || (SIDE(points[i]) != SIDE(temp_forgotten_points[j]) &&
@@ -703,8 +681,8 @@ void processSensor() {
         for (uint8_t j=0; j<forgotten_num; j++) {
           if (forgotten_past_points[j] != UNDEF_POINT &&
               // point cannot be more than 3x warmer than forgotten point
-              ((forgotten_norms[j] <= an && forgotten_norms[j]*3.0 > an) ||
-                (an < forgotten_norms[j] && an*3.0 > forgotten_norms[j]))) {
+              ((forgotten_norms[j] <= an && forgotten_norms[j]*3.0 + 0.1 > an) ||
+                (an < forgotten_norms[j] && an*3.0 + 0.1 > forgotten_norms[j]))) {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(forgotten_past_points[j], points[i]);
             if (d >= MAX_DISTANCE || (SIDE(points[i]) != SIDE(forgotten_past_points[j]) &&
