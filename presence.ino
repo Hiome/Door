@@ -13,17 +13,15 @@
 #define ENCRYPTKEY    "smarterisbetters" // exactly the same 16 characters/bytes on all nodes!
 #define ATC_RSSI      -75
 #define SERIAL_BAUD   115200
-
-/* Pin Connections */
-#define FLASH  8
-#define LED    9
-#define BATT   A7
+#define RETRY_TIME    50
 
 #include <RFM69_ATC.h>
 #include <RFM69_OTA.h>
 #include <SPIFlash.h>
-#include <SPI.h>
 #include <LowPower.h>
+
+RFM69_ATC radio;
+SPIFlash flash(8, 0xEF30); //EF30 for windbond 4mbit flash
 
 #ifdef ENABLE_SERIAL
   #define SERIAL_START      ( Serial.begin(SERIAL_BAUD) )
@@ -39,18 +37,48 @@
 
 #define LOWPOWER_DELAY(d) ( LowPower.powerDown(d, ADC_OFF, BOD_ON) )
 
-RFM69_ATC radio;
-SPIFlash flash(FLASH, 0xEF30); //EF30 for windbond 4mbit flash
+uint8_t packetCount = 1;
+int8_t publish(char* msg, uint16_t width, int8_t retries) {
+  if (retries == -1) {
+    if (!radio.canSend()) {
+      SERIAL_PRINT(F("s "));
+      SERIAL_PRINTLN(msg);
+      SERIAL_FLUSH;
+      return 0;
+    }
 
-void blink(uint8_t times) {
-  while (times > 0) {
-    digitalWrite(LED, LOW);
-    LOWPOWER_DELAY(SLEEP_120MS);
-    digitalWrite(LED, HIGH);
-    LOWPOWER_DELAY(SLEEP_250MS);
-    digitalWrite(LED, LOW);
-    LOWPOWER_DELAY(SLEEP_120MS);
-    times--;
+    char sendBuf[15];
+    uint8_t len = sprintf(sendBuf, "%s;%d0", msg, width);
+    radio.send(GATEWAYID, sendBuf, len, false);
+
+    SERIAL_PRINT(F("p "));
+    SERIAL_PRINT(sendBuf);
+    SERIAL_PRINTLN(F("\n\n"));
+    SERIAL_FLUSH;
+    return -1;
+  } else {
+    char sendBuf[15];
+    uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, width, packetCount);
+    bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries, RETRY_TIME);
+  
+    #ifdef ENABLE_SERIAL
+      SERIAL_PRINT(F("p "));
+      SERIAL_PRINT(sendBuf);
+      if (!success) SERIAL_PRINT(F(" x"));
+      SERIAL_PRINTLN(F("\n\n"));
+      SERIAL_FLUSH;
+    #endif
+  
+    if (success || retries > 0) {
+      if (packetCount < 9) {
+        return packetCount++;
+      } else {
+        packetCount = 1;
+        return 9;
+      }
+    }
+
+    return 0;
   }
 }
 
@@ -68,60 +96,8 @@ void blink(uint8_t times) {
   #error Missing node type
 #endif
 
-#ifdef BATTERY_POWERED
-  #define BATTERY_LEVEL ( analogRead(BATT) )
-#else
-  #define BATTERY_LEVEL ( 0 )
-#endif
-
-uint8_t packetCount = 1;
-bool publish(char* msg, int8_t retries) {
-  if (retries == -1) {
-    if (!radio.canSend()) {
-      SERIAL_PRINT(F("s "));
-      SERIAL_PRINTLN(msg);
-      SERIAL_FLUSH;
-      return false;
-    }
-
-    char sendBuf[15];
-    uint8_t len = sprintf(sendBuf, "%s;%d0", msg, BATTERY_LEVEL);
-    radio.send(GATEWAYID, sendBuf, len, false);
-
-    SERIAL_PRINT(F("p "));
-    SERIAL_PRINT(sendBuf);
-    SERIAL_PRINTLN(F("\n\n"));
-    SERIAL_FLUSH;
-    return true;
-  } else {
-    char sendBuf[15];
-    uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, BATTERY_LEVEL, packetCount);
-    bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries);
-
-    if (success || retries > 0) {
-      if (packetCount < 9)
-        packetCount++;
-      else
-        packetCount = 1;
-    }
-
-    #ifdef ENABLE_SERIAL
-      SERIAL_PRINT(F("p "));
-      SERIAL_PRINT(sendBuf);
-      if (!success) SERIAL_PRINT(F(" x"));
-      SERIAL_PRINTLN(F("\n\n"));
-      SERIAL_FLUSH;
-    #endif
-
-    return success;
-  }
-}
-
 void setup() {
   SERIAL_START;
-
-  pinMode(LED, OUTPUT);
-  digitalWrite(LED, HIGH);
 
   radio.initialize(RF69_915MHZ, NODEID, NETWORKID);
   radio.encrypt(ENCRYPTKEY);
@@ -130,8 +106,6 @@ void setup() {
   if (flash.initialize()) flash.sleep();
 
   initialize();
-
-  digitalWrite(LED, LOW);
 }
 
 void loop() {
