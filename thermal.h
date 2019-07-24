@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.1"
+#define FIRMWARE_VERSION        "V0.6.2"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -169,13 +169,15 @@ void publishRevert(uint8_t idx) {
 
 void checkForRevert(uint8_t idx) {
   if (!crossed[idx] || frames_since_door_open == 0 || zombieCount[idx] == 1) return;
-  if (reverted[idx] && (pointOnSmallBorder(past_points[idx]) ||
-        pointOnLREdge(past_points[idx]))) {
+  if (reverted[idx] && SIDE(past_points[idx]) == SIDE(starting_points[idx]) &&
+      (pointOnSmallBorder(past_points[idx]) ||
+        (pointOnLREdge(past_points[idx]) && confidence(idx) >= HIGH_CONF_THRESHOLD))) {
     // we had previously reverted this point, but it came back and made it through
     publishRevert(idx);
     reverted[idx] = false;
-  } else if (!reverted[idx] && confidence(idx) < HIGH_CONF_THRESHOLD &&
-      pointInMiddle(past_points[idx]) && !pointOnLREdge(past_points[idx])) {
+  } else if (!reverted[idx] && (SIDE(past_points[idx]) != SIDE(starting_points[idx]) ||
+              (pointInMiddle(past_points[idx]) && (confidence(idx) < HIGH_CONF_THRESHOLD ||
+                !pointOnLREdge(past_points[idx]))))) {
     // point disappeared in middle of grid, revert its crossing (probably noise or a hand)
     publishRevert(idx);
     reverted[idx] = true;
@@ -190,6 +192,7 @@ void publishEvents() {
       int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
       // point cleanly crossed grid
       if (abs(diff) >= 3 || totalDistance(i) >= 6) {
+        uint8_t old_crossed = crossed[i];
         if (SIDE1(past_points[i])) {
           crossed[i] = publish("1", floor(confidence(i)*100.0), 10);
           // artificially shift starting point ahead 1 row so that
@@ -201,10 +204,11 @@ void publishEvents() {
           int s = past_points[i] + GRID_EXTENT;
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
+        if (old_crossed) crossed[i] = 0;
         histories[i] = 1;
         reverted[i] = false;
-        avg_norms[i] = past_norms[i];
-        count[i] = 1;
+        avg_norms[i] = confidence(i) + past_norms[i];
+        count[i] = 2;
       }
     }
   }
