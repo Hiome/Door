@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.2"
+#define FIRMWARE_VERSION        "V0.6.3"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -130,12 +130,14 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
   #define pointInMiddle(i)      ( (i) >= (GRID_EXTENT * 2) && (i) < (GRID_EXTENT * 6) )
   #define pointOnEdge(i)        ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
   #define pointOnLREdge(i)      ( NOT_AXIS(i) == 1 || NOT_AXIS(1) == GRID_EXTENT )
+  #define pointOnLRBorder(i)    ( NOT_AXIS(i) <= 2 || NOT_AXIS(1) >= 7 )
 #else
   #define pointOnBorder(i)      ( AXIS(i) <= 3 || AXIS(i) >= 6 )
   #define pointOnSmallBorder(i) ( AXIS(i) <= 2 || AXIS(i) >= 7 )
   #define pointInMiddle(i)      ( AXIS(i) > 2 && AXIS(i) < 7 )
   #define pointOnEdge(i)        ( AXIS(i) == 1 || AXIS(i) == 8 )
   #define pointOnLREdge(i)      ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
+  #define pointOnLRBorder(i)    ( (i) < (GRID_EXTENT * 2) || (i) >= (GRID_EXTENT * 6) )
 #endif
 
 void checkDoorState() {
@@ -170,14 +172,12 @@ void publishRevert(uint8_t idx) {
 void checkForRevert(uint8_t idx) {
   if (!crossed[idx] || frames_since_door_open == 0 || zombieCount[idx] == 1) return;
   if (reverted[idx] && SIDE(past_points[idx]) == SIDE(starting_points[idx]) &&
-      (pointOnSmallBorder(past_points[idx]) ||
-        (pointOnLREdge(past_points[idx]) && confidence(idx) >= HIGH_CONF_THRESHOLD))) {
+      (pointOnSmallBorder(past_points[idx]) || pointOnLRBorder(past_points[idx]))) {
     // we had previously reverted this point, but it came back and made it through
     publishRevert(idx);
     reverted[idx] = false;
   } else if (!reverted[idx] && (SIDE(past_points[idx]) != SIDE(starting_points[idx]) ||
-              (pointInMiddle(past_points[idx]) && (confidence(idx) < HIGH_CONF_THRESHOLD ||
-                !pointOnLREdge(past_points[idx]))))) {
+              (pointInMiddle(past_points[idx]) && !pointOnLRBorder(past_points[idx])))) {
     // point disappeared in middle of grid, revert its crossing (probably noise or a hand)
     publishRevert(idx);
     reverted[idx] = true;
@@ -265,7 +265,7 @@ bool normalizePixels() {
       if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-1, T_THRESHOLD)) neighbors++;
       if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+1, T_THRESHOLD)) neighbors++;
 
-      ignorable[i] = neighbors < (pointOnLREdge(i) ? 1 : MIN_NEIGHBORS);
+      ignorable[i] = neighbors < (pointOnLREdge(i) ? 2 : MIN_NEIGHBORS);
     } else {
       ignorable[i] = true;
     }
@@ -347,13 +347,15 @@ bool normalizePixels() {
 }
 
 // insert element i into an array at position j, shift everything else over to make room
-#define INSERT_POINT_HERE ({                        \
-  for (uint8_t x=active_pixel_count; x>j; x--) {    \
-    ordered_indexes[x] = ordered_indexes[x-1];      \
-  }                                                 \
-  ordered_indexes[j] = i;                           \
-  added = true;                                     \
-  break;                                            \
+#define INSERT_POINT_HERE ({                            \
+  if (norm_pixels[ordered_indexes[j]] > norm_pixels[i]) \
+    norm_pixels[i] = norm_pixels[ordered_indexes[j]];   \
+  for (int8_t x=active_pixel_count; x>j; x--) {         \
+    ordered_indexes[x] = ordered_indexes[x-1];          \
+  }                                                     \
+  ordered_indexes[j] = i;                               \
+  added = true;                                         \
+  break;                                                \
 })
 
 uint8_t findCurrentPoints(uint8_t *points) {
