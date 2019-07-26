@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.5"
+#define FIRMWARE_VERSION        "V0.6.6"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -126,8 +126,8 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
   #define pointOnSmallBorder(i) ( (i) < (GRID_EXTENT * 2) || (i) >= (GRID_EXTENT * 6) )
   #define pointInMiddle(i)      ( (i) >= (GRID_EXTENT * 2) && (i) < (GRID_EXTENT * 6) )
   #define pointOnEdge(i)        ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
-  #define pointOnLREdge(i)      ( NOT_AXIS(i) == 1 || NOT_AXIS(1) == GRID_EXTENT )
-  #define pointOnLRBorder(i)    ( NOT_AXIS(i) <= 2 || NOT_AXIS(1) >= 7 )
+  #define pointOnLREdge(i)      ( NOT_AXIS(i) == 1 || NOT_AXIS(i) == GRID_EXTENT )
+  #define pointOnLRBorder(i)    ( NOT_AXIS(i) <= 2 || NOT_AXIS(i) >= 7 )
 #else
   #define pointOnBorder(i)      ( AXIS(i) <= 3 || AXIS(i) >= 6 )
   #define pointOnSmallBorder(i) ( AXIS(i) <= 2 || AXIS(i) >= 7 )
@@ -217,9 +217,8 @@ void publishEvents() {
       float conf = confidence(i);
       if (conf <= AVG_CONF_THRESHOLD || histories[i] <= floor(6.0 - conf*MIN_HISTORY))
         continue;
-      int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
       // point cleanly crossed grid
-      if (abs(diff) >= 3 || totalDistance(i) >= 6) {
+      if (abs(AXIS(starting_points[i]) - AXIS(past_points[i])) >= 3) {
         uint8_t old_crossed = crossed[i];
         if (SIDE1(past_points[i])) {
           crossed[i] = publish("1", floor(conf*100.0), 10);
@@ -771,7 +770,7 @@ void processSensor() {
       }
 
       // ignore new points on side 1 immediately after door opens
-      if (frames_since_door_open < 3 && (SIDE1(sp) || door_state == DOOR_CLOSED)) continue;
+      if (frames_since_door_open < 2 && (SIDE1(sp) || door_state == DOOR_CLOSED)) continue;
 
       // ignore new points that showed up in middle 2 rows of grid
       if (retroMatched || (pointOnBorder(sp) && (nobodyInFront || pointOnSmallBorder(sp) ||
