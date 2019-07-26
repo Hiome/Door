@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.3"
+#define FIRMWARE_VERSION        "V0.6.4"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -109,8 +109,6 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define PIXEL_ACTIVE(i) ( norm_pixels[(i)] > CONFIDENCE_THRESHOLD )
 #define confidence(x)   ( avg_norms[(x)]/((float)count[(x)]) )
 #define totalDistance(x)( euclidean_distance(starting_points[(x)], past_points[(x)]) )
-#define doorOpenedAgo(x)( frames_since_door_open < (x) && door_state != DOOR_CLOSED )
-#define doorClosedAgo(x)( frames_since_door_open < (x) && door_state == DOOR_CLOSED )
 #define bgPixel(x)      ( ((float)avg_pixels[(x)])/1000.0 )
 #define stdPixel(x)     ( ((float)std_pixels[(x)])/1000.0 )
 #define MAHALANBOIS(x,t)( sq(norm_pixels[(x)]-bgPixel(x))/stdPixel(x) >= (t) )
@@ -139,18 +137,22 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
   #define pointOnLREdge(i)      ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
   #define pointOnLRBorder(i)    ( (i) < (GRID_EXTENT * 2) || (i) >= (GRID_EXTENT * 6) )
 #endif
+#define pointOnSafeLRBorder(i)  ( pointOnBorder(i) && pointOnLRBorder(i) )
 
-void checkDoorState() {
-  uint8_t last_door_state = door_state;
+uint8_t readDoorState() {
   if (PIND & 0b00001000) {  // true if reed 3 is high (normal state)
     // door open if reed switch 4 is also high
-    door_state = PIND & 0b00010000 ? DOOR_OPEN : DOOR_AJAR;
+    return PIND & 0b00010000 ? DOOR_OPEN : DOOR_AJAR;
   } else {
-    door_state = DOOR_CLOSED;
+    return DOOR_CLOSED;
   }
+}
+
+bool checkDoorState() {
+  uint8_t last_door_state = door_state;
+  door_state = readDoorState();
   if (last_door_state != door_state) {
     frames_since_door_open = 0;
-    memset(past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
     SERIAL_PRINT(F("door "));
     SERIAL_PRINTLN(door_state);
   }
@@ -159,55 +161,76 @@ void checkDoorState() {
       publish(door_state == DOOR_CLOSED ? "d0" : "d1", 0, 0)) {
     last_published_door_state = door_state == DOOR_CLOSED ? DOOR_CLOSED : DOOR_OPEN;
   }
+
+  return last_door_state != door_state;
 }
 
 void publishRevert(uint8_t idx) {
-  checkDoorState();
-  if (frames_since_door_open == 0) return;
   char rBuf[3];
   sprintf(rBuf, "r%d", crossed[idx]);
-  publish(rBuf, floor(confidence(idx)*100.0), 10);
+  publish(rBuf, floor(past_norms[idx]*100.0), 10);
 }
 
 void checkForRevert(uint8_t idx) {
-  if (!crossed[idx] || frames_since_door_open == 0 || zombieCount[idx] == 1) return;
+  if (past_points[idx] == UNDEF_POINT || !crossed[idx] || zombieCount[idx] == 1) return;
+  if (SIDE2(past_points[idx]) && SIDE2(starting_points[idx]) && !reverted[idx]) {
+    bool doorJustChanged = frames_since_door_open == 0;
+    if (!doorJustChanged) {
+      doorJustChanged = door_state != readDoorState();
+    }
+    if (doorJustChanged) return;
+  }
   if (reverted[idx] && SIDE(past_points[idx]) == SIDE(starting_points[idx]) &&
-      (pointOnSmallBorder(past_points[idx]) || pointOnLRBorder(past_points[idx]))) {
+      (pointOnSmallBorder(past_points[idx]) || pointOnSafeLRBorder(past_points[idx]))) {
     // we had previously reverted this point, but it came back and made it through
     publishRevert(idx);
     reverted[idx] = false;
   } else if (!reverted[idx] && (SIDE(past_points[idx]) != SIDE(starting_points[idx]) ||
-              (pointInMiddle(past_points[idx]) && !pointOnLRBorder(past_points[idx])))) {
+              (pointInMiddle(past_points[idx]) && !pointOnSafeLRBorder(past_points[idx])))) {
     // point disappeared in middle of grid, revert its crossing (probably noise or a hand)
     publishRevert(idx);
     reverted[idx] = true;
   }
 }
 
+void clearPointsAfterDoorClose() {
+  if (checkDoorState()) {
+    for (uint8_t i = 0; i<MAX_PEOPLE; i++) {
+      checkForRevert(i);
+      past_points[i] = UNDEF_POINT;
+      forgotten_past_points[i] = UNDEF_POINT;
+    }
+    forgotten_num = 0;
+    cycles_since_forgotten = MAX_EMPTY_CYCLES;
+  }
+}
+
 void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
-    if (past_points[i] != UNDEF_POINT && histories[i] > MIN_HISTORY && zombieCount[i] != 1 &&
-          SIDE(starting_points[i]) != SIDE(past_points[i]) &&
-          confidence(i) > AVG_CONF_THRESHOLD) {
+    if (past_points[i] != UNDEF_POINT && zombieCount[i] != 1 &&
+          SIDE(starting_points[i]) != SIDE(past_points[i])) {
+      float conf = confidence(i);
+      if (conf <= AVG_CONF_THRESHOLD || histories[i] <= floor(6.0 - conf*MIN_HISTORY))
+        continue;
       int diff = AXIS(starting_points[i]) - AXIS(past_points[i]);
       // point cleanly crossed grid
       if (abs(diff) >= 3 || totalDistance(i) >= 6) {
         uint8_t old_crossed = crossed[i];
         if (SIDE1(past_points[i])) {
-          crossed[i] = publish("1", floor(confidence(i)*100.0), 10);
+          crossed[i] = publish("1", floor(conf*100.0), 10);
           // artificially shift starting point ahead 1 row so that
           // if user turns around now, algorithm considers it an exit
           int s = past_points[i] - GRID_EXTENT;
           starting_points[i] = max(s, 0);
         } else {
-          crossed[i] = publish("2", floor(confidence(i)*100.0), 10);
+          crossed[i] = publish("2", floor(conf*100.0), 10);
           int s = past_points[i] + GRID_EXTENT;
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
         if (old_crossed) crossed[i] = 0;
         histories[i] = 1;
         reverted[i] = false;
-        avg_norms[i] = confidence(i) + past_norms[i];
+        avg_norms[i] = conf + past_norms[i];
         count[i] = 2;
       }
     }
@@ -456,10 +479,9 @@ void processSensor() {
   uint8_t temp_forgotten_crossed[MAX_PEOPLE];
   bool temp_forgotten_reverted[MAX_PEOPLE];
   uint8_t temp_forgotten_num = 0;
-  uint8_t forgotten_num_frd = 0;
 
   // track forgotten point states in temporary local variables and reset global ones
-  #define FORGET_POINT ({                                                         \
+  #define FORGET_POINT ({                                                                   \
     checkForRevert(idx);                                                                    \
     if (((count[idx] > 1 && !crossed[idx]) ||                                               \
           (crossed[idx] && pointInMiddle(past_points[idx]))) &&                             \
@@ -472,7 +494,6 @@ void processSensor() {
       temp_forgotten_reverted[temp_forgotten_num] = reverted[idx];                          \
       temp_forgotten_num++;                                                                 \
     }                                                                                       \
-    forgotten_num_frd++;                                                                    \
     pairs[idx] = UNDEF_POINT;                                                               \
     past_points[idx] = UNDEF_POINT;                                                         \
   })
@@ -500,7 +521,10 @@ void processSensor() {
 
           // if switching sides with low confidence, don't pair
           if (SIDE(points[j]) != SIDE(past_points[idx]) &&
-              (conf < AVG_CONF_THRESHOLD || norm_pixels[points[j]]/d < MIN_TRAVEL_RATIO)) {
+              (conf < AVG_CONF_THRESHOLD ||
+                norm_pixels[points[j]]/d < MIN_TRAVEL_RATIO ||
+                // don't let point skip half the board when switching sides
+                abs(AXIS(points[j]) - AXIS(past_points[idx])) > 3)) {
             continue;
           }
 
@@ -654,6 +678,8 @@ void processSensor() {
       bool retroMatched = false;
       bool nobodyInFront = true;
 
+      if (an <= AVG_CONF_THRESHOLD) continue;
+
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
         for (uint8_t j=0; j<temp_forgotten_num; j++) {
@@ -664,8 +690,7 @@ void processSensor() {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(temp_forgotten_points[j], points[i]);
             if (d >= MAX_DISTANCE || (SIDE(points[i]) != SIDE(temp_forgotten_points[j]) &&
-                (temp_forgotten_norms[j] < AVG_CONF_THRESHOLD ||
-                norm_pixels[points[i]]/d < MIN_TRAVEL_RATIO))) {
+                (temp_forgotten_norms[j] < AVG_CONF_THRESHOLD || an/d < MIN_TRAVEL_RATIO))) {
               continue;
             }
 
@@ -692,8 +717,7 @@ void processSensor() {
             // if switching sides with low confidence or moving too far, don't pair
             float d = euclidean_distance(forgotten_past_points[j], points[i]);
             if (d >= MAX_DISTANCE || (SIDE(points[i]) != SIDE(forgotten_past_points[j]) &&
-                (forgotten_norms[j] < AVG_CONF_THRESHOLD ||
-                norm_pixels[points[i]]/d < MIN_TRAVEL_RATIO))) {
+                (forgotten_norms[j] < AVG_CONF_THRESHOLD || an/d < MIN_TRAVEL_RATIO))) {
               continue;
             }
 
@@ -739,10 +763,12 @@ void processSensor() {
         // if point has mid confidence with nobody ahead...
         if (nobodyInFront && an > 0.6) {
           // and it is in row 5, allow it (door might've just opened)
-          if (AXIS(sp) == (GRID_EXTENT/2 + 1) && PIXEL_ACTIVE(sp + GRID_EXTENT)) {
+          if (AXIS(sp) == (GRID_EXTENT/2 + 1) && (PIXEL_ACTIVE(sp + GRID_EXTENT) ||
+                frames_since_door_open < 3)) {
             retroMatched = true;
-          } else if (nobodyOnBoard && AXIS(sp) == (GRID_EXTENT/2) &&
-                      an > HIGH_CONF_THRESHOLD && PIXEL_ACTIVE(sp+GRID_EXTENT)) {
+          } else if (frames_since_door_open < 3 && nobodyOnBoard &&
+                      AXIS(sp) == (GRID_EXTENT/2) && an > HIGH_CONF_THRESHOLD &&
+                      PIXEL_ACTIVE(sp+GRID_EXTENT)) {
             // or because person was already through door by the time it opened
             retroMatched = true;
             sp += GRID_EXTENT;
@@ -751,12 +777,11 @@ void processSensor() {
       }
 
       // ignore new points on side 1 immediately after door opens
-      if ((doorOpenedAgo(1) && SIDE1(sp)) || doorClosedAgo(3)) continue;
+      if (frames_since_door_open < 3 && (SIDE1(sp) || door_state == DOOR_CLOSED)) continue;
 
       // ignore new points that showed up in middle 2 rows of grid
-      if (retroMatched ||
-          (nobodyInFront && an > AVG_CONF_THRESHOLD && pointOnBorder(sp)) ||
-          pointOnSmallBorder(sp)) {
+      if (retroMatched || (pointOnBorder(sp) && (nobodyInFront || pointOnSmallBorder(sp) ||
+            pointOnLRBorder(sp)))) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
           if (past_points[j] == UNDEF_POINT) {
@@ -829,7 +854,7 @@ void processSensor() {
       // print chart of what we saw in 8x8 grid
       for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
         SERIAL_PRINT(F(" "));
-        if (norm_pixels[idx] < 0.001)
+        if (norm_pixels[idx] < CONFIDENCE_THRESHOLD)
           SERIAL_PRINT(F("----"));
         else
           SERIAL_PRINT(norm_pixels[idx]);
@@ -890,6 +915,6 @@ void initialize() {
 }
 
 void loop_frd() {
-  checkDoorState();
+  clearPointsAfterDoorClose();
   processSensor();
 }
