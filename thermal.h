@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.4"
+#define FIRMWARE_VERSION        "V0.6.5"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -36,7 +36,6 @@ bool reverted[MAX_PEOPLE];
 float past_norms[MAX_PEOPLE];
 float avg_norms[MAX_PEOPLE];
 uint16_t count[MAX_PEOPLE];
-uint16_t zombieCount[MAX_PEOPLE];
 
 uint8_t forgotten_past_points[MAX_PEOPLE];
 uint8_t forgotten_starting_points[MAX_PEOPLE];
@@ -137,7 +136,10 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
   #define pointOnLREdge(i)      ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
   #define pointOnLRBorder(i)    ( (i) < (GRID_EXTENT * 2) || (i) >= (GRID_EXTENT * 6) )
 #endif
-#define pointOnSafeLRBorder(i)  ( pointOnBorder(i) && pointOnLRBorder(i) )
+
+bool inEndZone(uint8_t p) {
+  return pointOnBorder(p) && (pointOnSmallBorder(p) || pointOnLRBorder(p));
+}
 
 uint8_t readDoorState() {
   if (PIND & 0b00001000) {  // true if reed 3 is high (normal state)
@@ -171,26 +173,29 @@ void publishRevert(uint8_t idx) {
   publish(rBuf, floor(past_norms[idx]*100.0), 10);
 }
 
-void checkForRevert(uint8_t idx) {
-  if (past_points[idx] == UNDEF_POINT || !crossed[idx] || zombieCount[idx] == 1) return;
+bool checkForRevert(uint8_t idx) {
+  if (past_points[idx] == UNDEF_POINT || !crossed[idx]) return false;
   if (SIDE2(past_points[idx]) && SIDE2(starting_points[idx]) && !reverted[idx]) {
     bool doorJustChanged = frames_since_door_open == 0;
     if (!doorJustChanged) {
       doorJustChanged = door_state != readDoorState();
     }
-    if (doorJustChanged) return;
+    if (doorJustChanged) return false;
   }
   if (reverted[idx] && SIDE(past_points[idx]) == SIDE(starting_points[idx]) &&
-      (pointOnSmallBorder(past_points[idx]) || pointOnSafeLRBorder(past_points[idx]))) {
+      inEndZone(past_points[idx])) {
     // we had previously reverted this point, but it came back and made it through
     publishRevert(idx);
     reverted[idx] = false;
+    return true;
   } else if (!reverted[idx] && (SIDE(past_points[idx]) != SIDE(starting_points[idx]) ||
-              (pointInMiddle(past_points[idx]) && !pointOnSafeLRBorder(past_points[idx])))) {
+              !inEndZone(past_points[idx]))) {
     // point disappeared in middle of grid, revert its crossing (probably noise or a hand)
     publishRevert(idx);
     reverted[idx] = true;
+    return true;
   }
+  return false;
 }
 
 void clearPointsAfterDoorClose() {
@@ -207,8 +212,8 @@ void clearPointsAfterDoorClose() {
 
 void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
-    if (past_points[i] != UNDEF_POINT && zombieCount[i] != 1 &&
-          SIDE(starting_points[i]) != SIDE(past_points[i])) {
+    if (past_points[i] != UNDEF_POINT && SIDE(starting_points[i]) != SIDE(past_points[i]) &&
+        (!crossed[i] || !reverted[i])) {
       float conf = confidence(i);
       if (conf <= AVG_CONF_THRESHOLD || histories[i] <= floor(6.0 - conf*MIN_HISTORY))
         continue;
@@ -346,19 +351,9 @@ bool normalizePixels() {
     // update average baseline
     var = max(var, 0.01) - stdPixel(i);
     // implicit alpha of 0.001
-    if (abs(std) < 1) {
-      // increase alpha to 0.01
-      std *= 10.0;
-    } else if (abs(std) >= 10) {
+    if (abs(std) > 4 && norm_pixels[i] > 0.6) {
       // lower alpha to 0.0001
       std *= 0.1;
-    }
-    // implicit alpha of 0.001
-    if (var < 1) {
-      // increase alpha to 0.01
-      var *= 10.0;
-    } else if (var >= 10) {
-      // lower alpha to 0.0001
       var *= 0.1;
     }
     avg_pixels[i] += ((int)lroundf(std));
@@ -482,9 +477,7 @@ void processSensor() {
 
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT ({                                                                   \
-    checkForRevert(idx);                                                                    \
-    if (((count[idx] > 1 && !crossed[idx]) ||                                               \
-          (crossed[idx] && pointInMiddle(past_points[idx]))) &&                             \
+    if ((count[idx] > 1 && !crossed[idx]) || (crossed[idx] && checkForRevert(idx)) &&       \
           confidence(idx) > AVG_CONF_THRESHOLD) {                                           \
       temp_forgotten_points[temp_forgotten_num] = past_points[idx];                         \
       temp_forgotten_norms[temp_forgotten_num] = confidence(idx);                           \
@@ -627,9 +620,13 @@ void processSensor() {
       for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
         if (past_points[idx] != UNDEF_POINT && pairs[idx] == i) {
           // closest point matched, update trackers
-          if (pointOnEdge(points[i]) && SIDE(starting_points[idx]) == SIDE(points[i])) {
+          if ((pointOnEdge(points[i]) && SIDE(starting_points[idx]) == SIDE(points[i])) ||
+              (crossed[idx] && inEndZone(points[i]))) {
             // always consider a point on the outer edge as just starting off
+            // this will fail if a person appears right when noise is lost in middle of grid,
+            // causing it to assume that's the same person and revert the revert.
             past_points[idx] = points[i];
+            checkForRevert(idx);
             starting_points[idx] = points[i];
             past_norms[idx] = norm_pixels[points[i]];
             histories[idx] = 1;
@@ -662,7 +659,6 @@ void processSensor() {
             avg_norms[idx] += past_norms[idx];
             count[idx]++;
           }
-          if (zombieCount[idx]) zombieCount[idx]++;
           break;
         }
       }
@@ -674,7 +670,6 @@ void processSensor() {
       bool revert = false;
       float an = norm_pixels[points[i]];
       uint8_t c = 1;
-      uint8_t z = 0;
       bool retroMatched = false;
       bool nobodyInFront = true;
 
@@ -727,7 +722,6 @@ void processSensor() {
             revert = forgotten_reverted[j];
             an += forgotten_norms[j]/((float)cycles_since_forgotten + 2.0);
             c++;
-            z = 1;
             forgotten_past_points[j] = UNDEF_POINT;
             retroMatched = true;
             break;
@@ -793,7 +787,6 @@ void processSensor() {
             past_norms[j] = norm_pixels[points[i]];
             avg_norms[j] = an;
             count[j] = c;
-            zombieCount[j] = z;
             break;
           }
         }
