@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.7"
+#define FIRMWARE_VERSION        "V0.6.8"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -9,7 +9,7 @@
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
-#define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
+#define CONFIDENCE_THRESHOLD    0.2  // consider a point if we're 20% confident
 #define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
 #define GRADIENT_THRESHOLD      3.0  // 2º temp change gives us 100% confidence of person
@@ -399,9 +399,9 @@ uint8_t findCurrentPoints(uint8_t *points) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
         float diff = norm_pixels[i] - norm_pixels[ordered_indexes[j]];
-        if (diff >= 0.05) {
+        if (diff >= 0.03) {
           INSERT_POINT_HERE;
-        } else if (diff > -0.05) { // both points are similar...
+        } else if (diff > -0.03) { // both points are similar...
           if (euclidean_distance(i, ordered_indexes[j]) <= MIN_DISTANCE) {
             // place the point that's closer to a peak in front of the other
             float d1 = 100;
@@ -744,10 +744,9 @@ void processSensor() {
         bool nobodyOnBoard = true;
         if (past_total_masses > 0) {
           for (uint8_t j=0; j<MAX_PEOPLE; j++) {
-            if (past_points[j] != UNDEF_POINT &&
-                (count[j] > 1 || crossed[j] ||
-                  (pointOnEdge(past_points[j]) && confidence(j) > 0.6)) &&
-                euclidean_distance(past_points[j], sp) < MAX_DISTANCE + DISTANCE_BONUS) {
+            if (past_points[j] != UNDEF_POINT && (histories[j] > 1 || crossed[j]) &&
+                pointInMiddle(past_points[j]) && confidence(j) > AVG_CONF_THRESHOLD &&
+                euclidean_distance(past_points[j], sp) < 5.0) {
               // there's already a person in the middle of the grid
               // so it's unlikely a new valid person just appeared in the middle
               // (person can't be running and door wasn't closed)
