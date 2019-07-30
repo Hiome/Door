@@ -178,7 +178,8 @@ bool checkForDoorClose(uint8_t idx) {
   // This could possibly fail if person's hand is on door knob opening door and sensor
   // detects that as a person. We'll see hand go from 1->2, and then get dropped as door
   // opens, and this if block will prevent it from reverting properly.
-  if (SIDE2(past_points[idx]) && SIDE2(starting_points[idx]) && !reverted[idx]) {
+  if (SIDE2(past_points[idx]) && SIDE2(starting_points[idx]) && !reverted[idx] &&
+      confidence(idx) > 0.6) {
     bool doorClosed = frames_since_door_open == 0;
     if (!doorClosed && door_state == DOOR_OPEN) {
       // door was previously open, did it change mid-frame?
@@ -741,7 +742,6 @@ void processSensor() {
       }
 
       if (!retroMatched && pointInMiddle(sp)) {
-        bool nobodyOnBoard = true;
         if (past_total_masses > 0) {
           for (uint8_t j=0; j<MAX_PEOPLE; j++) {
             if (past_points[j] != UNDEF_POINT && (histories[j] > 1 || crossed[j]) &&
@@ -750,16 +750,8 @@ void processSensor() {
               // there's already a person in the middle of the grid
               // so it's unlikely a new valid person just appeared in the middle
               // (person can't be running and door wasn't closed)
-              nobodyOnBoard = false;
-              if (SIDE1(sp)) {
-                if (AXIS(past_points[j]) >= AXIS(sp)) {
-                  nobodyInFront = false;
-                  break;
-                }
-              } else if (AXIS(past_points[j]) <= AXIS(sp)) {
-                nobodyInFront = false;
-                break;
-              }
+              nobodyInFront = false;
+              break;
             }
           }
         }
@@ -767,7 +759,7 @@ void processSensor() {
         // if point has mid confidence with nobody ahead...
         if (nobodyInFront && an > 0.6 && doorOpenedAgo(2) &&
             // and it is in row 5, allow it (door just opened)
-            (AXIS(sp) == (GRID_EXTENT/2 + 1) || (nobodyOnBoard && an > HIGH_CONF_THRESHOLD &&
+            (AXIS(sp) == (GRID_EXTENT/2 + 1) || (an > HIGH_CONF_THRESHOLD &&
             // or row 4 if person was already through door by the sensor registered it
             AXIS(sp) == (GRID_EXTENT/2) && PIXEL_ACTIVE(sp+GRID_EXTENT)))) {
           retroMatched = true;
