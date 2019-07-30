@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.6"
+#define FIRMWARE_VERSION        "V0.6.7"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -9,7 +9,7 @@
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
-#define CONFIDENCE_THRESHOLD    0.2  // consider a point if we're 20% confident
+#define CONFIDENCE_THRESHOLD    0.1  // consider a point if we're 10% confident
 #define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
 #define GRADIENT_THRESHOLD      3.0  // 2º temp change gives us 100% confidence of person
@@ -111,6 +111,7 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define bgPixel(x)      ( ((float)avg_pixels[(x)])/1000.0 )
 #define stdPixel(x)     ( ((float)std_pixels[(x)])/1000.0 )
 #define MAHALANBOIS(x,t)( sq(norm_pixels[(x)]-bgPixel(x))/stdPixel(x) >= (t) )
+#define doorOpenedAgo(n)( frames_since_door_open < (n) && door_state == DOOR_OPEN )
 
 // check if point is on the top or bottom edges
 // xxxxxxxx
@@ -173,15 +174,29 @@ void publishRevert(uint8_t idx) {
   publish(rBuf, floor(past_norms[idx]*100.0), 10);
 }
 
-bool checkForRevert(uint8_t idx) {
-  if (past_points[idx] == UNDEF_POINT || !crossed[idx]) return false;
+bool checkForDoorClose(uint8_t idx) {
+  // This could possibly fail if person's hand is on door knob opening door and sensor
+  // detects that as a person. We'll see hand go from 1->2, and then get dropped as door
+  // opens, and this if block will prevent it from reverting properly.
   if (SIDE2(past_points[idx]) && SIDE2(starting_points[idx]) && !reverted[idx]) {
-    bool doorJustChanged = frames_since_door_open == 0;
-    if (!doorJustChanged) {
-      doorJustChanged = door_state != readDoorState();
+    bool doorClosed = frames_since_door_open == 0;
+    if (!doorClosed && door_state == DOOR_OPEN) {
+      // door was previously open, did it change mid-frame?
+      doorClosed = door_state != readDoorState();
+      if (!doorClosed && confidence(idx) > HIGH_CONF_THRESHOLD) {
+        // door might be transitioning between DOOR_AJAR -> DOOR_CLOSED, let's wait 30ms
+        LOWPOWER_DELAY(SLEEP_30MS);
+        doorClosed = door_state != readDoorState();
+      }
     }
-    if (doorJustChanged) return false;
+    return doorClosed;
   }
+  return false;
+}
+
+bool checkForRevert(uint8_t idx) {
+  if (past_points[idx] == UNDEF_POINT || !crossed[idx] || checkForDoorClose(idx))
+    return false;
   if (reverted[idx] && SIDE(past_points[idx]) == SIDE(starting_points[idx]) &&
       inEndZone(past_points[idx])) {
     // we had previously reverted this point, but it came back and made it through
@@ -513,10 +528,7 @@ void processSensor() {
 
           // if switching sides with low confidence, don't pair
           if (SIDE(points[j]) != SIDE(past_points[idx]) &&
-              (conf < AVG_CONF_THRESHOLD ||
-                norm_pixels[points[j]]/d < MIN_TRAVEL_RATIO ||
-                // don't let point skip half the board when switching sides
-                abs(AXIS(points[j]) - AXIS(past_points[idx])) > 3)) {
+              (conf < AVG_CONF_THRESHOLD || norm_pixels[points[j]]/d < MIN_TRAVEL_RATIO)) {
             continue;
           }
 
@@ -754,23 +766,19 @@ void processSensor() {
         }
 
         // if point has mid confidence with nobody ahead...
-        if (nobodyInFront && an > 0.6) {
-          // and it is in row 5, allow it (door might've just opened)
-          if (AXIS(sp) == (GRID_EXTENT/2 + 1) && (PIXEL_ACTIVE(sp + GRID_EXTENT) ||
-                frames_since_door_open < 3)) {
-            retroMatched = true;
-          } else if (frames_since_door_open < 3 && nobodyOnBoard &&
-                      AXIS(sp) == (GRID_EXTENT/2) && an > HIGH_CONF_THRESHOLD &&
-                      PIXEL_ACTIVE(sp+GRID_EXTENT)) {
-            // or because person was already through door by the time it opened
-            retroMatched = true;
-            sp += GRID_EXTENT;
-          }
+        if (nobodyInFront && an > 0.6 && doorOpenedAgo(2) &&
+            // and it is in row 5, allow it (door just opened)
+            (AXIS(sp) == (GRID_EXTENT/2 + 1) || (nobodyOnBoard && an > HIGH_CONF_THRESHOLD &&
+            // or row 4 if person was already through door by the sensor registered it
+            AXIS(sp) == (GRID_EXTENT/2) && PIXEL_ACTIVE(sp+GRID_EXTENT)))) {
+          retroMatched = true;
+          sp += GRID_EXTENT;
         }
       }
 
-      // ignore new points on side 1 immediately after door opens
-      if (frames_since_door_open < 2 && (SIDE1(sp) || door_state == DOOR_CLOSED)) continue;
+      // ignore new points on side 1 immediately after door opens/closes
+      if ((frames_since_door_open < 2 && SIDE1(sp)) ||
+          (frames_since_door_open < 5 && door_state != DOOR_OPEN)) continue;
 
       // ignore new points that showed up in middle 2 rows of grid
       if (retroMatched || (pointOnBorder(sp) && (nobodyInFront || pointOnSmallBorder(sp) ||
