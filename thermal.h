@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.8"
+#define FIRMWARE_VERSION        "V0.6.9"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -683,7 +683,7 @@ void processSensor() {
       float an = norm_pixels[points[i]];
       uint8_t c = 1;
       bool retroMatched = false;
-      bool nobodyInFront = true;
+      bool nobodyInMiddle = true;
 
       if (an <= AVG_CONF_THRESHOLD) continue;
 
@@ -742,37 +742,49 @@ void processSensor() {
       }
 
       if (!retroMatched && pointInMiddle(sp)) {
+        bool nobodyInFront = true;
         if (past_total_masses > 0) {
           for (uint8_t j=0; j<MAX_PEOPLE; j++) {
             if (past_points[j] != UNDEF_POINT && (histories[j] > 1 || crossed[j]) &&
-                pointInMiddle(past_points[j]) && confidence(j) > AVG_CONF_THRESHOLD &&
+                confidence(j) > AVG_CONF_THRESHOLD &&
                 euclidean_distance(past_points[j], sp) < 5.0) {
               // there's already a person in the middle of the grid
               // so it's unlikely a new valid person just appeared in the middle
               // (person can't be running and door wasn't closed)
-              nobodyInFront = false;
-              break;
+              if (nobodyInMiddle && pointInMiddle(past_points[j])) nobodyInMiddle = false;
+              if (nobodyInFront) {
+                if (SIDE1(sp)) {
+                  if (AXIS(past_points[j]) >= AXIS(sp)) {
+                    nobodyInFront = false;
+                  }
+                } else if (AXIS(past_points[j]) <= AXIS(sp)) {
+                  nobodyInFront = false;
+                }
+              }
+              if (!nobodyInMiddle && !nobodyInFront) break;
             }
           }
         }
 
         // if point has mid confidence with nobody ahead...
-        if (nobodyInFront && an > 0.6 && doorOpenedAgo(2) &&
+        if (an > 0.6 && nobodyInMiddle && (doorOpenedAgo(4) ||
+            (nobodyInFront && door_state == DOOR_OPEN)) &&
             // and it is in row 5, allow it (door just opened)
-            (AXIS(sp) == (GRID_EXTENT/2 + 1) || (an > HIGH_CONF_THRESHOLD &&
-            // or row 4 if person was already through door by the sensor registered it
-            AXIS(sp) == (GRID_EXTENT/2) && PIXEL_ACTIVE(sp+GRID_EXTENT)))) {
+            (AXIS(sp) == (GRID_EXTENT/2 + 1) ||
+            (an > HIGH_CONF_THRESHOLD && frames_since_door_open < 4 &&
+              // or row 4 if person was already through door by the sensor registered it
+              AXIS(sp) == (GRID_EXTENT/2) && PIXEL_ACTIVE(sp+GRID_EXTENT)))) {
           retroMatched = true;
           sp += GRID_EXTENT;
         }
       }
 
       // ignore new points on side 1 immediately after door opens/closes
-      if ((frames_since_door_open < 2 && SIDE1(sp)) ||
+      if ((frames_since_door_open < 3 && SIDE1(sp)) ||
           (frames_since_door_open < 5 && door_state != DOOR_OPEN)) continue;
 
       // ignore new points that showed up in middle 2 rows of grid
-      if (retroMatched || (pointOnBorder(sp) && (nobodyInFront || pointOnSmallBorder(sp) ||
+      if (retroMatched || (pointOnBorder(sp) && (nobodyInMiddle || pointOnSmallBorder(sp) ||
             pointOnLRBorder(sp)))) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
