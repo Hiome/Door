@@ -23,6 +23,12 @@
 
 Adafruit_AMG88xx amg;
 
+#ifdef R3
+  #define AMG_ADDR              0x68
+#else
+  #define AMG_ADDR              0x69
+#endif
+
 uint16_t avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 uint16_t std_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float norm_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
@@ -871,7 +877,7 @@ void processSensor() {
 }
 
 void initialize() {
-  amg.begin();
+  amg.begin(AMG_ADDR);
 
   // setup reed switches
    DDRD =  DDRD & B11100111;  // set pins 3 and 4 as inputs
