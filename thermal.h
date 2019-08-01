@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.9"
+#define FIRMWARE_VERSION        "V0.6.10"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -33,6 +33,7 @@ uint16_t avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 uint16_t std_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float norm_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float cur_pixels_hash = 0;
+float gradient_scale = 0;
 
 uint8_t past_points[MAX_PEOPLE];
 uint8_t starting_points[MAX_PEOPLE];
@@ -242,14 +243,15 @@ void publishEvents() {
       // point cleanly crossed grid
       if (abs(AXIS(starting_points[i]) - AXIS(past_points[i])) >= 3) {
         uint8_t old_crossed = crossed[i];
+        uint16_t meta = floor(conf*100.0) * 100.0 + floor(gradient_scale);
         if (SIDE1(past_points[i])) {
-          crossed[i] = publish("1", floor(conf*100.0), 10);
+          crossed[i] = publish("1", meta, 10);
           // artificially shift starting point ahead 1 row so that
           // if user turns around now, algorithm considers it an exit
           int s = past_points[i] - GRID_EXTENT;
           starting_points[i] = max(s, 0);
         } else {
-          crossed[i] = publish("2", floor(conf*100.0), 10);
+          crossed[i] = publish("2", meta, 10);
           int s = past_points[i] + GRID_EXTENT;
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
@@ -353,6 +355,8 @@ bool normalizePixels() {
       bgm = max(bgmt, bgm);
     }
   }
+
+  gradient_scale = max(bgm, fgm);
 
   float std;
   float var;
@@ -859,6 +863,7 @@ void processSensor() {
         }
       }
       SERIAL_PRINTLN();
+      SERIAL_PRINTLN(gradient_scale);
 
       // print chart of what we saw in 8x8 grid
       for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
