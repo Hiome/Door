@@ -38,7 +38,7 @@ SPIFlash flash(8, 0xEF30); //EF30 for windbond 4mbit flash
 #define LOWPOWER_DELAY(d) ( LowPower.powerDown(d, ADC_OFF, BOD_ON) )
 
 uint8_t packetCount = 1;
-int8_t publish(char* msg, uint16_t width, int8_t retries) {
+int8_t publish(char* msg, char* width, int8_t retries) {
   if (retries == -1) {
     if (!radio.canSend()) {
       SERIAL_PRINT(F("s "));
@@ -48,7 +48,7 @@ int8_t publish(char* msg, uint16_t width, int8_t retries) {
     }
 
     char sendBuf[15];
-    uint8_t len = sprintf(sendBuf, "%s;%d0", msg, width);
+    uint8_t len = sprintf(sendBuf, "%s;%s0", msg, width);
     radio.send(GATEWAYID, sendBuf, len, false);
 
     SERIAL_PRINT(F("p "));
@@ -58,7 +58,7 @@ int8_t publish(char* msg, uint16_t width, int8_t retries) {
     return -1;
   } else {
     char sendBuf[15];
-    uint8_t len = sprintf(sendBuf, "%s;%d%d", msg, width, packetCount);
+    uint8_t len = sprintf(sendBuf, "%s;%s%d", msg, width, packetCount);
     bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries, RETRY_TIME);
   
     #ifdef ENABLE_SERIAL

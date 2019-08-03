@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.10"
+#define FIRMWARE_VERSION        "V0.6.12"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -12,11 +12,6 @@
 #define CONFIDENCE_THRESHOLD    0.2  // consider a point if we're 20% confident
 #define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
-#define GRADIENT_THRESHOLD      3.0  // 2º temp change gives us 100% confidence of person
-#define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
-#define HIGH_T_THRESHOLD        5
-#define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
-#define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
 #define MIN_TRAVEL_RATIO        0.1
 
 #include <Adafruit_AMG88xx.h>
@@ -29,8 +24,7 @@ Adafruit_AMG88xx amg;
   #define AMG_ADDR              0x69
 #endif
 
-uint16_t avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
-uint16_t std_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
+float avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float norm_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float cur_pixels_hash = 0;
 float gradient_scale = 0;
@@ -42,6 +36,7 @@ uint8_t crossed[MAX_PEOPLE];
 bool reverted[MAX_PEOPLE];
 float past_norms[MAX_PEOPLE];
 float avg_norms[MAX_PEOPLE];
+float avg_gradients[MAX_PEOPLE];
 uint16_t count[MAX_PEOPLE];
 
 uint8_t forgotten_past_points[MAX_PEOPLE];
@@ -50,6 +45,7 @@ uint16_t forgotten_histories[MAX_PEOPLE];
 uint8_t forgotten_crossed[MAX_PEOPLE];
 bool forgotten_reverted[MAX_PEOPLE];
 float forgotten_norms[MAX_PEOPLE];
+float forgotten_gradients[MAX_PEOPLE];
 uint8_t forgotten_num = 0;
 uint8_t cycles_since_forgotten = 0;
 
@@ -114,10 +110,8 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define SIDE(p)         ( SIDE1(p) ? 1 : 2 )
 #define PIXEL_ACTIVE(i) ( norm_pixels[(i)] > CONFIDENCE_THRESHOLD )
 #define confidence(x)   ( avg_norms[(x)]/((float)count[(x)]) )
+#define gradient(x)     ( avg_gradients[(x)]/((float)count[(x)]) )
 #define totalDistance(x)( euclidean_distance(starting_points[(x)], past_points[(x)]) )
-#define bgPixel(x)      ( ((float)avg_pixels[(x)])/1000.0 )
-#define stdPixel(x)     ( ((float)std_pixels[(x)])/1000.0 )
-#define MAHALANBOIS(x,t)( sq(norm_pixels[(x)]-bgPixel(x))/stdPixel(x) >= (t) )
 #define doorOpenedAgo(n)( frames_since_door_open < (n) && door_state == DOOR_OPEN )
 
 // check if point is on the top or bottom edges
@@ -168,7 +162,7 @@ bool checkDoorState() {
   }
   if (((door_state == DOOR_CLOSED && last_published_door_state != DOOR_CLOSED) ||
        (door_state != DOOR_CLOSED && last_published_door_state != DOOR_OPEN)) &&
-      publish(door_state == DOOR_CLOSED ? "d0" : "d1", 0, 0)) {
+      publish(door_state == DOOR_CLOSED ? "d0" : "d1", "0", 0)) {
     last_published_door_state = door_state == DOOR_CLOSED ? DOOR_CLOSED : DOOR_OPEN;
   }
 
@@ -178,7 +172,9 @@ bool checkDoorState() {
 void publishRevert(uint8_t idx) {
   char rBuf[3];
   sprintf(rBuf, "r%d", crossed[idx]);
-  publish(rBuf, floor(past_norms[idx]*100.0), 10);
+  char wBuf[8];
+  sprintf(wBuf, "%dx%d", int(past_norms[idx]*100.0), int(gradient_scale));
+  publish(rBuf, wBuf, 20);
 }
 
 bool checkForDoorClose(uint8_t idx) {
@@ -238,20 +234,22 @@ void publishEvents() {
     if (past_points[i] != UNDEF_POINT && SIDE(starting_points[i]) != SIDE(past_points[i]) &&
         (!crossed[i] || !reverted[i])) {
       float conf = confidence(i);
-      if (conf <= AVG_CONF_THRESHOLD || histories[i] <= floor(6.0 - conf*MIN_HISTORY))
+      if (conf <= AVG_CONF_THRESHOLD || histories[i] <= int(6.0 - conf*MIN_HISTORY))
         continue;
+      float grad = gradient(i);
       // point cleanly crossed grid
       if (abs(AXIS(starting_points[i]) - AXIS(past_points[i])) >= 3) {
         uint8_t old_crossed = crossed[i];
-        uint16_t meta = floor(conf*100.0) * 100.0 + floor(gradient_scale);
+        char meta[8];
+        sprintf(meta, "%dx%d", int(conf*100.0), int(grad));
         if (SIDE1(past_points[i])) {
-          crossed[i] = publish("1", meta, 10);
+          crossed[i] = publish("1", meta, 20);
           // artificially shift starting point ahead 1 row so that
           // if user turns around now, algorithm considers it an exit
           int s = past_points[i] - GRID_EXTENT;
           starting_points[i] = max(s, 0);
         } else {
-          crossed[i] = publish("2", meta, 10);
+          crossed[i] = publish("2", meta, 20);
           int s = past_points[i] + GRID_EXTENT;
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
@@ -259,6 +257,7 @@ void publishEvents() {
         histories[i] = 1;
         reverted[i] = false;
         avg_norms[i] = conf + past_norms[i];
+        avg_gradients[i] = grad + gradient_scale;
         count[i] = 2;
       }
     }
@@ -284,106 +283,50 @@ bool pixelsChanged() {
 bool normalizePixels() {
   if (!pixelsChanged()) return false;
 
-  // ignore points that don't have enough neighbors
-  bool ignorable[AMG88xx_PIXEL_ARRAY_SIZE];
-  float x_sum = 0.0;
-  float sq_sum = 0.0;
+  float cavg = 0.0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     // reading is invalid if less than -20 or greater than 100,
     // but we use a smaller range than that to determine validity
     if (norm_pixels[i] < 0 || norm_pixels[i] > 80) {
-      norm_pixels[i] = bgPixel(i);
+      norm_pixels[i] = avg_pixels[i];
     }
 
-    x_sum += norm_pixels[i];
-    sq_sum += sq(norm_pixels[i]);
-    if (MAHALANBOIS(i, T_THRESHOLD)) {
-      uint8_t neighbors = 0;
-      if (AXIS(i) > 1) {
-        // not top of row
-        if (MAHALANBOIS(i - GRID_EXTENT, T_THRESHOLD)) neighbors++;
-        if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-(GRID_EXTENT+1), T_THRESHOLD)) neighbors++;
-        if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i-(GRID_EXTENT-1), T_THRESHOLD))
-          neighbors++;
-      }
-      if (AXIS(i) < GRID_EXTENT) {
-        // not bottom of row
-        if (MAHALANBOIS(i + GRID_EXTENT, T_THRESHOLD)) neighbors++;
-        if (NOT_AXIS(i) > 1 && MAHALANBOIS(i+(GRID_EXTENT-1), T_THRESHOLD)) neighbors++;
-        if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+(GRID_EXTENT+1), T_THRESHOLD))
-          neighbors++;
-      }
-      if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-1, T_THRESHOLD)) neighbors++;
-      if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+1, T_THRESHOLD)) neighbors++;
-
-      ignorable[i] = neighbors < (pointOnLREdge(i) ? 2 : MIN_NEIGHBORS);
-    } else {
-      ignorable[i] = true;
-    }
+    cavg += norm_pixels[i];
   }
 
-  // calculate trimmed average
-  float mean = x_sum/((float)AMG88xx_PIXEL_ARRAY_SIZE);
-  float variance = sq_sum - sq(x_sum)/((float)AMG88xx_PIXEL_ARRAY_SIZE);
-  variance = NUM_STD_DEV * sqrt(variance);
-  float cavg = 0.0;
-  uint8_t total = 0;
-  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (norm_pixels[i] > (mean - variance) && norm_pixels[i] < (mean + variance)) {
-      cavg += norm_pixels[i];
-      total++;
-    }
-  }
-
-  if (total > 0) {
-    cavg /= (float)total;
-  } else {
-    // somehow variance was perfectly 0, pretty much impossible to get here
-    cavg = mean;
-  }
+  // calculate average
+  cavg /= 64.0;
 
   // calculate CSM gradient
-  float bgm = GRADIENT_THRESHOLD;
-  float fgm = GRADIENT_THRESHOLD;
+  float bgm = 16.0;
+  float fgm = 10.0;
   float bgmt;
   float fgmt;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (!ignorable[i]) {
-      fgmt = sq(norm_pixels[i] - cavg);       // difference in points among foreground
-      bgmt = sq(norm_pixels[i] - bgPixel(i)); // difference in points from background
-      fgm = max(fgmt, fgm);
-      bgm = max(bgmt, bgm);
-    }
+    fgmt = sq(norm_pixels[i] - cavg);           // difference in points among foreground
+    bgmt = sq(norm_pixels[i] - avg_pixels[i]);  // difference in points from background
+    fgm = max(fgmt, fgm);
+    bgm = max(bgmt, bgm);
   }
 
-  gradient_scale = max(bgm, fgm);
+  gradient_scale = bgm;
 
   float std;
-  float var;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    std = norm_pixels[i] - bgPixel(i);
-    var = sq(std);
+    std = norm_pixels[i] - avg_pixels[i];
 
     // normalize points
-    if (ignorable[i]) {
-      norm_pixels[i] = 0.0;
-    } else {
-      fgmt = sq(norm_pixels[i] - cavg)/fgm;
-      bgmt = var/bgm;
-      norm_pixels[i] = min(fgmt, bgmt);
-    }
+    fgmt = sq(norm_pixels[i] - cavg)/fgm;
+    bgmt = sq(std)/bgm;
+    norm_pixels[i] = min(fgmt, bgmt);
 
     // update average baseline
-    var = max(var, 0.01) - stdPixel(i);
-    // implicit alpha of 0.001
     if (abs(std) > 4 && norm_pixels[i] > 0.6) {
-      // lower alpha to 0.0001
-      std *= 0.1;
-      var *= 0.1;
+      std *= 0.0001;
+    } else {
+      std *= 0.001;
     }
-    avg_pixels[i] += ((int)lroundf(std));
-    std_pixels[i] += ((int)lroundf(var));
-    if (std_pixels[i] < 10) std_pixels[i] = 10;
+    avg_pixels[i] += std;
   }
 
   return true;
@@ -498,6 +441,7 @@ void processSensor() {
   uint16_t temp_forgotten_histories[MAX_PEOPLE];
   uint8_t temp_forgotten_crossed[MAX_PEOPLE];
   bool temp_forgotten_reverted[MAX_PEOPLE];
+  float temp_forgotten_gradients[MAX_PEOPLE];
   uint8_t temp_forgotten_num = 0;
 
   // track forgotten point states in temporary local variables and reset global ones
@@ -510,6 +454,7 @@ void processSensor() {
       temp_forgotten_histories[temp_forgotten_num] = histories[idx];                        \
       temp_forgotten_crossed[temp_forgotten_num] = crossed[idx];                            \
       temp_forgotten_reverted[temp_forgotten_num] = reverted[idx];                          \
+      temp_forgotten_gradients[temp_forgotten_num] = gradient(idx);                         \
       temp_forgotten_num++;                                                                 \
     }                                                                                       \
     pairs[idx] = UNDEF_POINT;                                                               \
@@ -656,6 +601,8 @@ void processSensor() {
             reverted[idx] = false;
             avg_norms[idx] = (avg_norms[idx] + norm_pixels[points[i]])/
                       ((float)count[idx] + 1.0);
+            avg_gradients[idx] = (avg_gradients[idx] + gradient_scale)/
+                      ((float)count[idx] + 1.0);
             count[idx] = 1;
           } else {
             if (past_points[idx] != points[i]) {
@@ -679,6 +626,7 @@ void processSensor() {
             }
             past_norms[idx] = norm_pixels[points[i]];
             avg_norms[idx] += past_norms[idx];
+            avg_gradients[idx] += gradient_scale;
             count[idx]++;
           }
           break;
@@ -691,6 +639,7 @@ void processSensor() {
       uint8_t cross = 0;
       bool revert = false;
       float an = norm_pixels[points[i]];
+      float g = gradient_scale;
       uint8_t c = 1;
       bool retroMatched = false;
       bool nobodyInMiddle = true;
@@ -716,6 +665,7 @@ void processSensor() {
             cross = temp_forgotten_crossed[j];
             revert = temp_forgotten_reverted[j];
             an += temp_forgotten_norms[j];
+            g += temp_forgotten_gradients[j];
             c++;
             temp_forgotten_points[j] = UNDEF_POINT;
             retroMatched = true;
@@ -743,6 +693,7 @@ void processSensor() {
             cross = forgotten_crossed[j];
             revert = forgotten_reverted[j];
             an += forgotten_norms[j]/((float)cycles_since_forgotten + 2.0);
+            g += forgotten_gradients[j];
             c++;
             forgotten_past_points[j] = UNDEF_POINT;
             retroMatched = true;
@@ -752,36 +703,24 @@ void processSensor() {
       }
 
       if (!retroMatched && pointInMiddle(sp)) {
-        bool nobodyInFront = true;
         if (past_total_masses > 0) {
           for (uint8_t j=0; j<MAX_PEOPLE; j++) {
             if (past_points[j] != UNDEF_POINT && (histories[j] > 1 || crossed[j]) &&
-                confidence(j) > AVG_CONF_THRESHOLD &&
+                pointInMiddle(past_points[j]) && confidence(j) > AVG_CONF_THRESHOLD &&
                 euclidean_distance(past_points[j], sp) < 5.0) {
               // there's already a person in the middle of the grid
               // so it's unlikely a new valid person just appeared in the middle
               // (person can't be running and door wasn't closed)
-              if (nobodyInMiddle && pointInMiddle(past_points[j])) nobodyInMiddle = false;
-              if (nobodyInFront) {
-                if (SIDE1(sp)) {
-                  if (AXIS(past_points[j]) >= AXIS(sp)) {
-                    nobodyInFront = false;
-                  }
-                } else if (AXIS(past_points[j]) <= AXIS(sp)) {
-                  nobodyInFront = false;
-                }
-              }
-              if (!nobodyInMiddle && !nobodyInFront) break;
+              nobodyInMiddle = false;
+              break;
             }
           }
         }
 
         // if point has mid confidence with nobody ahead...
-        if (an > 0.6 && nobodyInMiddle && (doorOpenedAgo(4) ||
-            (nobodyInFront && door_state == DOOR_OPEN)) &&
+        if (nobodyInMiddle && an > 0.6 && doorOpenedAgo(4) &&
             // and it is in row 5, allow it (door just opened)
-            (AXIS(sp) == (GRID_EXTENT/2 + 1) ||
-            (an > HIGH_CONF_THRESHOLD && frames_since_door_open < 4 &&
+            (AXIS(sp) == (GRID_EXTENT/2 + 1) || (an > HIGH_CONF_THRESHOLD &&
               // or row 4 if person was already through door by the sensor registered it
               AXIS(sp) == (GRID_EXTENT/2) && PIXEL_ACTIVE(sp+GRID_EXTENT)))) {
           retroMatched = true;
@@ -806,6 +745,7 @@ void processSensor() {
             reverted[j] = revert;
             past_norms[j] = norm_pixels[points[i]];
             avg_norms[j] = an;
+            avg_gradients[j] = g;
             count[j] = c;
             break;
           }
@@ -824,6 +764,7 @@ void processSensor() {
     memcpy(forgotten_histories, temp_forgotten_histories, (MAX_PEOPLE*sizeof(uint16_t)));
     memcpy(forgotten_crossed, temp_forgotten_crossed, (MAX_PEOPLE*sizeof(uint8_t)));
     memcpy(forgotten_reverted, temp_forgotten_reverted, (MAX_PEOPLE*sizeof(bool)));
+    memcpy(forgotten_gradients, temp_forgotten_gradients, (MAX_PEOPLE*sizeof(float)));
     forgotten_num = temp_forgotten_num;
     cycles_since_forgotten = 0;
     SERIAL_PRINTLN(F("saved"));
@@ -889,27 +830,17 @@ void initialize() {
   PORTD = PORTD | B00011000;  // pull pins 3 and 4 high
 
   LOWPOWER_DELAY(SLEEP_1S);
-  publish(FIRMWARE_VERSION, 0, 10);
+  publish(FIRMWARE_VERSION, "0", 20);
 
   // give sensor 12sec to stabilize
   LOWPOWER_DELAY(SLEEP_8S);
   LOWPOWER_DELAY(SLEEP_4S);
 
   memset(past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
-  memset(std_pixels, 10, (AMG88xx_PIXEL_ARRAY_SIZE*sizeof(uint8_t)));
 
-  amg.readPixels(norm_pixels);
+  amg.readPixels(avg_pixels);
 
-  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    cur_pixels_hash += sq(norm_pixels[i] + i);
-    if (norm_pixels[i] < 0) norm_pixels[i] = 0;
-    if (norm_pixels[i] > 65) norm_pixels[i] = 65;
-    avg_pixels[i] = ((int)lroundf(norm_pixels[i] * 1000.0));
-  }
-
-  float std;
-  float var;
-  for (uint8_t k=0; k < 10; k++) {
+  for (uint8_t k=0; k < 11; k++) {
     while (!pixelsChanged()) {
       // wait for pixels to change
       LOWPOWER_DELAY(SLEEP_30MS);
@@ -917,13 +848,7 @@ void initialize() {
 
     for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
       if (norm_pixels[i] < 0 || norm_pixels[i] > 65) continue;
-
-      std = norm_pixels[i] - bgPixel(i);
-      var = sq(std);
-      // implicit alpha of 0.1
-      avg_pixels[i] += ((int)lroundf(100.0 * std));
-      std_pixels[i] += ((int)lroundf(100.0 * (max(var, 0.01) - stdPixel(i))));
-      if (std_pixels[i] < 10) std_pixels[i] = 10;
+      avg_pixels[i] += 0.1*(norm_pixels[i] - avg_pixels[i]);
     }
   }
 }
