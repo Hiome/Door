@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.13"
+#define FIRMWARE_VERSION        "V0.6.14"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -9,11 +9,11 @@
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
-#define CONFIDENCE_THRESHOLD    0.2  // consider a point if we're 20% confident
-#define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
+#define CONFIDENCE_THRESHOLD    0.3  // consider a point if we're 30% confident
+#define AVG_CONF_THRESHOLD      0.5  // consider a set of points if we're 50% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
-#define BACKGROUND_GRADIENT     13.0
-#define FOREGROUND_GRADIENT     2.0
+#define BACKGROUND_GRADIENT     3.5
+#define FOREGROUND_GRADIENT     1.5
 #define MIN_TRAVEL_RATIO        0.1
 
 #include <Adafruit_AMG88xx.h>
@@ -311,8 +311,11 @@ bool normalizePixels() {
   float bgmt;
   float fgmt;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    fgmt = sq(norm_pixels[i] - cavg);           // difference in points among foreground
-    bgmt = sq(norm_pixels[i] - avg_pixels[i]);  // difference in points from background
+    // difference in points among foreground
+    fgmt = abs(norm_pixels[i] - cavg);
+    // difference in points from background
+    bgmt = abs(norm_pixels[i] - avg_pixels[i]);
+
     fgm = max(fgmt, fgm);
     bgm = max(bgmt, bgm);
   }
@@ -322,8 +325,8 @@ bool normalizePixels() {
     std = norm_pixels[i] - avg_pixels[i];
 
     // normalize points
-    fgmt = sq(norm_pixels[i] - cavg)/fgm;
-    bgmt = sq(std)/bgm;
+    fgmt = abs(norm_pixels[i] - cavg)/fgm;
+    bgmt = abs(std)/bgm;
     norm_pixels[i] = min(fgmt, bgmt);
 
     // update average baseline
