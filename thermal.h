@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.14"
+#define FIRMWARE_VERSION        "V0.6.15"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -12,8 +12,8 @@
 #define CONFIDENCE_THRESHOLD    0.3  // consider a point if we're 30% confident
 #define AVG_CONF_THRESHOLD      0.5  // consider a set of points if we're 50% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
-#define BACKGROUND_GRADIENT     3.5
-#define FOREGROUND_GRADIENT     1.5
+#define BACKGROUND_GRADIENT     4.0
+#define FOREGROUND_GRADIENT     3.0
 #define MIN_TRAVEL_RATIO        0.1
 
 #include <Adafruit_AMG88xx.h>
