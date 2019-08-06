@@ -670,9 +670,10 @@ void processSensor() {
             // this will fail if a person appears right when noise is lost in middle of grid,
             // causing it to assume that's the same person and revert the revert.
             past_points[idx] = points[i];
-            checkForRevert(idx);
-            starting_points[idx] = points[i];
             past_norms[idx] = norm_pixels[points[i]];
+            checkForRevert(idx);
+            // reset everything
+            starting_points[idx] = points[i];
             histories[idx] = 1;
             crossed[idx] = 0;
             reverted[idx] = false;
