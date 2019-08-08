@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.16"
+#define FIRMWARE_VERSION        "V0.6.17"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -10,12 +10,12 @@
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
 #define CONFIDENCE_THRESHOLD    0.3  // consider a point if we're 30% confident
-#define AVG_CONF_THRESHOLD      0.5  // consider a set of points if we're 50% confident
+#define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 50% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
 #define BACKGROUND_GRADIENT     4.0
 #define FOREGROUND_GRADIENT     3.0
 #define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
-#define HIGH_T_THRESHOLD        5
+#define HIGH_T_THRESHOLD        3
 #define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
 #define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
 #define MIN_TRAVEL_RATIO        0.1

@@ -100,6 +100,9 @@ void setup() {
   SERIAL_START;
 
   radio.initialize(RF69_915MHZ, NODEID, NETWORKID);
+  #ifdef R3
+    radio.setHighPower(); //must include this only for RFM69HW/HCW!
+  #endif
   radio.encrypt(ENCRYPTKEY);
   radio.enableAutoPower(ATC_RSSI);
 
