@@ -221,7 +221,7 @@ void publishRevert(uint8_t idx) {
     int(bgm),
     int(fgm)
   );
-  publish(rBuf, wBuf, 20);
+  publish(rBuf, wBuf, RETRY_COUNT);
 }
 
 bool checkForRevert(uint8_t idx) {
@@ -275,13 +275,13 @@ void publishEvents() {
           int(afgm)
         );
         if (SIDE1(past_points[i])) {
-          crossed[i] = publish("1", meta, 20);
+          crossed[i] = publish("1", meta, RETRY_COUNT);
           // artificially shift starting point ahead 1 row so that
           // if user turns around now, algorithm considers it an exit
           int s = past_points[i] - GRID_EXTENT;
           starting_points[i] = max(s, 0);
         } else {
-          crossed[i] = publish("2", meta, 20);
+          crossed[i] = publish("2", meta, RETRY_COUNT);
           int s = past_points[i] + GRID_EXTENT;
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
@@ -990,7 +990,7 @@ void initialize() {
   PORTD = PORTD | B00011000;  // pull pins 3 and 4 high
 
   LOWPOWER_DELAY(SLEEP_1S);
-  publish(FIRMWARE_VERSION, "0", 20);
+  publish(FIRMWARE_VERSION, "0", RETRY_COUNT*2);
 
   // give sensor 12sec to stabilize
   LOWPOWER_DELAY(SLEEP_8S);

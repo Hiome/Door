@@ -14,6 +14,7 @@
 #define ATC_RSSI      -75
 #define SERIAL_BAUD   115200
 #define RETRY_TIME    50
+#define RETRY_COUNT   20
 
 #include <RFM69_ATC.h>
 #include <RFM69_OTA.h>
