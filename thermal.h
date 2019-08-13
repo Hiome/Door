@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.17"
+#define FIRMWARE_VERSION        "V0.6.18"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -414,7 +414,11 @@ bool normalizePixels() {
     var = sq(std);
     var = max(var, 0.01) - stdPixel(i);
     // implicit alpha of 0.001
-    if (abs(std) > 4 && norm_pixels[i] > 0.6) {
+    if (norm_pixels[i] < 0.3) {
+      // increase alpha to 0.01
+      std *= 10.0;
+      var *= 10.0;
+    } else if (norm_pixels[i] > 0.6 && abs(std) > 4) {
       // lower alpha to 0.0001
       std *= 0.1;
       var *= 0.1;
