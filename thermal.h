@@ -10,10 +10,10 @@
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
 #define CONFIDENCE_THRESHOLD    0.3  // consider a point if we're 30% confident
-#define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 50% confident
+#define AVG_CONF_THRESHOLD      0.5  // consider a set of points if we're 50% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
-#define BACKGROUND_GRADIENT     4.0
-#define FOREGROUND_GRADIENT     3.0
+#define BACKGROUND_GRADIENT     2.0
+#define FOREGROUND_GRADIENT     2.0
 #define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
 #define HIGH_T_THRESHOLD        3
 #define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
@@ -214,12 +214,12 @@ bool checkForDoorClose(uint8_t idx) {
 void publishRevert(uint8_t idx) {
   char rBuf[3];
   sprintf(rBuf, "r%d", crossed[idx]);
-  char wBuf[13];
+  char wBuf[17];
   sprintf(wBuf, "%s%dx%dx%d",
     past_pos[idx] ? "+" : "-",
     int(past_norms[idx]*100.0),
-    int(bgm),
-    int(fgm)
+    int(bgm*100.0),
+    int(fgm*100.0)
   );
   publish(rBuf, wBuf, RETRY_COUNT);
 }
@@ -267,12 +267,12 @@ void publishEvents() {
         uint8_t old_crossed = crossed[i];
         float abgm = avg_bgm(i);
         float afgm = avg_fgm(i);
-        char meta[13];
+        char meta[17];
         sprintf(meta, "%s%dx%dx%d",
           past_pos[i] ? "+" : "-",
           int(conf*100.0),
-          int(abgm),
-          int(afgm)
+          int(abgm*100.0),
+          int(afgm*100.0)
         );
         if (SIDE1(past_points[i])) {
           crossed[i] = publish("1", meta, RETRY_COUNT);
@@ -413,11 +413,16 @@ bool normalizePixels() {
     // update average baseline
     var = sq(std);
     var = max(var, 0.01) - stdPixel(i);
+    var *= 0.1;
     // implicit alpha of 0.001
-    if (norm_pixels[i] < 0.3) {
+    if (doorOpenedAgo(5) && SIDE2(i) && norm_pixels[i] < 0.6 && abs(std) < 4) {
+      // increase alpha to 0.1
+      std *= 100.0;
+      // lower alpha to 0.0001
+      var *= 0.1;
+    } else if (fgm < 2.5 || abs(std) < 2) {
       // increase alpha to 0.01
       std *= 10.0;
-      var *= 10.0;
     } else if (norm_pixels[i] > 0.6 && abs(std) > 4) {
       // lower alpha to 0.0001
       std *= 0.1;
@@ -969,6 +974,16 @@ void processSensor() {
       SERIAL_PRINTLN();
       SERIAL_PRINTLN(bgm);
       SERIAL_PRINTLN(fgm);
+      float avg_avg = 0;
+      float avg_std = 0;
+      for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
+        avg_avg += bgPixel(idx);
+        avg_std += stdPixel(idx);
+      }
+      avg_avg /= 64.0;
+      avg_std /= 64.0;
+      SERIAL_PRINTLN(avg_avg);
+      SERIAL_PRINTLN(avg_std);
 
       // print chart of what we saw in 8x8 grid
       for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {

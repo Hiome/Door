@@ -48,7 +48,7 @@ int8_t publish(char* msg, char* width, int8_t retries) {
       return 0;
     }
 
-    char sendBuf[21];
+    char sendBuf[25];
     uint8_t len = sprintf(sendBuf, "%s;%s0", msg, width);
     radio.send(GATEWAYID, sendBuf, len, false);
 
@@ -58,7 +58,7 @@ int8_t publish(char* msg, char* width, int8_t retries) {
     SERIAL_FLUSH;
     return -1;
   } else {
-    char sendBuf[21];
+    char sendBuf[25];
     uint8_t len = sprintf(sendBuf, "%s;%s%d", msg, width, packetCount);
     bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries, RETRY_TIME);
   
