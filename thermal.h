@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.18"
+#define FIRMWARE_VERSION        "V0.6.20"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -15,9 +15,7 @@
 #define BACKGROUND_GRADIENT     2.0
 #define FOREGROUND_GRADIENT     2.0
 #define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
-#define HIGH_T_THRESHOLD        3
 #define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
-#define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
 #define MIN_TRAVEL_RATIO        0.1
 
 #include <Adafruit_AMG88xx.h>
@@ -130,9 +128,9 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define stdPixel(x)     ( ((float)std_pixels[(x)])/1000.0 )
 #define doorOpenedAgo(n)( frames_since_door_open < (n) && door_state == DOOR_OPEN )
 
-bool MAHALANBOIS(uint8_t x, uint8_t t) {
+bool MAHALANBOIS(uint8_t x) {
   float d = norm_pixels[(x)]-bgPixel(x);
-  return sq(d)/stdPixel(x) >= t;
+  return sq(d)/stdPixel(x) >= T_THRESHOLD;
 }
 
 // check if point is on the top or bottom edges
@@ -318,8 +316,8 @@ bool normalizePixels() {
 
   // ignore points that don't have enough neighbors
   bool ignorable[AMG88xx_PIXEL_ARRAY_SIZE];
-  float x_sum = 0.0;
-  float sq_sum = 0.0;
+  float cavg1 = 0.0;
+  float cavg2 = 0.0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     // reading is invalid if less than -20 or greater than 100,
     // but we use a smaller range than that to determine validity
@@ -327,26 +325,29 @@ bool normalizePixels() {
       norm_pixels[i] = bgPixel(i);
     }
 
-    x_sum += norm_pixels[i];
-    sq_sum += sq(norm_pixels[i]);
-    if (MAHALANBOIS(i, HIGH_T_THRESHOLD)) {
+    if (SIDE1(i))
+      cavg1 += norm_pixels[i];
+    else
+      cavg2 += norm_pixels[i];
+
+    if (MAHALANBOIS(i)) {
       uint8_t neighbors = 0;
       if (AXIS(i) > 1) {
         // not top row
-        if (MAHALANBOIS(i - GRID_EXTENT, T_THRESHOLD)) neighbors++;
-        if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-(GRID_EXTENT+1), T_THRESHOLD)) neighbors++;
-        if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i-(GRID_EXTENT-1), T_THRESHOLD))
+        if (MAHALANBOIS(i - GRID_EXTENT)) neighbors++;
+        if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-(GRID_EXTENT+1))) neighbors++;
+        if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i-(GRID_EXTENT-1)))
           neighbors++;
       }
       if (AXIS(i) < GRID_EXTENT) {
         // not bottom row
-        if (MAHALANBOIS(i + GRID_EXTENT, T_THRESHOLD)) neighbors++;
-        if (NOT_AXIS(i) > 1 && MAHALANBOIS(i+(GRID_EXTENT-1), T_THRESHOLD)) neighbors++;
-        if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+(GRID_EXTENT+1), T_THRESHOLD))
+        if (MAHALANBOIS(i + GRID_EXTENT)) neighbors++;
+        if (NOT_AXIS(i) > 1 && MAHALANBOIS(i+(GRID_EXTENT-1))) neighbors++;
+        if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+(GRID_EXTENT+1)))
           neighbors++;
       }
-      if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-1, T_THRESHOLD)) neighbors++;
-      if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+1, T_THRESHOLD)) neighbors++;
+      if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-1)) neighbors++;
+      if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+1)) neighbors++;
 
       ignorable[i] = neighbors < (pointOnLREdge(i) ? 2 : MIN_NEIGHBORS);
     } else {
@@ -354,66 +355,59 @@ bool normalizePixels() {
     }
   }
 
-  // calculate trimmed average
-  float mean = x_sum/((float)AMG88xx_PIXEL_ARRAY_SIZE);
-  float variance = sq_sum - sq(x_sum)/((float)AMG88xx_PIXEL_ARRAY_SIZE);
-  variance = NUM_STD_DEV * sqrt(variance);
-  float cavg = 0.0;
-  uint8_t total = 0;
-  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (norm_pixels[i] > (mean - variance) && norm_pixels[i] < (mean + variance)) {
-      cavg += norm_pixels[i];
-      total++;
-    }
-  }
-
-  if (total > 0) {
-    cavg /= (float)total;
-  } else {
-    // somehow variance was perfectly 0, pretty much impossible to get here
-    cavg = mean;
-  }
+  cavg1 /= 32.0;
+  cavg2 /= 32.0;
 
   // calculate CSM gradient
   bgm = BACKGROUND_GRADIENT;
-  fgm = FOREGROUND_GRADIENT;
+  float fgm1 = FOREGROUND_GRADIENT;
+  float fgm2 = FOREGROUND_GRADIENT;
   float bgmt;
-  float fgmt;
+  float fgmt1;
+  float fgmt2;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     if (!ignorable[i]) {
-      fgmt = abs(norm_pixels[i] - cavg);        // difference in points among foreground
-      bgmt = abs(norm_pixels[i] - bgPixel(i));  // difference in points from background
-    
-      fgm = max(fgmt, fgm);
+      // difference in points from foreground
+      fgmt1 = abs(norm_pixels[i] - cavg1);
+      fgmt2 = abs(norm_pixels[i] - cavg2);
+      if (fgmt1 < fgmt2) {
+        fgm1 = max(fgmt1, fgm1);
+      } else {
+        fgm2 = max(fgmt2, fgm2);
+      }
+
+      // difference in points from background
+      bgmt = abs(norm_pixels[i] - bgPixel(i));
       bgm = max(bgmt, bgm);
     }
   }
 
-  float std;
-  float var;
+  fgm = max(fgm1, fgm2);
+
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    std = norm_pixels[i] - bgPixel(i);
+    float std = norm_pixels[i] - bgPixel(i);
 
     // normalize points
     if (ignorable[i]) {
       norm_pixels[i] = 0.0;
       pos_pixels[i] = false;
     } else {
-      fgmt = (norm_pixels[i] - cavg)/fgm;
+      fgmt1 = (norm_pixels[i] - cavg1)/fgm1;
+      fgmt2 = (norm_pixels[i] - cavg2)/fgm2;
+      if (abs(fgmt1) > abs(fgmt2)) fgmt1 = fgmt2;
       bgmt = std/bgm;
-      if (abs(fgmt) < abs(bgmt)) {
-        norm_pixels[i] = abs(fgmt);
-        pos_pixels[i] = fgmt > 0;
+
+      if (abs(fgmt1) < abs(bgmt)) {
+        norm_pixels[i] = min(abs(fgmt1), 1);
+        pos_pixels[i] = fgmt1 >= 0;
       } else {
         norm_pixels[i] = abs(bgmt);
-        pos_pixels[i] = bgmt > 0;
+        pos_pixels[i] = bgmt >= 0;
       }
     }
 
     // update average baseline
-    var = sq(std);
-    var = max(var, 0.01) - stdPixel(i);
-    var *= 0.1;
+    float var = 0.1*(sq(std) - stdPixel(i));
     // implicit alpha of 0.001
     if (doorOpenedAgo(5) && SIDE2(i) && norm_pixels[i] < 0.6 && abs(std) < 4) {
       // increase alpha to 0.1
@@ -429,8 +423,11 @@ bool normalizePixels() {
       var *= 0.1;
     }
     avg_pixels[i] += ((int)roundf(std));
-    std_pixels[i] += ((int)roundf(var));
-    if (std_pixels[i] < 10) std_pixels[i] = 10;
+    int16_t s = ((int)roundf(var));
+    if (s < 0 && -s > std_pixels[i] - 100)
+      std_pixels[i] = 100;
+    else
+      std_pixels[i] += s;
   }
 
   return true;
@@ -533,13 +530,10 @@ void processSensor() {
   // very particular set of skills that make me a nightmare for people like you.
   // I will find you, I will track you, and I will turn the lights on for you."
   uint8_t taken[MAX_PEOPLE];
-  memset(taken, 0, (MAX_PEOPLE*sizeof(uint8_t)));
   uint8_t pairs[MAX_PEOPLE];
-  memset(pairs, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
 
   // "Good luck."
   uint8_t temp_forgotten_points[MAX_PEOPLE];
-  memset(temp_forgotten_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
   float temp_forgotten_norms[MAX_PEOPLE];
   bool temp_forgotten_pos[MAX_PEOPLE];
   uint8_t temp_forgotten_starting_points[MAX_PEOPLE];
@@ -549,6 +543,16 @@ void processSensor() {
   float temp_forgotten_bgms[MAX_PEOPLE];
   float temp_forgotten_fgms[MAX_PEOPLE];
   uint8_t temp_forgotten_num = 0;
+
+  uint8_t past_total_masses = 0;
+
+  for (uint8_t i=0; i<MAX_PEOPLE; i++) {
+    taken[i] = 0;
+    pairs[i] = UNDEF_POINT;
+    temp_forgotten_points[i] = UNDEF_POINT;
+
+    if (past_points[i] != UNDEF_POINT) past_total_masses++;
+  }
 
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT ({                                                                   \
@@ -568,11 +572,6 @@ void processSensor() {
     pairs[idx] = UNDEF_POINT;                                                               \
     past_points[idx] = UNDEF_POINT;                                                         \
   })
-
-  uint8_t past_total_masses = 0;
-  for (uint8_t i=0; i<MAX_PEOPLE; i++) {
-    if (past_points[i] != UNDEF_POINT) past_total_masses++;
-  }
 
   if (past_total_masses > 0) {
     for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
@@ -923,16 +922,17 @@ void processSensor() {
   // copy forgotten data points for this frame to global scope
 
   if (temp_forgotten_num > 0) {
-    memcpy(forgotten_norms, temp_forgotten_norms, (MAX_PEOPLE*sizeof(float)));
-    memcpy(forgotten_pos, temp_forgotten_pos, (MAX_PEOPLE*sizeof(bool)));
-    memcpy(forgotten_past_points, temp_forgotten_points, (MAX_PEOPLE*sizeof(uint8_t)));
-    memcpy(forgotten_starting_points, temp_forgotten_starting_points,
-                                                         (MAX_PEOPLE*sizeof(uint8_t)));
-    memcpy(forgotten_histories, temp_forgotten_histories, (MAX_PEOPLE*sizeof(uint16_t)));
-    memcpy(forgotten_crossed, temp_forgotten_crossed, (MAX_PEOPLE*sizeof(uint8_t)));
-    memcpy(forgotten_reverted, temp_forgotten_reverted, (MAX_PEOPLE*sizeof(bool)));
-    memcpy(forgotten_bgms, temp_forgotten_bgms, (MAX_PEOPLE*sizeof(float)));
-    memcpy(forgotten_fgms, temp_forgotten_fgms, (MAX_PEOPLE*sizeof(float)));
+    for (uint8_t i=0; i<MAX_PEOPLE; i++) {
+      forgotten_norms[i] = temp_forgotten_norms[i];
+      forgotten_pos[i] = temp_forgotten_pos[i];
+      forgotten_past_points[i] = temp_forgotten_points[i];
+      forgotten_starting_points[i] = temp_forgotten_starting_points[i];
+      forgotten_histories[i] = temp_forgotten_histories[i];
+      forgotten_crossed[i] = temp_forgotten_crossed[i];
+      forgotten_reverted[i] = temp_forgotten_reverted[i];
+      forgotten_bgms[i] = temp_forgotten_bgms[i];
+      forgotten_fgms[i] = temp_forgotten_fgms[i];
+    }
     forgotten_num = temp_forgotten_num;
     cycles_since_forgotten = 0;
     SERIAL_PRINTLN(F("saved"));
@@ -940,7 +940,9 @@ void processSensor() {
     cycles_since_forgotten++;
     if (cycles_since_forgotten == MAX_EMPTY_CYCLES && forgotten_num > 0) {
       // clear forgotten points list
-      memset(forgotten_past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
+      for (uint8_t i=0; i<MAX_PEOPLE; i++) {
+        forgotten_past_points[i] = UNDEF_POINT;
+      }
       forgotten_num = 0;
       SERIAL_PRINTLN(F("forgot"));
     }
@@ -1011,24 +1013,21 @@ void initialize() {
   LOWPOWER_DELAY(SLEEP_1S);
   publish(FIRMWARE_VERSION, "0", RETRY_COUNT*2);
 
-  // give sensor 12sec to stabilize
+  // give sensor 16sec to stabilize
   LOWPOWER_DELAY(SLEEP_8S);
-  LOWPOWER_DELAY(SLEEP_4S);
+  LOWPOWER_DELAY(SLEEP_8S);
 
-  memset(past_points, UNDEF_POINT, (MAX_PEOPLE*sizeof(uint8_t)));
-  memset(std_pixels, 10, (AMG88xx_PIXEL_ARRAY_SIZE*sizeof(uint8_t)));
+  for (uint8_t i=0; i<MAX_PEOPLE; i++) past_points[i] = UNDEF_POINT;
 
-  amg.readPixels(norm_pixels);
+  pixelsChanged();
 
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    cur_pixels_hash += sq(norm_pixels[i] + i);
     if (norm_pixels[i] < 0) norm_pixels[i] = 0;
     if (norm_pixels[i] > 65) norm_pixels[i] = 65;
     avg_pixels[i] = ((int)roundf(norm_pixels[i] * 1000.0));
+    std_pixels[i] = 100;
   }
 
-  float std;
-  float var;
   for (uint8_t k=0; k < 10; k++) {
     while (!pixelsChanged()) {
       // wait for pixels to change
@@ -1037,12 +1036,14 @@ void initialize() {
 
     for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
       if (norm_pixels[i] < 0 || norm_pixels[i] > 65) continue;
-      std = norm_pixels[i] - bgPixel(i);
-      var = sq(std);
+      float std = norm_pixels[i] - bgPixel(i);
       // implicit alpha of 0.1
       avg_pixels[i] += ((int)roundf(100.0 * std));
-      std_pixels[i] += ((int)roundf(100.0 * (max(var, 0.01) - stdPixel(i))));
-      if (std_pixels[i] < 10) std_pixels[i] = 10;
+      int16_t var = ((int)roundf(100.0 * (sq(std) - stdPixel(i))));
+      if (var < 0 && -var > std_pixels[i] - 100)
+        std_pixels[i] = 100;
+      else
+        std_pixels[i] += var;
     }
   }
 }
