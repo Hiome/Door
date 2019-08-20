@@ -1,6 +1,6 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 
-#define FIRMWARE_VERSION        "V0.6.20"
+#define FIRMWARE_VERSION        "V0.6.21"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -120,13 +120,16 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define BORDER_PADDING  ( GRID_EXTENT/4 )
 #define SIDE(p)         ( SIDE1(p) ? 1 : 2 )
 #define PIXEL_ACTIVE(i) ( norm_pixels[(i)] > CONFIDENCE_THRESHOLD )
-#define confidence(x)   ( avg_norms[(x)]/((float)count[(x)]) )
 #define avg_bgm(x)      ( avg_bgms[(x)]/((float)count[(x)]) )
 #define avg_fgm(x)      ( avg_fgms[(x)]/((float)count[(x)]) )
 #define totalDistance(x)( euclidean_distance(starting_points[(x)], past_points[(x)]) )
 #define bgPixel(x)      ( ((float)avg_pixels[(x)])/1000.0 )
 #define stdPixel(x)     ( ((float)std_pixels[(x)])/1000.0 )
 #define doorOpenedAgo(n)( frames_since_door_open < (n) && door_state == DOOR_OPEN )
+
+float confidence(uint8_t x) {
+  return avg_norms[(x)]/((float)count[(x)]);
+}
 
 bool MAHALANBOIS(uint8_t x) {
   float d = norm_pixels[(x)]-bgPixel(x);
@@ -409,7 +412,7 @@ bool normalizePixels() {
     // update average baseline
     float var = 0.1*(sq(std) - stdPixel(i));
     // implicit alpha of 0.001
-    if (doorOpenedAgo(5) && SIDE2(i) && norm_pixels[i] < 0.6 && abs(std) < 4) {
+    if (doorOpenedAgo(5) && SIDE2(i) && norm_pixels[i] < 0.6 && abs(std) < 3) {
       // increase alpha to 0.1
       std *= 100.0;
       // lower alpha to 0.0001
@@ -417,7 +420,7 @@ bool normalizePixels() {
     } else if (fgm < 2.5 || abs(std) < 2) {
       // increase alpha to 0.01
       std *= 10.0;
-    } else if (norm_pixels[i] > 0.6 && abs(std) > 4) {
+    } else if (norm_pixels[i] > 0.6 && abs(std) > 3) {
       // lower alpha to 0.0001
       std *= 0.1;
       var *= 0.1;
@@ -860,8 +863,8 @@ void processSensor() {
         bool nobodyOnBoard = false;
         if (past_total_masses > 0) {
           for (uint8_t j=0; j<MAX_PEOPLE; j++) {
-            if (past_points[j] != UNDEF_POINT && count[j] > 1 &&
-                confidence(j) > AVG_CONF_THRESHOLD &&
+            if (past_points[j] != UNDEF_POINT && count[j] > 1 && past_norms[j] > 0.6 &&
+                 confidence(j) > 0.6 && avg_fgm(j) > (FOREGROUND_GRADIENT + 0.5) &&
                 euclidean_distance(past_points[j], sp) < 5.0) {
               // there's already a person in the middle of the grid
               // so it's unlikely a new valid person just appeared in the middle
@@ -881,7 +884,7 @@ void processSensor() {
         }
 
         // if point has mid confidence with nobody ahead...
-        if (nobodyInFront && an > 0.6 && doorOpenedAgo(4) &&
+        if (nobodyInFront && an > 0.6 && fgm > FOREGROUND_GRADIENT && doorOpenedAgo(4) &&
             // and it is in row 5, allow it (door just opened)
             (AXIS(sp) == (GRID_EXTENT/2 + 1) || (nobodyOnBoard && an > HIGH_CONF_THRESHOLD &&
               // or row 4 if person was already through door by the sensor registered it
@@ -974,6 +977,7 @@ void processSensor() {
         }
       }
       SERIAL_PRINTLN();
+
       SERIAL_PRINTLN(bgm);
       SERIAL_PRINTLN(fgm);
       float avg_avg = 0;
