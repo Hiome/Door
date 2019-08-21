@@ -10,13 +10,13 @@
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
-#define CONFIDENCE_THRESHOLD    0.3  // consider a point if we're 30% confident
-#define AVG_CONF_THRESHOLD      0.5  // consider a set of points if we're 50% confident
+#define CONFIDENCE_THRESHOLD    0.2  // consider a point if we're 20% confident
+#define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
 #define HIGH_CONF_THRESHOLD     0.8  // give points over 80% confidence extra benefits
 #define BACKGROUND_GRADIENT     2.0
 #define FOREGROUND_GRADIENT     2.0
 #define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
-#define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
+#define MIN_NEIGHBORS           4    // min size of halo effect to consider a point legit
 #define MIN_TRAVEL_RATIO        0.1
 
 #include <Adafruit_AMG88xx.h>
@@ -412,6 +412,7 @@ bool normalizePixels() {
     } else {
       fgmt1 = (norm_pixels[i] - cavg1)/fgm1;
       fgmt2 = (norm_pixels[i] - cavg2)/fgm2;
+      // pick the smaller of the 2 foreground gradients
       if (abs(fgmt1) > abs(fgmt2)) fgmt1 = fgmt2;
       bgmt = std/bgm;
 
@@ -432,10 +433,10 @@ bool normalizePixels() {
       std *= 100.0;
       // lower alpha to 0.0001
       var *= 0.1;
-    } else if (fgm < 2.5 || abs(std) < 2) {
+    } else if (fgm < 2.01 || abs(std) < 2) {
       // increase alpha to 0.01
       std *= 10.0;
-    } else if (norm_pixels[i] > 0.6 && abs(std) > 3) {
+    } else if (norm_pixels[i] > 0.6 && abs(std) > 2) {
       // lower alpha to 0.0001
       std *= 0.1;
       var *= 0.1;
@@ -879,7 +880,7 @@ void processSensor() {
         if (past_total_masses > 0) {
           for (uint8_t j=0; j<MAX_PEOPLE; j++) {
             if (past_points[j] != UNDEF_POINT && count[j] > 1 && past_norms[j] > 0.6 &&
-                 confidence(j) > 0.6 && avg_fgm(j) > (FOREGROUND_GRADIENT + 0.5) &&
+                 confidence(j) > 0.6 && avg_fgm(j) > (FOREGROUND_GRADIENT + 0.1) &&
                 euclidean_distance(past_points[j], sp) < 5.0) {
               // there's already a person in the middle of the grid
               // so it's unlikely a new valid person just appeared in the middle
