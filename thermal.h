@@ -59,12 +59,12 @@ bool forgotten_pos[MAX_PEOPLE];
 float forgotten_bgms[MAX_PEOPLE];
 float forgotten_fgms[MAX_PEOPLE];
 uint8_t forgotten_num = 0;
-uint8_t cycles_since_forgotten = 0;
+uint8_t cycles_since_forgotten = MAX_EMPTY_CYCLES;
 
 #define DOOR_CLOSED 0
 #define DOOR_AJAR   1
 #define DOOR_OPEN   2
-uint8_t door_state = DOOR_CLOSED;
+uint8_t door_state = 9;
 uint8_t last_published_door_state = 9;
 uint8_t frames_since_door_open = 0;
 
@@ -1036,7 +1036,10 @@ void initialize() {
   LOWPOWER_DELAY(SLEEP_8S);
   LOWPOWER_DELAY(SLEEP_8S);
 
-  for (uint8_t i=0; i<MAX_PEOPLE; i++) past_points[i] = UNDEF_POINT;
+  for (uint8_t i=0; i<MAX_PEOPLE; i++) {
+    past_points[i] = UNDEF_POINT;
+    forgotten_past_points[i] = UNDEF_POINT;
+  }
 
   pixelsChanged();
 
