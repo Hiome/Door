@@ -1,4 +1,5 @@
 #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
+//#define TEST_PCBA           // uncomment to print raw amg sensor data
 
 #define FIRMWARE_VERSION        "V0.6.21"
 #define YAXIS                        // axis along which we expect points to move (x or y)
@@ -357,6 +358,20 @@ bool normalizePixels() {
       ignorable[i] = true;
     }
   }
+
+  #if defined(ENABLE_SERIAL) && defined(TEST_PCBA)
+    for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
+      SERIAL_PRINT(F(" "));
+      SERIAL_PRINT(norm_pixels[idx]);
+      SERIAL_PRINT(F(" "));
+      if (x(idx) == GRID_EXTENT) SERIAL_PRINTLN();
+    }
+    SERIAL_PRINTLN();
+    SERIAL_PRINT("thermistor ");
+    SERIAL_PRINTLN(amg.readThermistor());
+    SERIAL_PRINT("mean ");
+    SERIAL_PRINTLN((cavg1 + cavg2)/64.0);
+  #endif
 
   cavg1 /= 32.0;
   cavg2 /= 32.0;
