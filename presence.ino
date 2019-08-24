@@ -40,47 +40,28 @@ SPIFlash flash(8, 0xEF30); //EF30 for windbond 4mbit flash
 
 uint8_t packetCount = 1;
 int8_t publish(char* msg, char* width, int8_t retries) {
-  if (retries == -1) {
-    if (!radio.canSend()) {
-      SERIAL_PRINT(F("s "));
-      SERIAL_PRINTLN(msg);
-      SERIAL_FLUSH;
-      return 0;
-    }
+  char sendBuf[25];
+  uint8_t len = sprintf(sendBuf, "%s;%s%d", msg, width, packetCount);
+  bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries, RETRY_TIME);
 
-    char sendBuf[25];
-    uint8_t len = sprintf(sendBuf, "%s;%s0", msg, width);
-    radio.send(GATEWAYID, sendBuf, len, false);
-
+  #ifdef ENABLE_SERIAL
     SERIAL_PRINT(F("p "));
     SERIAL_PRINT(sendBuf);
+    if (!success) SERIAL_PRINT(F(" x"));
     SERIAL_PRINTLN(F("\n\n"));
     SERIAL_FLUSH;
-    return -1;
-  } else {
-    char sendBuf[25];
-    uint8_t len = sprintf(sendBuf, "%s;%s%d", msg, width, packetCount);
-    bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries, RETRY_TIME);
-  
-    #ifdef ENABLE_SERIAL
-      SERIAL_PRINT(F("p "));
-      SERIAL_PRINT(sendBuf);
-      if (!success) SERIAL_PRINT(F(" x"));
-      SERIAL_PRINTLN(F("\n\n"));
-      SERIAL_FLUSH;
-    #endif
-  
-    if (success || retries > 0) {
-      if (packetCount < 9) {
-        return packetCount++;
-      } else {
-        packetCount = 1;
-        return 9;
-      }
-    }
+  #endif
 
-    return 0;
+  if (success || retries > 0) {
+    if (packetCount < 9) {
+      return packetCount++;
+    } else {
+      packetCount = 1;
+      return 9;
+    }
   }
+
+  return 0;
 }
 
 #if defined LIDAR
