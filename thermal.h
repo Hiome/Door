@@ -893,9 +893,9 @@ void processSensor() {
         bool nobodyOnBoard = false;
         if (past_total_masses > 0) {
           for (uint8_t j=0; j<MAX_PEOPLE; j++) {
-            if (past_points[j] != UNDEF_POINT && past_norms[j] > 0.6 &&
+            if (past_points[j] != UNDEF_POINT && past_norms[j] > 0.8 &&
                 (count[j] > 1 || pointOnEdge(past_points[j])) &&
-                confidence(j) > 0.6 && avg_fgm(j) > (FOREGROUND_GRADIENT + 0.1)) {
+                confidence(j) > 0.8 && avg_fgm(j) > (FOREGROUND_GRADIENT + 0.1)) {
               // there's already a person in the middle of the grid
               // so it's unlikely a new valid person just appeared in the middle
               // (person can't be running and door wasn't closed)
@@ -914,7 +914,7 @@ void processSensor() {
         }
 
         // if point has mid confidence with nobody ahead...
-        if (nobodyInFront && an > 0.6 && fgm > FOREGROUND_GRADIENT && doorOpenedAgo(4) &&
+        if (nobodyInFront && an > 0.8 && fgm > FOREGROUND_GRADIENT && doorOpenedAgo(4) &&
             // and it is in row 5, allow it (door just opened)
             (AXIS(sp) == (GRID_EXTENT/2 + 1) || (nobodyOnBoard && an > 0.9 &&
               // or row 4 if person was already through door by the sensor registered it
