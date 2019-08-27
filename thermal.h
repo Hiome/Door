@@ -1,9 +1,9 @@
 #ifdef ENABLE_SERIAL
   #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
-  //#define TEST_PCBA           // uncomment to print raw amg sensor data
+  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.6.23"
+#define FIRMWARE_VERSION        "V0.6.24"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -68,7 +68,6 @@ uint8_t cycles_since_forgotten = MAX_EMPTY_CYCLES;
 uint8_t door_state = DOOR_OPEN;
 uint8_t last_published_door_state = 9;
 uint8_t frames_since_door_open = 0;
-bool doorCloseable = false;
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -121,7 +120,6 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
 #define UPPER_BOUND     ( GRID_EXTENT+1 )
 #define BORDER_PADDING  ( GRID_EXTENT/4 )
-#define SIDE(p)         ( SIDE1(p) ? 1 : 2 )
 #define PIXEL_ACTIVE(i) ( norm_pixels[(i)] > CONFIDENCE_THRESHOLD )
 #define avg_bgm(x)      ( avg_bgms[(x)]/((float)count[(x)]) )
 #define avg_fgm(x)      ( avg_fgms[(x)]/((float)count[(x)]) )
@@ -129,6 +127,10 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define bgPixel(x)      ( ((float)avg_pixels[(x)])/1000.0 )
 #define stdPixel(x)     ( ((float)std_pixels[(x)])/1000.0 )
 #define doorOpenedAgo(n)( frames_since_door_open < (n) && door_state == DOOR_OPEN )
+
+uint8_t SIDE(uint8_t p) {
+  return SIDE1(p) ? 1 : 2;
+}
 
 float confidence(uint8_t x) {
   return avg_norms[(x)]/((float)count[(x)]);
@@ -181,16 +183,11 @@ bool checkForDoorClose(uint8_t idx) {
   // This could possibly fail if person's hand is on door knob opening door and sensor
   // detects that as a person. We'll see hand go from 1->2, and then get dropped as door
   // opens, and this if block will prevent it from reverting properly.
-  if (doorCloseable && SIDE2(past_points[idx]) && confidence(idx) > 0.6) {
+  if (SIDE2(past_points[idx]) && confidence(idx) > 0.6) {
     bool doorClosed = frames_since_door_open == 0;
     if (!doorClosed && door_state == DOOR_OPEN) {
       // door was previously open, did it change mid-frame?
       doorClosed = door_state != readDoorState();
-      if (!doorClosed && confidence(idx) > 0.9) {
-        // door might be transitioning between DOOR_AJAR -> DOOR_CLOSED, let's wait 30ms
-        LOWPOWER_DELAY(SLEEP_30MS);
-        doorClosed = door_state != readDoorState();
-      }
     }
     return doorClosed;
   }
@@ -233,7 +230,6 @@ bool checkDoorState() {
   door_state = readDoorState();
   if (last_door_state != door_state) {
     frames_since_door_open = 0;
-    doorCloseable = true;
     SERIAL_PRINT(F("door "));
     SERIAL_PRINTLN(door_state);
   }
@@ -360,8 +356,8 @@ bool normalizePixels() {
     else
       cavg2 += norm_pixels[i];
 
+    uint8_t neighbors = 0;
     if (MAHALANBOIS(i)) {
-      uint8_t neighbors = 0;
       if (AXIS(i) > 1) {
         // not top row
         if (MAHALANBOIS(i - GRID_EXTENT)) neighbors++;
@@ -376,11 +372,9 @@ bool normalizePixels() {
       }
       if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-1)) neighbors++;
       if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+1)) neighbors++;
-
-      ignorable[i] = neighbors < MIN_NEIGHBORS;
-    } else {
-      ignorable[i] = true;
     }
+
+    ignorable[i] = neighbors < MIN_NEIGHBORS;
   }
 
   #ifdef TEST_PCBA
@@ -401,30 +395,41 @@ bool normalizePixels() {
   cavg2 /= 32.0;
 
   // calculate CSM gradient
-  bgm = BACKGROUND_GRADIENT;
   float fgm1 = FOREGROUND_GRADIENT;
   float fgm2 = FOREGROUND_GRADIENT;
-  float bgmt;
-  float fgmt1;
-  float fgmt2;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     if (!ignorable[i]) {
       // difference in points from foreground
-      fgmt1 = abs(norm_pixels[i] - cavg1);
-      fgmt2 = abs(norm_pixels[i] - cavg2);
+      float fgmt1 = abs(norm_pixels[i] - cavg1);
+      float fgmt2 = abs(norm_pixels[i] - cavg2);
       if (fgmt1 < fgmt2) {
         fgm1 = max(fgmt1, fgm1);
       } else {
         fgm2 = max(fgmt2, fgm2);
       }
-
-      // difference in points from background
-      bgmt = abs(norm_pixels[i] - bgPixel(i));
-      bgm = max(bgmt, bgm);
     }
   }
 
   fgm = max(fgm1, fgm2);
+
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    if (!ignorable[i]) {
+      float fgmt1 = (norm_pixels[i] - cavg1)/fgm1;
+      float fgmt2 = (norm_pixels[i] - cavg2)/fgm2;
+      // pick the smaller of the 2 foreground gradients
+      if (abs(fgmt1) > abs(fgmt2)) fgmt1 = fgmt2;
+      if (fgmt1 < CONFIDENCE_THRESHOLD) ignorable[i] = true;
+    }
+  }
+
+  bgm = BACKGROUND_GRADIENT;
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    if (!ignorable[i]) {
+      // difference in points from background
+      float bgmt = abs(norm_pixels[i] - bgPixel(i));
+      bgm = max(bgmt, bgm);
+    }
+  }
 
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     float std = norm_pixels[i] - bgPixel(i);
@@ -434,11 +439,11 @@ bool normalizePixels() {
       norm_pixels[i] = 0.0;
       pos_pixels[i] = false;
     } else {
-      fgmt1 = (norm_pixels[i] - cavg1)/fgm1;
-      fgmt2 = (norm_pixels[i] - cavg2)/fgm2;
+      float fgmt1 = (norm_pixels[i] - cavg1)/fgm1;
+      float fgmt2 = (norm_pixels[i] - cavg2)/fgm2;
       // pick the smaller of the 2 foreground gradients
       if (abs(fgmt1) > abs(fgmt2)) fgmt1 = fgmt2;
-      bgmt = std/bgm;
+      float bgmt = std/bgm;
 
       if (abs(fgmt1) < abs(bgmt)) {
         norm_pixels[i] = min(abs(fgmt1), 1);
@@ -452,10 +457,9 @@ bool normalizePixels() {
     // update average baseline
     float var = 0.1*(sq(std) - stdPixel(i));
     // implicit alpha of 0.001
-    if (frames_since_door_open < 5 && SIDE2(i) && norm_pixels[i] < AVG_CONF_THRESHOLD &&
-        abs(std) < 2) {
-      // door just opened, increase alpha to 0.1 for new background points
-      std *= 100.0;
+    if (frames_since_door_open < 5 && SIDE2(i) && norm_pixels[i] < AVG_CONF_THRESHOLD) {
+      // door just changed, increase alpha to 0.2 to adjust quickly to new background
+      std *= 200.0;
       // but don't let this unfairly impact the point's variance, lower alpha to 0.0001
       var *= 0.1;
     } else if (norm_pixels[i] > 0.6) {
@@ -521,7 +525,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
     bool added = false;
     for (uint8_t j=0; j<k; j++) {
       float diff = norm_pixels[i] - norm_pixels[ordered_indexes[j]];
-      if (abs(diff) < 0.03) { // both points are similar...
+      if (abs(diff) < 0.11) { // both points are similar...
         if (j > 0 && euclidean_distance(i, ordered_indexes[j]) <= MIN_DISTANCE) {
           // place the point that's closer to a peak in front of the other
           float d1 = 100;
