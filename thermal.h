@@ -1,5 +1,7 @@
-#define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
-//#define TEST_PCBA           // uncomment to print raw amg sensor data
+#ifdef ENABLE_SERIAL
+  #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
+  //#define TEST_PCBA           // uncomment to print raw amg sensor data
+#endif
 
 #define FIRMWARE_VERSION        "V0.6.23"
 #define YAXIS                        // axis along which we expect points to move (x or y)
@@ -381,7 +383,7 @@ bool normalizePixels() {
     }
   }
 
-  #if defined(ENABLE_SERIAL) && defined(TEST_PCBA)
+  #ifdef TEST_PCBA
     for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
       SERIAL_PRINT(F(" "));
       SERIAL_PRINT(norm_pixels[idx]);
@@ -1022,7 +1024,7 @@ void processSensor() {
 
   // wrap up with debugging output
 
-  #if defined(ENABLE_SERIAL) && defined(PRINT_RAW_DATA)
+  #ifdef PRINT_RAW_DATA
     if (total_masses == 0 && past_total_masses > 0) {
       SERIAL_PRINTLN(F("cleared board"));
     }
