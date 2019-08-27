@@ -257,6 +257,11 @@ void clearPointsAfterDoorClose() {
 }
 
 void publishMaybeEvent(uint8_t i) {
+  #ifdef TEST_PCBA
+    // we don't have enough ram, start droppung non-essential methods
+    return;
+  #endif
+
   if (SIDE(starting_points[i]) != SIDE(past_points[i]) && (!crossed[i] || !reverted[i]) &&
       histories[i] > MIN_HISTORY) {
     float conf = confidence(i);
