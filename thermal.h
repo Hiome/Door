@@ -15,7 +15,7 @@
 #define BACKGROUND_GRADIENT     2.0
 #define FOREGROUND_GRADIENT     2.0
 #define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
-#define MIN_NEIGHBORS           4    // min size of halo effect to consider a point legit
+#define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
 #define MIN_TRAVEL_RATIO        0.2
 
 #include <Adafruit_AMG88xx.h>
@@ -199,8 +199,7 @@ void publishRevert(uint8_t idx) {
   char rBuf[3];
   sprintf(rBuf, "r%d", crossed[idx]);
   char wBuf[17];
-  sprintf(wBuf, "%s%dx%dx%d",
-    past_pos[idx] ? "+" : "-",
+  sprintf(wBuf, "%dx%dx%d",
     int(past_norms[idx]*100.0),
     int(bgm*100.0),
     int(fgm*100.0)
@@ -254,6 +253,26 @@ void clearPointsAfterDoorClose() {
     }
     forgotten_num = 0;
     cycles_since_forgotten = MAX_EMPTY_CYCLES;
+  }
+}
+
+void publishMaybeEvent(uint8_t i) {
+  if (SIDE(starting_points[i]) != SIDE(past_points[i]) && (!crossed[i] || !reverted[i]) &&
+      histories[i] > MIN_HISTORY) {
+    float conf = confidence(i);
+    if (conf <= AVG_CONF_THRESHOLD) return;
+    if (abs(AXIS(starting_points[i]) - AXIS(past_points[i])) >= 3) {
+      float abgm = avg_bgm(i);
+      float afgm = avg_fgm(i);
+      char meta[19];
+      sprintf(meta, "%dx%dx%dx%d",
+        int(conf*100.0),
+        int(abgm*100.0),
+        int(afgm*100.0),
+        histories[i]
+      );
+      publish(SIDE1(past_points[i]) ? "m1" : "m2", meta, 5);
+    }
   }
 }
 
@@ -351,7 +370,7 @@ bool normalizePixels() {
       if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-1)) neighbors++;
       if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+1)) neighbors++;
 
-      ignorable[i] = neighbors < (pointOnLREdge(i) ? 3 : MIN_NEIGHBORS);
+      ignorable[i] = neighbors < MIN_NEIGHBORS;
     } else {
       ignorable[i] = true;
     }
@@ -426,18 +445,19 @@ bool normalizePixels() {
     // update average baseline
     float var = 0.1*(sq(std) - stdPixel(i));
     // implicit alpha of 0.001
-    if (doorOpenedAgo(5) && SIDE2(i) && norm_pixels[i] < 0.6 && abs(std) < 3) {
-      // increase alpha to 0.1
+    if (frames_since_door_open < 5 && SIDE2(i) && norm_pixels[i] < AVG_CONF_THRESHOLD &&
+        abs(std) < 2) {
+      // door just opened, increase alpha to 0.1 for new background points
       std *= 100.0;
-      // lower alpha to 0.0001
+      // but don't let this unfairly impact the point's variance, lower alpha to 0.0001
       var *= 0.1;
-    } else if (fgm < 2.01 || abs(std) < 2) {
-      // increase alpha to 0.01
-      std *= 10.0;
-    } else if (norm_pixels[i] > 0.6 && abs(std) > 2) {
-      // lower alpha to 0.0001
+    } else if (norm_pixels[i] > 0.6) {
+      // looks like a person, lower alpha to 0.0001
       std *= 0.1;
       var *= 0.1;
+    } else if (fgm < 2.01 && bgm < 2.01 && norm_pixels[i] < AVG_CONF_THRESHOLD) {
+      // nothing going on, increase alpha to 0.01
+      std *= 10.0;
     }
     avg_pixels[i] += ((int)roundf(std));
     int16_t s = ((int)roundf(var));
@@ -589,6 +609,7 @@ void processSensor() {
   #define FORGET_POINT ({                                                                   \
     if ((count[idx] > 1 && !crossed[idx]) || (crossed[idx] && checkForRevert(idx)) &&       \
           confidence(idx) > AVG_CONF_THRESHOLD) {                                           \
+      publishMaybeEvent(idx);                                                               \
       temp_forgotten_points[temp_forgotten_num] = past_points[idx];                         \
       temp_forgotten_norms[temp_forgotten_num] = confidence(idx);                           \
       temp_forgotten_pos[temp_forgotten_num] = past_pos[idx];                               \
@@ -614,7 +635,8 @@ void processSensor() {
         if (bgm < past_bgm) {
           scale_factor = bgm/past_bgm;
         }
-        if (scale_factor > 0.7 || !inEndZone(past_points[idx])) {
+        if (!crossed[idx] || scale_factor > 0.7 || !inEndZone(past_points[idx]) ||
+            SIDE(starting_points[idx]) != SIDE(past_points[idx])) {
           // gradient is still roughly similar or point never made it to end zone anyway,
           // so we'll tolerate a significant drop
           float max_distance = MAX_DISTANCE + conf * DISTANCE_BONUS;
@@ -808,7 +830,9 @@ void processSensor() {
             if (bgm < past_bgm) {
               scale_factor = bgm/past_bgm;
             }
-            if (scale_factor < 0.7 && inEndZone(temp_forgotten_points[j])) {
+            if (temp_forgotten_crossed[j] && scale_factor < 0.7 &&
+                inEndZone(temp_forgotten_points[j]) &&
+                SIDE(temp_forgotten_starting_points[j]) == SIDE(temp_forgotten_points[j])) {
               // significant drop in gradient and point made it to end zone,
               // most likely point left
               continue;
@@ -853,7 +877,9 @@ void processSensor() {
             if (bgm < past_bgm) {
               scale_factor = bgm/past_bgm;
             }
-            if (scale_factor < 0.7 && inEndZone(forgotten_past_points[j])) {
+            if (forgotten_crossed[j] && scale_factor < 0.7 &&
+                SIDE(forgotten_starting_points[j]) == SIDE(forgotten_past_points[j]) &&
+                inEndZone(forgotten_past_points[j])) {
               // significant drop in gradient and point made it to end zone,
               // most likely point left
               continue;
