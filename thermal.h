@@ -1,6 +1,6 @@
 #ifdef ENABLE_SERIAL
   #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
-  #define TEST_PCBA           // uncomment to print raw amg sensor data
+//  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
 #define FIRMWARE_VERSION        "V0.6.24"
@@ -299,13 +299,13 @@ void publishEvents() {
           int(afgm*100.0)
         );
         if (SIDE1(past_points[i])) {
-          crossed[i] = publish("1", meta, RETRY_COUNT);
+          crossed[i] = publish(door_state == DOOR_OPEN ? "1" : "a1", meta, RETRY_COUNT);
           // artificially shift starting point ahead 1 row so that
           // if user turns around now, algorithm considers it an exit
           int s = past_points[i] - GRID_EXTENT;
           starting_points[i] = max(s, 0);
         } else {
-          crossed[i] = publish("2", meta, RETRY_COUNT);
+          crossed[i] = publish(door_state == DOOR_OPEN ? "2" : "a2", meta, RETRY_COUNT);
           int s = past_points[i] + GRID_EXTENT;
           starting_points[i] = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
         }
@@ -457,7 +457,7 @@ bool normalizePixels() {
     // update average baseline
     float var = 0.1*(sq(std) - stdPixel(i));
     // implicit alpha of 0.001
-    if (frames_since_door_open < 5 && SIDE2(i) && norm_pixels[i] < AVG_CONF_THRESHOLD) {
+    if (frames_since_door_open < 5 && norm_pixels[i] < AVG_CONF_THRESHOLD) {
       // door just changed, increase alpha to 0.2 to adjust quickly to new background
       std *= 200.0;
       // but don't let this unfairly impact the point's variance, lower alpha to 0.0001
