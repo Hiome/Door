@@ -1005,7 +1005,7 @@ void processSensor() {
     }
     forgotten_num = temp_forgotten_num;
     cycles_since_forgotten = 0;
-    SERIAL_PRINTLN(F("saved"));
+    SERIAL_PRINTLN(F("s"));
   } else if (cycles_since_forgotten < MAX_EMPTY_CYCLES) {
     cycles_since_forgotten++;
     if (cycles_since_forgotten == MAX_EMPTY_CYCLES && forgotten_num > 0) {
@@ -1014,7 +1014,7 @@ void processSensor() {
         forgotten_past_points[i] = UNDEF_POINT;
       }
       forgotten_num = 0;
-      SERIAL_PRINTLN(F("forgot"));
+      SERIAL_PRINTLN(F("f"));
     }
   }
 
@@ -1040,7 +1040,7 @@ void processSensor() {
           SERIAL_PRINT(starting_points[i]);
           SERIAL_PRINT(F("-"));
           SERIAL_PRINT(histories[i]);
-          SERIAL_PRINT(F("), "));
+          SERIAL_PRINT(F("),"));
         }
       }
       SERIAL_PRINTLN();
