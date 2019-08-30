@@ -180,11 +180,12 @@ typedef struct Person {
   void revert() {
     char rBuf[3];
     sprintf(rBuf, "r%d", crossed);
-    char wBuf[17];
-    sprintf(wBuf, "%dx%dx%d",
+    char wBuf[19];
+    sprintf(wBuf, "%dx%dx%dx%d",
       int(past_conf*100.0),
       int(global_bgm*100.0),
-      int(global_fgm*100.0)
+      int(global_fgm*100.0),
+      past_position
     );
     publish(rBuf, wBuf, RETRY_COUNT);
   };
