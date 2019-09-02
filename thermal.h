@@ -1,6 +1,6 @@
 #ifdef ENABLE_SERIAL
   #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
-  #define TEST_PCBA           // uncomment to print raw amg sensor data
+//  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
 #define FIRMWARE_VERSION        "V0.6.24"
@@ -97,8 +97,7 @@ uint8_t SIDE(uint8_t p) {
 }
 
 bool MAHALANBOIS(uint8_t x) {
-  float d = norm_pixels[(x)]-bgPixel(x);
-  return sq(d)/stdPixel(x) >= T_THRESHOLD;
+  return norm_pixels[(x)]-bgPixel(x) >= 0.7;
 }
 
 // check if point is on the top or bottom edges
@@ -127,7 +126,7 @@ bool MAHALANBOIS(uint8_t x) {
 #endif
 
 bool inEndZone(uint8_t p) {
-  return pointOnBorder(p) && (pointOnSmallBorder(p) || pointOnLRBorder(p));
+  return pointOnBorder(p);
 }
 
 uint8_t forgotten_num = 0;
@@ -195,7 +194,7 @@ typedef struct Person {
     // detects that as a person. We'll see hand go from 1->2, and then get dropped as door
     // opens, and this if block will prevent it from reverting properly.
     if (SIDE2(past_position) && confidence > 0.6) {
-      bool doorClosed = frames_since_door_open == 0;
+      bool doorClosed = frames_since_door_open == 0 && door_state != DOOR_OPEN;
       if (!doorClosed && door_state == DOOR_OPEN) {
         // door was previously open, did it change mid-frame?
         doorClosed = door_state != readDoorState();
@@ -274,31 +273,21 @@ typedef struct Person {
     return false;
   };
 
-  // called when a point is about to be forgotten to diagnose if min history is an issue.
-  // Hopefully it is not and this can be deleted!
+  // called when a point is about to be forgotten to diagnose if min history is an issue
   bool publishMaybeEvent() {
     if (real() && starting_side() != side() && (!crossed || !reverted) &&
           history >= MIN_HISTORY && confidence > AVG_CONF_THRESHOLD) {
+      if (SIDE1(starting_position) && SIDE2(past_position) && confidence > 0.8 &&
+          checkForDoorClose()) {
+        return publishPacket(DOOR_CLOSE_EVENT);
+      }
       return publishPacket(MAYBE_EVENT);
-    }
-    return false;
-  };
-  
-  // same as publishEvent, but only called when door was shut to ensure we don't cut off
-  // a point that just didn't hit its min history requirement going from 1->2
-  bool checkForCrossing() {
-    // if this is called, we know door just changed
-    if (door_state != DOOR_OPEN && real() &&
-        SIDE1(starting_position) && SIDE2(past_position) &&
-        (!crossed || !reverted) && history >= MIN_HISTORY && confidence > 0.8) {
-      return publishPacket(DOOR_CLOSE_EVENT);
     }
     return false;
   };
 
   void forget() {
-    checkForRevert();
-    checkForCrossing() || publishMaybeEvent();
+    checkForRevert() || publishMaybeEvent();
   };
 };
 
@@ -512,7 +501,9 @@ bool normalizePixels() {
     // update average baseline
     float var = 0.1*(sq(std) - stdPixel(i));
     // implicit alpha of 0.001
-    if (frames_since_door_open < 5 && norm_pixels[i] < AVG_CONF_THRESHOLD) {
+    if (frames_since_door_open < 5 &&
+        ((door_state == DOOR_OPEN && norm_pixels[i] < AVG_CONF_THRESHOLD) ||
+         (door_state != DOOR_OPEN && norm_pixels[i] < 0.6))) {
       // door just changed, increase alpha to 0.2 to adjust quickly to new background
       std *= 200.0;
       // but don't let this unfairly impact the point's variance, lower alpha to 0.0001
@@ -521,8 +512,7 @@ bool normalizePixels() {
       // looks like a person, lower alpha to 0.0001
       std *= 0.1;
       var *= 0.1;
-    } else if (global_fgm < 2.01 && global_bgm < 2.01 &&
-        norm_pixels[i] < AVG_CONF_THRESHOLD) {
+    } else if (global_fgm<2.01 && global_bgm<2.01 && norm_pixels[i] < AVG_CONF_THRESHOLD) {
       // nothing going on, increase alpha to 0.01
       std *= 10.0;
     }
