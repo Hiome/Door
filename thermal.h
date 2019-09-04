@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.6.25"
+#define FIRMWARE_VERSION        "V0.6.26"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -16,7 +16,7 @@
 #define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
 #define BACKGROUND_GRADIENT     2.0
 #define FOREGROUND_GRADIENT     2.0
-#define T_THRESHOLD             3    // min squared standard deviations of change for a pixel
+#define T_THRESHOLD             0.5  // min change for a pixel to be considered
 #define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
 #define NUM_STD_DEV             2.0  // max num of std dev to include in trimmed average
 #define MIN_TRAVEL_RATIO        0.2
@@ -97,7 +97,7 @@ uint8_t SIDE(uint8_t p) {
 }
 
 bool MAHALANBOIS(uint8_t x) {
-  return norm_pixels[(x)]-bgPixel(x) >= 0.7;
+  return norm_pixels[(x)]-bgPixel(x) >= T_THRESHOLD;
 }
 
 // check if point is on the top or bottom edges
@@ -194,12 +194,12 @@ typedef struct Person {
     // detects that as a person. We'll see hand go from 1->2, and then get dropped as door
     // opens, and this if block will prevent it from reverting properly.
     if (SIDE2(past_position) && confidence > 0.6) {
-      bool doorClosed = frames_since_door_open == 0 && door_state != DOOR_OPEN;
-      if (!doorClosed && door_state == DOOR_OPEN) {
-        // door was previously open, did it change mid-frame?
-        doorClosed = door_state != readDoorState();
+      if (frames_since_door_open == 0) {
+        return door_state != DOOR_OPEN;
+      } else if (door_state == DOOR_OPEN) {
+        // door is still open, but did it change mid-frame?
+        return door_state != readDoorState();
       }
-      return doorClosed;
     }
     return false;
   };
@@ -223,54 +223,50 @@ typedef struct Person {
     return false;
   };
 
-  bool publishPacket(uint8_t eventType) {
-    if (abs(AXIS(starting_position) - AXIS(past_position)) >= 3) {
-      uint8_t old_crossed = crossed;
-      float abgm = bgm();
-      float afgm = fgm();
-      char meta[19];
-      sprintf(meta, "%s%dx%dx%dx%d",
-        positive ? "+" : "-",
-        int(confidence*100.0),
-        int(abgm*100.0),
-        int(afgm*100.0),
-        history
-      );
-      if (SIDE1(past_position)) {
-        if (eventType == FRD_EVENT) {
-          crossed = publish(door_state == DOOR_OPEN ? "1" : "a1", meta, RETRY_COUNT);
-          // artificially shift starting point ahead 1 row so that
-          // if user turns around now, algorithm considers it an exit
-          int s = past_position - GRID_EXTENT;
-          starting_position = max(s, 0);
-        } else if (eventType == MAYBE_EVENT) {
-          publish("m1", meta, RETRY_COUNT);
-          return true;
-        }
-      } else {
-        if (eventType == FRD_EVENT) {
-          crossed = publish(door_state == DOOR_OPEN ? "2" : "a2", meta, RETRY_COUNT);
-          int s = past_position + GRID_EXTENT;
-          starting_position = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
-        } else if (eventType == MAYBE_EVENT) {
-          publish("m2", meta, RETRY_COUNT);
-          return true;
-        } else if (eventType == DOOR_CLOSE_EVENT) {
-          publish("2", meta, RETRY_COUNT);
-          return true;
-        }
+  void publishPacket(uint8_t eventType) {
+    uint8_t old_crossed = crossed;
+    float abgm = bgm();
+    float afgm = fgm();
+    char meta[19];
+    sprintf(meta, "%s%dx%dx%dx%d",
+      positive ? "+" : "-",
+      int(confidence*100.0),
+      int(abgm*100.0),
+      int(afgm*100.0),
+      history
+    );
+    if (SIDE1(past_position)) {
+      if (eventType == FRD_EVENT) {
+        crossed = publish(door_state == DOOR_OPEN ? "1" : "a1", meta, RETRY_COUNT);
+        // artificially shift starting point ahead 1 row so that
+        // if user turns around now, algorithm considers it an exit
+        int s = past_position - GRID_EXTENT;
+        starting_position = max(s, 0);
+      } else if (eventType == MAYBE_EVENT) {
+        publish("m1", meta, RETRY_COUNT);
+        return;
       }
-      if (old_crossed) crossed = 0;
-      history = 1;
-      reverted = false;
-      total_conf = confidence + past_conf;
-      total_bgm = abgm + global_bgm;
-      total_fgm = afgm + global_fgm;
-      count = 2;
-      updateConfidence();
-      return true;
+    } else {
+      if (eventType == FRD_EVENT) {
+        crossed = publish(door_state == DOOR_OPEN ? "2" : "a2", meta, RETRY_COUNT);
+        int s = past_position + GRID_EXTENT;
+        starting_position = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
+      } else if (eventType == MAYBE_EVENT) {
+        publish("m2", meta, RETRY_COUNT);
+        return;
+      } else if (eventType == DOOR_CLOSE_EVENT) {
+        publish("2", meta, RETRY_COUNT);
+        return;
+      }
     }
-    return false;
+    if (old_crossed) crossed = 0;
+    history = 1;
+    reverted = false;
+    total_conf = confidence + past_conf;
+    total_bgm = abgm + global_bgm;
+    total_fgm = afgm + global_fgm;
+    count = 2;
+    updateConfidence();
   };
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
@@ -279,9 +275,11 @@ typedef struct Person {
           history >= MIN_HISTORY && confidence > AVG_CONF_THRESHOLD) {
       if (SIDE1(starting_position) && SIDE2(past_position) && confidence > 0.8 &&
           checkForDoorClose()) {
-        return publishPacket(DOOR_CLOSE_EVENT);
+        publishPacket(DOOR_CLOSE_EVENT);
+        return true;
       }
-      return publishPacket(MAYBE_EVENT);
+      publishPacket(MAYBE_EVENT);
+      return true;
     }
     return false;
   };
@@ -301,8 +299,8 @@ void publishEvents() {
     Person p = known_people[i];
     if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
         p.confidence > AVG_CONF_THRESHOLD &&
-        p.history > int(roundf(6.0 - p.confidence*MIN_HISTORY)) &&
-        p.publishPacket(FRD_EVENT)) {
+        p.history > int(roundf(6.0 - p.confidence*MIN_HISTORY))) {
+      p.publishPacket(FRD_EVENT);
       known_people[i] = p; // update known_people array
     }
   }
@@ -750,16 +748,17 @@ void processSensor() {
               float directionBonus = 0;
               uint8_t sp_axis = AXIS(p.past_position);
               uint8_t np_axis = AXIS(points[j]);
-              if (SIDE1(p.starting_position)) {
+              if (np_axis == sp_axis) directionBonus = 0.05;
+              else if (SIDE1(p.starting_position)) {
                 if (p.crossed) {
-                  if (np_axis <= sp_axis) directionBonus = 0.1;
-                } else if (np_axis >= sp_axis) directionBonus = 0.1;
-              } else {
+                  if (np_axis < sp_axis) directionBonus = 0.1;
+                } else if (np_axis > sp_axis) directionBonus = 0.1;
+              } else { // side 2
                 if (p.crossed) {
-                  if (np_axis >= sp_axis) directionBonus = 0.1;
-                } else if (np_axis <= sp_axis) directionBonus = 0.1;
+                  if (np_axis > sp_axis) directionBonus = 0.1;
+                } else if (np_axis < sp_axis) directionBonus = 0.1;
               }
-              float score = (d/max_distance) - ratioP - directionBonus +
+              float score = sq(d/max_distance) - ratioP - directionBonus +
                                 max(AVG_CONF_THRESHOLD - c, 0.0);
               if (min_score - score > 0.05) {
                 min_score = score;
@@ -806,9 +805,10 @@ void processSensor() {
             score = sq(score);
             float directionBonus = 0;
             if (p.crossed) {
-              if (SIDE1(p.starting_position)) {
-                if (AXIS(points[i]) <= AXIS(p.past_position)) directionBonus = 3.0;
-              } else if (AXIS(points[i]) >= AXIS(p.past_position)) directionBonus = 3.0;
+              if (AXIS(points[i]) == AXIS(p.past_position)) directionBonus = 2.5;
+              else if (SIDE1(p.starting_position)) {
+                if (AXIS(points[i]) < AXIS(p.past_position)) directionBonus = 3.0;
+              } else if (AXIS(points[i]) > AXIS(p.past_position)) directionBonus = 3.0;
             }
             float td = p.totalDistance();
             if (td < 1) {
@@ -1128,34 +1128,7 @@ void initialize() {
   }
 }
 
-float avgStd() {
-  float avg_std = 0;
-  for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
-    avg_std += stdPixel(idx);
-  }
-  return avg_std/64.0;
-}
-
-unsigned long lastNoiseCheck = 0;
-void checkForNoise() {
-  long diff = millis() - lastNoiseCheck;
-  if (abs(diff) > 1800000) { // only poll once every 30 min
-    float astd = avgStd();
-    if (astd > 0.8) {
-      char rBuf[3];
-      sprintf(rBuf, "std%d", int(astd*100.0));
-      char wBuf[17];
-      sprintf(wBuf, "%dx%d",
-        int(global_bgm*100.0),
-        int(global_fgm*100.0)
-      );
-      publish(rBuf, wBuf, 5);
-    }
-  }
-}
-
 void loop_frd() {
   clearPointsAfterDoorClose();
-  //checkForNoise();
   processSensor();
 }
