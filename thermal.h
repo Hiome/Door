@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.6.26"
+#define FIRMWARE_VERSION        "V0.6.27"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
@@ -738,12 +738,14 @@ void processSensor() {
   
             // if switching sides with low confidence, don't pair
             if (SIDE(points[j]) != p.side() &&
-                (p.confidence < AVG_CONF_THRESHOLD || c/d < MIN_TRAVEL_RATIO)) {
+                (p.confidence < AVG_CONF_THRESHOLD ||
+                  norm_pixels[points[j]]/d < MIN_TRAVEL_RATIO)) {
               continue;
             }
   
             if (d < max_distance) {
-              float ratioP = min(c/p.confidence, p.confidence/c);
+              float ratioP = min(norm_pixels[points[j]]/p.confidence,
+                                 p.confidence/norm_pixels[points[j]]);
               if (p.crossed) ratioP /= 2.0; // ratio matters less once point is crossed
               float directionBonus = 0;
               uint8_t sp_axis = AXIS(p.past_position);
@@ -918,6 +920,7 @@ void processSensor() {
                               h, sp, cross, revert, an, pos, b, f, c)) {
             retroMatched = true;
             temp_forgotten_people[j] = UNDEF_PERSON;
+            SERIAL_PRINTLN(F("almost f'd"));
             break;
           }
         }
@@ -1068,9 +1071,11 @@ void processSensor() {
       for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
         SERIAL_PRINT(F(" "));
         if (norm_pixels[idx] < CONFIDENCE_THRESHOLD)
-          SERIAL_PRINT(F("----"));
-        else
+          SERIAL_PRINT(F("-----"));
+        else {
+          SERIAL_PRINT(pos_pixels[idx] ? '+' : '-');
           SERIAL_PRINT(norm_pixels[idx]);
+        }
         SERIAL_PRINT(F(" "));
         if (x(idx) == GRID_EXTENT) SERIAL_PRINTLN();
       }
