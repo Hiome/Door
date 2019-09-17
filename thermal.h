@@ -31,7 +31,6 @@ Adafruit_AMG88xx amg;
 #endif
 
 uint16_t avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
-uint16_t std_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float norm_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 bool pos_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float cur_pixels_hash = 0;
@@ -89,7 +88,6 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
 #define PIXEL_ACTIVE(i) ( norm_pixels[(i)] > CONFIDENCE_THRESHOLD )
 #define bgPixel(x)      ( ((float)avg_pixels[(x)])/1000.0 )
-#define stdPixel(x)     ( ((float)std_pixels[(x)])/1000.0 )
 #define doorOpenedAgo(n)( frames_since_door_open < (n) && door_state == DOOR_OPEN )
 
 uint8_t SIDE(uint8_t p) {
@@ -213,8 +211,8 @@ typedef struct Person {
       revert();
       reverted = false;
       return true;
-    } else if (!reverted && (side() != starting_side() ||
-                (!inEndZone(past_position) && !checkForDoorClose()))) {
+    } else if (!reverted && !checkForDoorClose() && (side() != starting_side() ||
+                !inEndZone(past_position))) {
       // point disappeared in middle of grid, revert its crossing (probably noise or a hand)
       revert();
       reverted = true;
@@ -273,7 +271,7 @@ typedef struct Person {
   bool publishMaybeEvent() {
     if (real() && starting_side() != side() && (!crossed || !reverted) &&
           history >= MIN_HISTORY && confidence > AVG_CONF_THRESHOLD) {
-      if (SIDE1(starting_position) && SIDE2(past_position) && confidence > 0.8 &&
+      if (SIDE1(starting_position) && SIDE2(past_position) && confidence > 0.6 &&
           checkForDoorClose()) {
         publishPacket(DOOR_CLOSE_EVENT);
         return true;
@@ -497,29 +495,20 @@ bool normalizePixels() {
     }
 
     // update average baseline
-    float var = 0.1*(sq(std) - stdPixel(i));
     // implicit alpha of 0.001
     if (frames_since_door_open < 5 &&
         ((door_state == DOOR_OPEN && norm_pixels[i] < AVG_CONF_THRESHOLD) ||
          (door_state != DOOR_OPEN && norm_pixels[i] < 0.6))) {
       // door just changed, increase alpha to 0.2 to adjust quickly to new background
       std *= 200.0;
-      // but don't let this unfairly impact the point's variance, lower alpha to 0.0001
-      var *= 0.1;
     } else if (norm_pixels[i] > 0.6) {
       // looks like a person, lower alpha to 0.0001
       std *= 0.1;
-      var *= 0.1;
     } else if (global_fgm<2.01 && global_bgm<2.01 && norm_pixels[i] < AVG_CONF_THRESHOLD) {
       // nothing going on, increase alpha to 0.01
       std *= 10.0;
     }
     avg_pixels[i] += ((int)roundf(std));
-    int16_t s = ((int)roundf(var));
-    if (s < 0 && -s > std_pixels[i] - 100)
-      std_pixels[i] = 100;
-    else
-      std_pixels[i] += s;
   }
 
   return true;
@@ -1057,15 +1046,11 @@ void processSensor() {
       SERIAL_PRINTLN(global_bgm);
       SERIAL_PRINTLN(global_fgm);
       float avg_avg = 0;
-      float avg_std = 0;
       for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
         avg_avg += bgPixel(idx);
-        avg_std += stdPixel(idx);
       }
       avg_avg /= 64.0;
-      avg_std /= 64.0;
       SERIAL_PRINTLN(avg_avg);
-      SERIAL_PRINTLN(avg_std);
 
       // print chart of what we saw in 8x8 grid
       for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
@@ -1110,7 +1095,6 @@ void initialize() {
     if (norm_pixels[i] < 0) norm_pixels[i] = 0;
     if (norm_pixels[i] > 65) norm_pixels[i] = 65;
     avg_pixels[i] = ((int)roundf(norm_pixels[i] * 1000.0));
-    std_pixels[i] = 100;
   }
 
   for (uint8_t k=0; k < 10; k++) {
@@ -1124,11 +1108,6 @@ void initialize() {
       float std = norm_pixels[i] - bgPixel(i);
       // implicit alpha of 0.1
       avg_pixels[i] += ((int)roundf(100.0 * std));
-      int16_t var = ((int)roundf(100.0 * (sq(std) - stdPixel(i))));
-      if (var < 0 && -var > std_pixels[i] - 100)
-        std_pixels[i] = 100;
-      else
-        std_pixels[i] += var;
     }
   }
 }
