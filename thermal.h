@@ -497,7 +497,7 @@ bool normalizePixels() {
     // update average baseline
     // implicit alpha of 0.001
     if (frames_since_door_open < 5 &&
-        ((door_state == DOOR_OPEN && norm_pixels[i] < AVG_CONF_THRESHOLD) ||
+        ((door_state == DOOR_OPEN && norm_pixels[i] < CONFIDENCE_THRESHOLD) ||
          (door_state != DOOR_OPEN && norm_pixels[i] < 0.6))) {
       // door just changed, increase alpha to 0.2 to adjust quickly to new background
       std *= 200.0;
@@ -618,7 +618,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
 void forget_person(uint8_t idx, Person *temp_forgotten_people, uint8_t *pairs,
                     uint8_t &temp_forgotten_num) {
   Person p = known_people[idx];
-  if (p.confidence > AVG_CONF_THRESHOLD && ((p.count > 1 && !p.crossed) ||
+  if (p.confidence > 0.5 && ((p.count > 1 && !p.crossed) ||
       (p.crossed && p.checkForRevert()))) {
     p.publishMaybeEvent();
     temp_forgotten_people[temp_forgotten_num] = p;
