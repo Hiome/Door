@@ -3,10 +3,10 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.6.28"
+#define FIRMWARE_VERSION        "V0.6.29"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
+#define MIN_DISTANCE            3.0  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
 #define DISTANCE_BONUS          2.5  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
@@ -258,7 +258,6 @@ typedef struct Person {
       }
     }
     if (old_crossed) crossed = 0;
-    history = 1;
     reverted = false;
     total_conf = confidence + past_conf;
     total_bgm = abgm + global_bgm;
@@ -271,8 +270,7 @@ typedef struct Person {
   bool publishMaybeEvent() {
     if (real() && starting_side() != side() && (!crossed || !reverted) &&
           history >= MIN_HISTORY && confidence > AVG_CONF_THRESHOLD) {
-      if (SIDE1(starting_position) && SIDE2(past_position) && confidence > 0.6 &&
-          checkForDoorClose()) {
+      if (SIDE1(starting_position) && checkForDoorClose()) {
         publishPacket(DOOR_CLOSE_EVENT);
         return true;
       }
@@ -504,6 +502,9 @@ bool normalizePixels() {
     } else if (norm_pixels[i] > 0.6) {
       // looks like a person, lower alpha to 0.0001
       std *= 0.1;
+    } else if (global_fgm<2.01 && global_bgm<2.01 && norm_pixels[i] < AVG_CONF_THRESHOLD) {
+      // nothing going on, increase alpha to 0.01
+      std *= 10.0;
     }
     avg_pixels[i] += ((int)roundf(std));
   }
