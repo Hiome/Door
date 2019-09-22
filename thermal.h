@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.6.29"
+#define FIRMWARE_VERSION        "V0.6.30"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            3.0  // min distance for 2 peaks to be separate people
@@ -124,7 +124,7 @@ bool MAHALANBOIS(uint8_t x) {
 #endif
 
 bool inEndZone(uint8_t p) {
-  return pointOnBorder(p);
+  return pointOnBorder(p) || pointOnLRBorder(p);
 }
 
 uint8_t forgotten_num = 0;
@@ -163,6 +163,7 @@ typedef struct Person {
   float     total_bgm;
   float     total_fgm;
   uint16_t  count;
+  float     max_distance_covered;
 
   bool      real() { return past_position != UNDEF_POINT; };
   void      updateConfidence() { confidence = total_conf/((float)count); };
@@ -173,6 +174,13 @@ typedef struct Person {
   uint8_t   side() { return SIDE(past_position); };
 
   float     totalDistance() { return euclidean_distance(starting_position, past_position); };
+
+  void updateMaxDistance() {
+    if (max_distance_covered < MIN_DISTANCE) {
+      float d = euclidean_distance(starting_position, past_position);
+      max_distance_covered = max(d, max_distance_covered);
+    }
+  };
 
   void revert() {
     char rBuf[3];
@@ -294,7 +302,7 @@ void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     Person p = known_people[i];
     if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
-        p.confidence > AVG_CONF_THRESHOLD &&
+        p.confidence > AVG_CONF_THRESHOLD && p.max_distance_covered >= MIN_DISTANCE &&
         p.history > int(roundf(6.0 - p.confidence*MIN_HISTORY))) {
       p.publishPacket(FRD_EVENT);
       known_people[i] = p; // update known_people array
@@ -858,6 +866,7 @@ void processSensor() {
             p.checkForRevert();
             // reset everything
             p.starting_position = points[i];
+            p.max_distance_covered = 0;
             p.history = 1;
             p.crossed = 0;
             p.reverted = false;
@@ -875,13 +884,20 @@ void processSensor() {
           } else {
             if (p.past_position != points[i]) {
               if (SIDE(points[i]) != p.side()) {
-                p.history = min(p.history + 1, MIN_HISTORY);
+                if (p.confidence > 0.8 && norm_pixels[points[i]] > 0.8) {
+                  p.history++;
+                } else {
+                  // point just crossed threshold, let's reduce its history to force
+                  // it to spend another cycle on this side before we count the event
+                  p.history = min(p.history + 1, MIN_HISTORY);
+                }
               } else if (points[i] == p.starting_position) {
                 p.history = 1;
               } else {
                 p.history++;
               }
               p.past_position = points[i];
+              p.updateMaxDistance();
             }
             p.past_conf = norm_pixels[points[i]];
             p.total_conf += p.past_conf;
@@ -976,8 +992,8 @@ void processSensor() {
           (frames_since_door_open < 5 && door_state != DOOR_OPEN)) continue;
 
       // ignore new points that showed up in middle 2 rows of grid
-      if (retroMatched || (pointOnBorder(sp) && (nobodyInFront || pointOnSmallBorder(sp) ||
-            pointOnLRBorder(sp)))) {
+      if (retroMatched || pointOnLRBorder(sp) ||
+          (pointOnBorder(sp) && (nobodyInFront || pointOnSmallBorder(sp)))) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
           if (!known_people[j].real()) {
@@ -985,6 +1001,8 @@ void processSensor() {
             p.past_position = points[i];
             p.history = h;
             p.starting_position = sp;
+            p.max_distance_covered = 0;
+            if (sp != points[i]) p.updateMaxDistance();
             p.crossed = cross;
             p.reverted = revert;
             p.past_conf = norm_pixels[points[i]];
