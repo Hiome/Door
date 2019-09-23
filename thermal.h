@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.6.31"
+#define FIRMWARE_VERSION        "V0.6.32"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            3.0  // min distance for 2 peaks to be separate people
@@ -12,6 +12,7 @@
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
+#define MAX_CLEARED_CYCLES      10   // max number of cycles before we assume frame is empty
 #define CONFIDENCE_THRESHOLD    0.2  // consider a point if we're 20% confident
 #define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
 #define BACKGROUND_GRADIENT     2.0
@@ -127,6 +128,7 @@ bool inEndZone(uint8_t p) {
   return pointOnBorder(p) || pointOnLRBorder(p);
 }
 
+uint8_t cycles_since_person = MAX_CLEARED_CYCLES;
 uint8_t forgotten_num = 0;
 uint8_t cycles_since_forgotten = MAX_EMPTY_CYCLES;
 
@@ -266,6 +268,7 @@ typedef struct Person {
       }
     }
     if (old_crossed) crossed = 0;
+    history = 2;
     reverted = false;
     total_conf = confidence + past_conf;
     total_bgm = abgm + global_bgm;
@@ -510,7 +513,8 @@ bool normalizePixels() {
     } else if (norm_pixels[i] > 0.6) {
       // looks like a person, lower alpha to 0.0001
       std *= 0.1;
-    } else if (global_fgm<2.01 && global_bgm<2.01 && norm_pixels[i] < CONFIDENCE_THRESHOLD) {
+    } else if (cycles_since_person == MAX_CLEARED_CYCLES && global_fgm < 2.01 &&
+                global_bgm < 2.01 && norm_pixels[i] < CONFIDENCE_THRESHOLD) {
       // nothing going on, increase alpha to 0.01
       std *= 10.0;
     }
@@ -905,6 +909,7 @@ void processSensor() {
             p.total_fgm += global_fgm;
             p.count++;
           }
+          if (p.history > 2) cycles_since_person = 0;
           p.updateConfidence();
           known_people[idx] = p;
           break;
@@ -1047,6 +1052,9 @@ void processSensor() {
 
   if (frames_since_door_open < 5) {
     frames_since_door_open++;
+  }
+  if (cycles_since_person < MAX_CLEARED_CYCLES) {
+    cycles_since_person++;
   }
 
   // wrap up with debugging output
