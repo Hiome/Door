@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.6.30"
+#define FIRMWARE_VERSION        "V0.6.31"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            3.0  // min distance for 2 peaks to be separate people
@@ -17,7 +17,7 @@
 #define BACKGROUND_GRADIENT     2.0
 #define FOREGROUND_GRADIENT     2.0
 #define T_THRESHOLD             0.5  // min change for a pixel to be considered
-#define MIN_NEIGHBORS           4    // min size of halo effect to consider a point legit
+#define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
 #define NUM_STD_DEV             2.0  // max num of std dev to include in trimmed average
 #define MIN_TRAVEL_RATIO        0.2
 
@@ -177,7 +177,7 @@ typedef struct Person {
 
   void updateMaxDistance() {
     if (max_distance_covered < MIN_DISTANCE) {
-      float d = euclidean_distance(starting_position, past_position);
+      float d = totalDistance();
       max_distance_covered = max(d, max_distance_covered);
     }
   };
@@ -419,7 +419,7 @@ bool normalizePixels() {
       if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+1)) neighbors++;
     }
 
-    ignorable[i] = neighbors < (pointOnEdge(i) && pointOnLREdge(i) ? 3 : MIN_NEIGHBORS);
+    ignorable[i] = neighbors < MIN_NEIGHBORS;
   }
 
   // calculate trimmed average
@@ -510,7 +510,7 @@ bool normalizePixels() {
     } else if (norm_pixels[i] > 0.6) {
       // looks like a person, lower alpha to 0.0001
       std *= 0.1;
-    } else if (global_fgm<2.01 && global_bgm<2.01 && norm_pixels[i] < AVG_CONF_THRESHOLD) {
+    } else if (global_fgm<2.01 && global_bgm<2.01 && norm_pixels[i] < CONFIDENCE_THRESHOLD) {
       // nothing going on, increase alpha to 0.01
       std *= 10.0;
     }
