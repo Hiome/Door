@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.6.32"
+#define FIRMWARE_VERSION        "V0.6.33"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            3.0  // min distance for 2 peaks to be separate people
@@ -594,8 +594,8 @@ uint8_t findCurrentPoints(uint8_t *points) {
           uint8_t LREdged2 = SIDEL(ordered_indexes[j]) ? col2 : (GRID_EXTENT+1 - col2);
           uint8_t Edged1 = SIDE1(i) ? axis1 : (GRID_EXTENT+1 - axis1);
           uint8_t Edged2 = SIDE1(ordered_indexes[j]) ? axis2 : (GRID_EXTENT+1 - axis2);
-          bool similarAxis = abs(axis1 - axis2) <= 1;
-          if ((similarAxis && LREdged1 > LREdged2) || (!similarAxis && Edged1 > Edged2)) {
+          bool sameAxis = axis1 == axis2;
+          if ((sameAxis && LREdged1 > LREdged2) || (!sameAxis && Edged1 > Edged2)) {
             INSERT_POINT_HERE;
           }
         }
@@ -678,6 +678,24 @@ bool remember_person(Person p, uint8_t point, uint16_t &h, uint8_t &sp, uint8_t 
     return true;
   }
   return false;
+}
+
+uint8_t pointsAbove(uint8_t i) {
+  uint8_t height = 0;
+  for (uint8_t x = i - GRID_EXTENT; x > 0; x -= GRID_EXTENT) {
+    if (norm_pixels[x] > CONFIDENCE_THRESHOLD) height++;
+    else break;
+  }
+  return height;
+}
+
+uint8_t pointsBelow(uint8_t i) {
+  uint8_t height = 0;
+  for (uint8_t x = i + GRID_EXTENT; x < AMG88xx_PIXEL_ARRAY_SIZE; x += GRID_EXTENT) {
+    if (norm_pixels[x] > CONFIDENCE_THRESHOLD) height++;
+    else break;
+  }
+  return height;
 }
 
 void processSensor() {
@@ -956,14 +974,18 @@ void processSensor() {
         }
       }
 
+      if (!retroMatched &&
+          ((SIDE1(sp) && pointsBelow(sp) >= 4) || (SIDE2(sp) && pointsAbove(sp) >= 4)))
+        continue;
+
       if (!retroMatched && pointInMiddle(sp)) {
         bool nobodyOnBoard = false;
         if (past_total_masses > 0) {
           for (uint8_t j=0; j<MAX_PEOPLE; j++) {
             Person p = known_people[j];
-            if (p.real() && p.past_conf > 0.8 &&
+            if (p.real() && p.past_conf > 0.6 &&
                 (p.count > 1 || pointOnEdge(p.past_position)) &&
-                p.confidence > 0.8 && p.fgm() > (FOREGROUND_GRADIENT + 0.1)) {
+                p.confidence > 0.6 && p.fgm() > (FOREGROUND_GRADIENT + 0.1)) {
               // there's already a person in the middle of the grid
               // so it's unlikely a new valid person just appeared in the middle
               // (person can't be running and door wasn't closed)
@@ -982,13 +1004,10 @@ void processSensor() {
         }
 
         // if point has mid confidence with nobody ahead...
-        if (nobodyInFront && an > 0.8 && doorOpenedAgo(4) &&
-            // and it is in row 5, allow it (door just opened)
-            (AXIS(sp) == (GRID_EXTENT/2 + 1) || (nobodyOnBoard && an > 0.9 &&
-              // or row 4 if person was already through door by the sensor registered it
-              AXIS(sp) == (GRID_EXTENT/2) && PIXEL_ACTIVE(sp+GRID_EXTENT)))) {
+        if (nobodyOnBoard && an > 0.8 && doorOpenedAgo(4) && !pointOnBorder(sp)) {
           retroMatched = true;
-          sp += GRID_EXTENT;
+          if (SIDE1(sp)) sp -= GRID_EXTENT;
+          else sp += GRID_EXTENT;
         }
       }
 
@@ -997,8 +1016,8 @@ void processSensor() {
           (frames_since_door_open < 5 && door_state != DOOR_OPEN)) continue;
 
       // ignore new points that showed up in middle 2 rows of grid
-      if (retroMatched || pointOnLRBorder(sp) ||
-          (pointOnBorder(sp) && (nobodyInFront || pointOnSmallBorder(sp)))) {
+      if (retroMatched || pointOnSmallBorder(sp) ||
+          (nobodyInFront && norm_pixels[points[i]] > 0.8)) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
           if (!known_people[j].real()) {
