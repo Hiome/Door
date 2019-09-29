@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.6.35"
+#define FIRMWARE_VERSION        "V0.6.36"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            3.0  // min distance for 2 peaks to be separate people
@@ -143,6 +143,8 @@ uint8_t frames_since_door_open = 0;
 #define FRD_EVENT         0
 #define MAYBE_EVENT       1
 #define DOOR_CLOSE_EVENT  2
+#define REVERT_FRD        3
+#define MAYBE_REVERT      4
 
 uint8_t readDoorState() {
   if (PIND & 0b00001000) {  // true if reed 3 is high (normal state)
@@ -187,15 +189,19 @@ typedef struct Person {
     }
   };
 
-  void revert() {
+  void revert(uint8_t eventType) {
     char rBuf[3];
-    sprintf(rBuf, "r%d", crossed);
-    char wBuf[19];
-    sprintf(wBuf, "%dx%dx%dx%d",
+    if (eventType == REVERT_FRD)
+      sprintf(rBuf, "r%d", crossed);
+    else if (eventType == MAYBE_REVERT)
+      sprintf(rBuf, "e%d", crossed);
+    char wBuf[22];
+    sprintf(wBuf, "%dx%dx%dx%dx%d",
       int(past_conf*100.0),
       int(global_bgm*100.0),
       int(global_fgm*100.0),
-      past_position
+      past_position,
+      starting_position
     );
     publish(rBuf, wBuf, RETRY_COUNT);
   };
@@ -221,13 +227,13 @@ typedef struct Person {
     if (reverted && side() == starting_side() &&
         (inEndZone(past_position) || checkForDoorClose())) {
       // we had previously reverted this point, but it came back and made it through
-      revert();
+      revert(REVERT_FRD);
       reverted = false;
       return true;
     } else if (!reverted && !checkForDoorClose() && (side() != starting_side() ||
                 !inEndZone(past_position))) {
       // point disappeared in middle of grid, revert its crossing (probably noise or a hand)
-      revert();
+      revert(REVERT_FRD);
       reverted = true;
       return true;
     }
@@ -286,14 +292,18 @@ typedef struct Person {
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
   bool publishMaybeEvent() {
-    if (real() && starting_side() != side() && (!crossed || !reverted) &&
-        history >= MIN_HISTORY && confidence > AVG_CONF_THRESHOLD && avg_neighbors() > 2.5) {
+    if (!real() || confidence < AVG_CONF_THRESHOLD || history < 2) return false;
+    
+    if (starting_side() != side() && (!crossed || !reverted) && history >= MIN_HISTORY
+        && avg_neighbors() > 2.5) {
       if (SIDE1(starting_position) && checkForDoorClose()) {
         publishPacket(DOOR_CLOSE_EVENT);
         return true;
       }
       publishPacket(MAYBE_EVENT);
       return true;
+    } else if (!pointOnEdge(past_position)) {
+      revert(MAYBE_REVERT);
     }
     return false;
   };
