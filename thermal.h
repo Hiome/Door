@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.0"
+#define FIRMWARE_VERSION        "V0.7.1"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE            1.5  // min distance for 2 peaks to be separate people
@@ -422,13 +422,13 @@ bool normalizePixels() {
 
     uint8_t neighbors = 0;
     if (MAHALANBOIS(i)) {
-      if (AXIS(i) > 1) {
+      if (i > GRID_EXTENT) {
         // not top row
         if (MAHALANBOIS(i - GRID_EXTENT)) neighbors++;
         if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-(GRID_EXTENT+1))) neighbors++;
         if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i-(GRID_EXTENT-1))) neighbors++;
       }
-      if (AXIS(i) < GRID_EXTENT) {
+      if (i < GRID_EXTENT*7) {
         // not bottom row
         if (MAHALANBOIS(i + GRID_EXTENT)) neighbors++;
         if (NOT_AXIS(i) > 1 && MAHALANBOIS(i+(GRID_EXTENT-1))) neighbors++;
@@ -526,13 +526,22 @@ bool normalizePixels() {
          (door_state != DOOR_OPEN && norm_pixels[i] < 0.6))) {
       // door just changed, increase alpha to 0.2 to adjust quickly to new background
       std *= 200.0;
-    } else if (norm_pixels[i] > 0.6) {
+    } else if (norm_pixels[i] > 0.5) {
       // looks like a person, lower alpha to 0.0001
       std *= 0.1;
+    } else if (cycles_since_person < 2) {
+      for (uint8_t x=0; x<MAX_PEOPLE; x++) {
+        if (known_people[x].real() && known_people[x].confidence > 0.5 &&
+            known_people[x].positive == pos_pixels[i] &&
+            euclidean_distance(known_people[x].past_position, i) < 4) {
+          std *= 0.1;
+          break;
+        }
+      }
     } else if (cycles_since_person == MAX_CLEARED_CYCLES &&
-                norm_pixels[i] < AVG_CONF_THRESHOLD) {
-      // nothing going on, increase alpha to 0.01
-      std *= 10.0;
+                norm_pixels[i] < CONFIDENCE_THRESHOLD) {
+      // nothing going on, increase alpha to 0.005
+      std *= 5.0;
     }
     avg_pixels[i] += ((int)roundf(std));
   }
@@ -549,26 +558,47 @@ uint8_t findCurrentPoints(uint8_t *points) {
     if (PIXEL_ACTIVE(i)) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
-        if (abs(norm_pixels[i] - norm_pixels[ordered_indexes_temp[j]]) < 0.05) {
-          // identical points as part of a spectrum, prefer point closer to middle
-          uint8_t axis1 = AXIS(i);
-          uint8_t axis2 = AXIS(ordered_indexes_temp[j]);
-          uint8_t col1 = NOT_AXIS(i);
-          uint8_t col2 = NOT_AXIS(ordered_indexes_temp[j]);
-          uint8_t LREdged1 = SIDEL(i) ? col1 : (GRID_EXTENT+1 - col1);
-          uint8_t LREdged2 = SIDEL(ordered_indexes_temp[j]) ? col2 : (GRID_EXTENT+1 - col2);
-          uint8_t Edged1 = SIDE1(i) ? axis1 : (GRID_EXTENT+1 - axis1);
-          uint8_t Edged2 = SIDE1(ordered_indexes_temp[j]) ? axis2 : (GRID_EXTENT+1 - axis2);
-          bool sameAxis = axis1 == axis2;
-          if ((sameAxis && LREdged1 > LREdged2) || (!sameAxis && Edged1 > Edged2)) {
-            if (norm_pixels[i] < norm_pixels[ordered_indexes_temp[j]])
-              norm_pixels[i] = norm_pixels[ordered_indexes_temp[j]];
-            for (int8_t x=active_pixel_count; x>j; x--) {
-              ordered_indexes_temp[x] = ordered_indexes_temp[x-1];
+        if (pos_pixels[i] == pos_pixels[ordered_indexes_temp[j]] &&
+            abs(norm_pixels[i] - norm_pixels[ordered_indexes_temp[j]]) < 0.05) {
+          float d1 = 100;
+          float d2 = 100;
+          for (uint8_t x=0; x<j; x++) {
+            d1 = euclidean_distance(i, ordered_indexes_temp[x]);
+            d2 = euclidean_distance(ordered_indexes_temp[j], ordered_indexes_temp[x]);
+            if (d1 <= MIN_DISTANCE || d2 <= MIN_DISTANCE) break;
+          }
+          if ((d1 <= MIN_DISTANCE || d2 <= MIN_DISTANCE)) {
+            if (d1 < d2) {
+              if (norm_pixels[i] < norm_pixels[ordered_indexes_temp[j]])
+                norm_pixels[i] = norm_pixels[ordered_indexes_temp[j]];
+              for (int8_t x=active_pixel_count; x>j; x--) {
+                ordered_indexes_temp[x] = ordered_indexes_temp[x-1];
+              }
+              ordered_indexes_temp[j] = i;
+              added = true;
+              break;
             }
-            ordered_indexes_temp[j] = i;
-            added = true;
-            break;
+          } else {
+            // identical points as part of a spectrum, prefer point closer to middle
+            uint8_t axis1 = AXIS(i);
+            uint8_t axis2 = AXIS(ordered_indexes_temp[j]);
+            uint8_t col1 = NOT_AXIS(i);
+            uint8_t col2 = NOT_AXIS(ordered_indexes_temp[j]);
+            uint8_t LREdged1 = SIDEL(i) ? col1 : (GRID_EXTENT+1 - col1);
+            uint8_t LREdged2 = SIDEL(ordered_indexes_temp[j]) ? col2 : (GRID_EXTENT+1-col2);
+            uint8_t Edged1 = SIDE1(i) ? axis1 : (GRID_EXTENT+1 - axis1);
+            uint8_t Edged2 = SIDE1(ordered_indexes_temp[j]) ? axis2 : (GRID_EXTENT+1-axis2);
+            bool sameAxis = axis1 == axis2;
+            if ((sameAxis && LREdged1 > LREdged2) || (!sameAxis && Edged1 > Edged2)) {
+              if (norm_pixels[i] < norm_pixels[ordered_indexes_temp[j]])
+                norm_pixels[i] = norm_pixels[ordered_indexes_temp[j]];
+              for (int8_t x=active_pixel_count; x>j; x--) {
+                ordered_indexes_temp[x] = ordered_indexes_temp[x-1];
+              }
+              ordered_indexes_temp[j] = i;
+              added = true;
+              break;
+            }
           }
         } else if (norm_pixels[i] > norm_pixels[ordered_indexes_temp[j]]) {
           for (int8_t x=active_pixel_count; x>j; x--) {
@@ -614,7 +644,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
         uint8_t i = ordered_indexes_temp[k];
         if (i != UNDEF_POINT && pos_pixels[i] == pos_pixels[points[total_masses-1]] &&
               euclidean_distance(i, ordered_indexes[x]) <= MIN_DISTANCE) {
-          if (edge && norm_pixels[i] - norm_pixels[ordered_indexes[x]] > 0.05) continue;
+          if (edge && norm_pixels[i] - norm_pixels[ordered_indexes[x]] > 0.1) continue;
           ordered_indexes[sorted_size] = i;
           ordered_indexes_temp[k] = UNDEF_POINT;
           sorted_size++;
@@ -932,7 +962,7 @@ void processSensor() {
             p.total_neighbors += neighbors_count[points[i]];
             p.count++;
           }
-          if (p.history > 2) cycles_since_person = 0;
+          if (p.history > 1) cycles_since_person = 0;
           p.updateConfidence();
           known_people[idx] = p;
           break;
