@@ -3,10 +3,10 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.6.36"
+#define FIRMWARE_VERSION        "V0.7.0"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define MIN_DISTANCE            3.0  // min distance for 2 peaks to be separate people
+#define MIN_DISTANCE            1.5  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
 #define DISTANCE_BONUS          2.5  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
@@ -18,7 +18,7 @@
 #define BACKGROUND_GRADIENT     2.0
 #define FOREGROUND_GRADIENT     2.0
 #define T_THRESHOLD             0.5  // min change for a pixel to be considered
-#define MIN_NEIGHBORS           3    // min size of halo effect to consider a point legit
+#define MIN_NEIGHBORS           2    // min size of halo effect to consider a point legit
 #define NUM_STD_DEV             2.0  // max num of std dev to include in trimmed average
 #define MIN_TRAVEL_RATIO        0.2
 
@@ -183,7 +183,7 @@ typedef struct Person {
   float     totalDistance() { return euclidean_distance(starting_position, past_position); };
 
   void updateMaxDistance() {
-    if (max_distance_covered < MIN_DISTANCE) {
+    if (max_distance_covered < MAX_DISTANCE) {
       float d = totalDistance();
       max_distance_covered = max(d, max_distance_covered);
     }
@@ -280,7 +280,7 @@ typedef struct Person {
       }
     }
     if (old_crossed) crossed = 0;
-    history = 2;
+    history = 1;
     reverted = false;
     total_conf = confidence + past_conf;
     total_bgm = abgm + global_bgm;
@@ -323,7 +323,7 @@ void publishEvents() {
     Person p = known_people[i];
     if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
         p.confidence > AVG_CONF_THRESHOLD && p.max_distance_covered >= MIN_DISTANCE &&
-        p.history >= int(roundf(6.0 - p.confidence*MIN_HISTORY)) && p.avg_neighbors() > 2.5){
+        p.history >= int(roundf(6.3 - p.confidence*MIN_HISTORY)) && p.avg_neighbors() > 2.5){
       p.publishPacket(FRD_EVENT);
       known_people[i] = p; // update known_people array
     }
@@ -366,7 +366,7 @@ float trimMean(float sum, float sq_sum, uint8_t side) {
   float variance = sq_sum - sq(sum)/32.0;
   variance = NUM_STD_DEV * sqrt(variance);
   float cavg = 0.0;
-  float total = 0.0;
+  uint8_t total = 0.0;
   for (uint8_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
     if (norm_pixels[i] > (mean - variance) && norm_pixels[i] < (mean + variance)) {
       cavg += norm_pixels[i];
@@ -401,7 +401,6 @@ bool normalizePixels() {
   if (!pixelsChanged()) return false;
 
   // ignore points that don't have enough neighbors
-  bool ignorable[AMG88xx_PIXEL_ARRAY_SIZE];
   float x_sum1 = 0.0;
   float sq_sum1 = 0.0;
   float x_sum2 = 0.0;
@@ -440,7 +439,6 @@ bool normalizePixels() {
     }
 
     neighbors_count[i] = neighbors;
-    ignorable[i] = neighbors < 1;
   }
 
   // calculate trimmed average
@@ -465,7 +463,7 @@ bool normalizePixels() {
   float fgm1 = FOREGROUND_GRADIENT;
   float fgm2 = FOREGROUND_GRADIENT;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (!ignorable[i]) {
+    if (neighbors_count[i] > 1) {
       // difference in points from foreground
       float fgmt1 = abs(norm_pixels[i] - cavg1);
       float fgmt2 = abs(norm_pixels[i] - cavg2);
@@ -480,14 +478,14 @@ bool normalizePixels() {
   global_fgm = max(fgm1, fgm2);
   global_bgm = BACKGROUND_GRADIENT;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (!ignorable[i]) {
+    if (neighbors_count[i] > 1) {
       float fgmt1 = (norm_pixels[i] - cavg1)/fgm1;
       fgmt1 = abs(fgmt1);
       float fgmt2 = (norm_pixels[i] - cavg2)/fgm2;
       fgmt2 = abs(fgmt2);
       // pick the smaller of the 2 foreground gradients
       if (min(fgmt1, fgmt2) < CONFIDENCE_THRESHOLD) {
-        ignorable[i] = true;
+        neighbors_count[i] = 0;
       } else {
         // difference in points from background
         float bgmt = abs(norm_pixels[i] - bgPixel(i));
@@ -500,7 +498,7 @@ bool normalizePixels() {
     float std = norm_pixels[i] - bgPixel(i);
 
     // normalize points
-    if (ignorable[i]) {
+    if (neighbors_count[i] <= 1) {
       norm_pixels[i] = 0.0;
       pos_pixels[i] = false;
     } else {
@@ -542,18 +540,6 @@ bool normalizePixels() {
   return true;
 }
 
-// insert element i into an array at position j, shift everything else over to make room
-#define INSERT_POINT_HERE ({                            \
-  if (norm_pixels[ordered_indexes[j]] > norm_pixels[i]) \
-    norm_pixels[i] = norm_pixels[ordered_indexes[j]];   \
-  for (int8_t x=k; x>j; x--) {                          \
-    ordered_indexes[x] = ordered_indexes[x-1];          \
-  }                                                     \
-  ordered_indexes[j] = i;                               \
-  added = true;                                         \
-  break;                                                \
-})
-
 uint8_t findCurrentPoints(uint8_t *points) {
   // sort pixels by confidence to find peaks
   uint8_t ordered_indexes_temp[AMG88xx_PIXEL_ARRAY_SIZE];
@@ -563,7 +549,28 @@ uint8_t findCurrentPoints(uint8_t *points) {
     if (PIXEL_ACTIVE(i)) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
-        if (norm_pixels[i] > norm_pixels[ordered_indexes_temp[j]]) {
+        if (abs(norm_pixels[i] - norm_pixels[ordered_indexes_temp[j]]) < 0.05) {
+          // identical points as part of a spectrum, prefer point closer to middle
+          uint8_t axis1 = AXIS(i);
+          uint8_t axis2 = AXIS(ordered_indexes_temp[j]);
+          uint8_t col1 = NOT_AXIS(i);
+          uint8_t col2 = NOT_AXIS(ordered_indexes_temp[j]);
+          uint8_t LREdged1 = SIDEL(i) ? col1 : (GRID_EXTENT+1 - col1);
+          uint8_t LREdged2 = SIDEL(ordered_indexes_temp[j]) ? col2 : (GRID_EXTENT+1 - col2);
+          uint8_t Edged1 = SIDE1(i) ? axis1 : (GRID_EXTENT+1 - axis1);
+          uint8_t Edged2 = SIDE1(ordered_indexes_temp[j]) ? axis2 : (GRID_EXTENT+1 - axis2);
+          bool sameAxis = axis1 == axis2;
+          if ((sameAxis && LREdged1 > LREdged2) || (!sameAxis && Edged1 > Edged2)) {
+            if (norm_pixels[i] < norm_pixels[ordered_indexes_temp[j]])
+              norm_pixels[i] = norm_pixels[ordered_indexes_temp[j]];
+            for (int8_t x=active_pixel_count; x>j; x--) {
+              ordered_indexes_temp[x] = ordered_indexes_temp[x-1];
+            }
+            ordered_indexes_temp[j] = i;
+            added = true;
+            break;
+          }
+        } else if (norm_pixels[i] > norm_pixels[ordered_indexes_temp[j]]) {
           for (int8_t x=active_pixel_count; x>j; x--) {
             ordered_indexes_temp[x] = ordered_indexes_temp[x-1];
           }
@@ -581,65 +588,40 @@ uint8_t findCurrentPoints(uint8_t *points) {
 
   // reorder based on peaks
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
-  for (uint8_t k=0; k<active_pixel_count; k++) {
-    uint8_t i = ordered_indexes_temp[k];
-    bool added = false;
-    for (uint8_t j=0; j<k; j++) {
-      // if both points are similar...
-      if (pos_pixels[i] == pos_pixels[ordered_indexes[j]] &&
-          abs(norm_pixels[i] - norm_pixels[ordered_indexes[j]]) < 0.11) {
-        if (j > 0 && euclidean_distance(i, ordered_indexes[j]) <= MIN_DISTANCE) {
-          // place the point that's closer to a peak in front of the other
-          float d1 = 100;
-          float d2 = 100;
-          for (uint8_t x=0; x<j; x++) {
-            d1 = euclidean_distance(i, ordered_indexes[x]);
-            d2 = euclidean_distance(ordered_indexes[j], ordered_indexes[x]);
-            if (d1 <= MIN_DISTANCE || d2 <= MIN_DISTANCE) break;
-          }
-          // nearby peak found
-          if (d1 < d2) {
-            // this point is closer to peak, so insert it first
-            INSERT_POINT_HERE;
-          }
-        } else {
-          // identical points as part of a spectrum, prefer point closer to middle
-          uint8_t axis1 = AXIS(i);
-          uint8_t axis2 = AXIS(ordered_indexes[j]);
-          uint8_t col1 = NOT_AXIS(i);
-          uint8_t col2 = NOT_AXIS(ordered_indexes[j]);
-          uint8_t LREdged1 = SIDEL(i) ? col1 : (GRID_EXTENT+1 - col1);
-          uint8_t LREdged2 = SIDEL(ordered_indexes[j]) ? col2 : (GRID_EXTENT+1 - col2);
-          uint8_t Edged1 = SIDE1(i) ? axis1 : (GRID_EXTENT+1 - axis1);
-          uint8_t Edged2 = SIDE1(ordered_indexes[j]) ? axis2 : (GRID_EXTENT+1 - axis2);
-          bool sameAxis = axis1 == axis2;
-          if ((sameAxis && LREdged1 > LREdged2) || (!sameAxis && Edged1 > Edged2)) {
-            INSERT_POINT_HERE;
-          }
+  uint8_t sorted_size = 0;
+  uint8_t total_masses = 0;
+  for (uint8_t y=0; y<active_pixel_count; y++) {
+    if (ordered_indexes_temp[y] == UNDEF_POINT) continue;
+    points[total_masses] = ordered_indexes_temp[y];
+    total_masses++;
+    if (total_masses == MAX_PEOPLE) break;
+
+    ordered_indexes[sorted_size] = ordered_indexes_temp[y];
+    sorted_size++;
+    ordered_indexes_temp[y] = UNDEF_POINT;
+    for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
+      bool edge = norm_pixels[points[total_masses-1]] - norm_pixels[ordered_indexes[x]]>0.3;
+
+      uint8_t added = 0;
+      uint8_t max_added = 8;
+      bool onYEdge = pointOnEdge(ordered_indexes[x]);
+      bool onXEdge = pointOnLREdge(ordered_indexes[x]);
+      if (onYEdge || onXEdge) {
+        max_added = (onYEdge && onXEdge) ? 3 : 5;
+      }
+
+      for (uint8_t k=y+1; k<active_pixel_count; k++) {
+        uint8_t i = ordered_indexes_temp[k];
+        if (i != UNDEF_POINT && pos_pixels[i] == pos_pixels[points[total_masses-1]] &&
+              euclidean_distance(i, ordered_indexes[x]) <= MIN_DISTANCE) {
+          if (edge && norm_pixels[i] - norm_pixels[ordered_indexes[x]] > 0.05) continue;
+          ordered_indexes[sorted_size] = i;
+          ordered_indexes_temp[k] = UNDEF_POINT;
+          sorted_size++;
+          added++;
+          if (added == max_added) break;
         }
       }
-    }
-    if (!added) {
-      ordered_indexes[k] = i;
-    }
-  }
-
-  // determine which peaks are distinct people by making sure they are far enough apart
-  uint8_t total_masses = 0;
-  for (uint8_t i=0; i<active_pixel_count; i++) {
-    uint8_t idx = ordered_indexes[i];
-    bool distinct = true;
-    for (uint8_t j=0; j<i; j++) {
-      // make sure this point isn't close to another peak we already considered
-      if (euclidean_distance(ordered_indexes[j], idx) <= MIN_DISTANCE) {
-        distinct = false;
-        break;
-      }
-    }
-    if (distinct) {
-      points[total_masses] = idx;
-      total_masses++;
-      if (total_masses == MAX_PEOPLE) break;  // we've hit our cap, stop looking
     }
   }
 
@@ -1028,7 +1010,7 @@ void processSensor() {
         }
 
         // if point has mid confidence with nobody ahead...
-        if (nobodyInFront && an > 0.8 && doorOpenedAgo(4) &&
+        if (nobodyInFront && an > 0.6 && doorOpenedAgo(4) &&
             // and it is in row 5, allow it (door just opened)
             (AXIS(sp) == (GRID_EXTENT/2 + 1) || (nobodyOnBoard && an > 0.9 &&
               // or row 4 if person was already through door by the sensor registered it
@@ -1044,7 +1026,7 @@ void processSensor() {
 
       // ignore new points that showed up in middle 2 rows of grid
       if (retroMatched || pointOnSmallBorder(sp) || pointOnLRBorder(sp) ||
-          (nobodyInFront && norm_pixels[points[i]] > 0.8)) {
+          norm_pixels[points[i]] > 0.6) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
           if (!known_people[j].real()) {
