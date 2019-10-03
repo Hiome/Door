@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.2"
+#define FIRMWARE_VERSION        "V0.7.3"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -206,13 +206,16 @@ typedef struct Person {
       sprintf(rBuf, "r%d", crossed);
     else if (eventType == MAYBE_REVERT)
       sprintf(rBuf, "e%d", crossed);
-    char wBuf[22];
-    sprintf(wBuf, "%dx%dx%dx%dx%d",
+    char wBuf[30];
+    sprintf(wBuf, "%dx%dx%dx%dx%dx%dx%dx%d",
       int(past_conf*100.0),
       int(global_bgm*100.0),
       int(global_fgm*100.0),
+      starting_position,
       past_position,
-      starting_position
+      history,
+      int(avg_neighbors()*10.0),
+      int(max_distance_covered*10.0)
     );
     publish(rBuf, wBuf, RETRY_COUNT);
   };
@@ -256,15 +259,17 @@ typedef struct Person {
     float abgm = bgm();
     float afgm = fgm();
     float anei = avg_neighbors();
-    char meta[26];
-    sprintf(meta, "%s%dx%dx%dx%dx%dx%d",
+    char meta[30];
+    sprintf(meta, "%s%dx%dx%dx%dx%dx%dx%dx%d",
       positive ? "+" : "-",
       int(confidence*100.0),
       int(abgm*100.0),
       int(afgm*100.0),
       starting_position,
-      int(anei*100.0),
-      history
+      past_position,
+      history,
+      int(anei*10.0),
+      int(max_distance_covered*10.0)
     );
     if (SIDE1(past_position)) {
       if (eventType == FRD_EVENT) {
@@ -309,7 +314,7 @@ typedef struct Person {
     if (!real() || confidence < AVG_CONF_THRESHOLD || history < 2) return false;
     
     if (starting_side() != side() && (!crossed || !reverted) && history >= MIN_HISTORY
-        && avg_neighbors() > 2.5) {
+        && avg_neighbors() > MIN_NEIGHBORS) {
       if (SIDE(starting_position) == door_side && checkForDoorClose()) {
         publishPacket(DOOR_CLOSE_EVENT);
         return true;
@@ -336,8 +341,9 @@ void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     Person p = known_people[i];
     if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
-        p.confidence > AVG_CONF_THRESHOLD && p.max_distance_covered >= MAX_DISTANCE &&
-        p.history >= int(roundf(6.3 - p.confidence*MIN_HISTORY)) && p.avg_neighbors() > 2.5){
+        p.confidence > AVG_CONF_THRESHOLD && p.max_distance_covered >= MIN_DISTANCE &&
+        p.history >= int(roundf(6.3 - p.confidence*MIN_HISTORY)) &&
+        p.avg_neighbors() > MIN_NEIGHBORS) {
       p.publishPacket(FRD_EVENT);
       known_people[i] = p; // update known_people array
     }
@@ -436,7 +442,7 @@ bool normalizePixels() {
 
     uint8_t neighbors = 0;
     if (MAHALANBOIS(i)) {
-      if (i > GRID_EXTENT) {
+      if (i >= GRID_EXTENT) {
         // not top row
         if (MAHALANBOIS(i - GRID_EXTENT)) neighbors++;
         if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-(GRID_EXTENT+1))) neighbors++;
@@ -573,7 +579,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
         if (pos_pixels[i] == pos_pixels[ordered_indexes_temp[j]] &&
-            abs(norm_pixels[i] - norm_pixels[ordered_indexes_temp[j]]) < 0.05) {
+            abs(norm_pixels[i] - norm_pixels[ordered_indexes_temp[j]]) < 0.2) {
           float d1 = 100;
           float d2 = 100;
           for (uint8_t x=0; x<j; x++) {
@@ -604,6 +610,8 @@ uint8_t findCurrentPoints(uint8_t *points) {
           }
           if (added && norm_pixels[i] < norm_pixels[ordered_indexes_temp[j]]) {
             norm_pixels[i] = norm_pixels[ordered_indexes_temp[j]];
+          } else if (!added && norm_pixels[ordered_indexes_temp[j]] < norm_pixels[i]) {
+            norm_pixels[ordered_indexes_temp[j]] = norm_pixels[i];
           }
         } else if (norm_pixels[i] > norm_pixels[ordered_indexes_temp[j]]) {
           added = true;
@@ -640,6 +648,15 @@ uint8_t findCurrentPoints(uint8_t *points) {
         // point too close to a known peak
         addMe = false;
         break;
+      }
+    }
+    if (addMe) {
+      for (uint8_t x=1; x<sorted_size; x++) {
+        if (euclidean_distance(ordered_indexes[x], current_point) < MIN_DISTANCE_FRD) {
+          // point too close to edge of known blob
+          addMe = false;
+          break;
+        }
       }
     }
     if (addMe) {
@@ -845,9 +862,18 @@ void processSensor() {
                 min_index = j;
               } else if (min_index != UNDEF_POINT && score - min_score < 0.05) {
                 // score is the same, pick the point that lets this one move farthest
-                float sd1 = euclidean_distance(p.starting_position, points[j]);
-                float sd2 = euclidean_distance(p.starting_position, points[min_index]);
-                if (p.crossed ? (sd1 < sd2) : (sd1 > sd2)) {
+                bool useJ = false;
+                uint8_t axis1 = AXIS(points[j]);
+                uint8_t axis2 = AXIS(points[min_index]);
+                if (axis1 == axis2) {
+                  // points on same axis, choose the one with higher confidence
+                  useJ = norm_pixels[points[j]] > norm_pixels[points[min_index]];
+                } else if (p.crossed) {
+                  useJ = SIDE1(p.starting_position) ? axis1 < axis2 : axis1 > axis2;
+                } else {
+                  useJ = SIDE1(p.starting_position) ? axis1 > axis2 : axis1 < axis2;
+                }
+                if (useJ) {
                   min_score = score;
                   min_index = j;
                 }
@@ -986,7 +1012,7 @@ void processSensor() {
             p.total_neighbors += neighbors_count[points[i]];
             p.count++;
           }
-          if (p.history > 1) cycles_since_person = 0;
+          cycles_since_person = 0;
           p.updateConfidence();
           known_people[idx] = p;
           break;
@@ -1006,10 +1032,7 @@ void processSensor() {
       uint8_t c = 1;
       bool retroMatched = false;
 
-      if (an <= AVG_CONF_THRESHOLD || n < MIN_NEIGHBORS ||
-          // ignore new points on side 1 immediately after door opens/closes
-          (frames_since_door_open < 3 && SIDE(sp) == door_side) ||
-          (frames_since_door_open < 5 && door_state != DOOR_OPEN)) continue;
+      if (an <= AVG_CONF_THRESHOLD || n < MIN_NEIGHBORS) continue;
 
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
@@ -1036,8 +1059,11 @@ void processSensor() {
         }
       }
 
-      if (!retroMatched &&
-          ((SIDE1(sp) && pointsBelow(sp) >= 4) || (SIDE2(sp) && pointsAbove(sp) >= 4)))
+      // ignore new points on side 1 immediately after door opens/closes
+      if ((frames_since_door_open < 3 && SIDE(sp) == door_side) ||
+          (frames_since_door_open < 5 && door_state != DOOR_OPEN) ||
+          (!retroMatched &&
+            ((SIDE1(sp) && pointsBelow(sp) >= 4) || (SIDE2(sp) && pointsAbove(sp) >= 4))))
         continue;
 
       // ignore new points that showed up in middle 2 rows of grid
