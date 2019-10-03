@@ -3,10 +3,11 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.1"
+#define FIRMWARE_VERSION        "V0.7.2"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define MIN_DISTANCE            1.5  // min distance for 2 peaks to be separate people
+#define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
+#define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
 #define DISTANCE_BONUS          2.5  // max extra distance a hot point can move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
@@ -139,6 +140,7 @@ uint8_t cycles_since_forgotten = MAX_EMPTY_CYCLES;
 uint8_t door_state = DOOR_OPEN;
 uint8_t last_published_door_state = 9;
 uint8_t frames_since_door_open = 0;
+uint8_t door_side = 1;
 
 #define FRD_EVENT         0
 #define MAYBE_EVENT       1
@@ -147,12 +149,21 @@ uint8_t frames_since_door_open = 0;
 #define MAYBE_REVERT      4
 
 uint8_t readDoorState() {
-  if (PIND & 0b00001000) {  // true if reed 3 is high (normal state)
-    // door open if reed switch 4 is also high
-    return PIND & 0b00010000 ? DOOR_OPEN : DOOR_AJAR;
-  } else {
-    return DOOR_CLOSED;
-  }
+  #ifdef RECESSED
+    bool reed3High = PIND & 0b00001000; // true if reed 3 is high (normal state)
+    bool reed4High = PIND & 0b00010000; // true if reed 4 is high (normal state)
+    if (reed3High && reed4High) return DOOR_OPEN;
+    if (!reed3High && !reed4High) return DOOR_CLOSED;
+    if (reed4High) door_side = 2;
+    return DOOR_AJAR;
+  #else
+    if (PIND & 0b00001000) {  // true if reed 3 is high (normal state)
+      // door open if reed switch 4 is also high
+      return PIND & 0b00010000 ? DOOR_OPEN : DOOR_AJAR;
+    } else {
+      return DOOR_CLOSED;
+    }
+  #endif
 }
 
 typedef struct Person {
@@ -210,7 +221,7 @@ typedef struct Person {
     // This could possibly fail if person's hand is on door knob opening door and sensor
     // detects that as a person. We'll see hand go from 1->2, and then get dropped as door
     // opens, and this if block will prevent it from reverting properly.
-    if (SIDE2(past_position) && confidence > 0.6) {
+    if (SIDE(past_position) != door_side && confidence > 0.6) {
       if (frames_since_door_open == 0) {
         return door_state != DOOR_OPEN;
       } else if (door_state == DOOR_OPEN) {
@@ -265,6 +276,9 @@ typedef struct Person {
       } else if (eventType == MAYBE_EVENT) {
         publish("m1", meta, RETRY_COUNT);
         return;
+      } else if (eventType == DOOR_CLOSE_EVENT && door_side == 2) {
+        publish("1", meta, RETRY_COUNT);
+        return;
       }
     } else {
       if (eventType == FRD_EVENT) {
@@ -274,7 +288,7 @@ typedef struct Person {
       } else if (eventType == MAYBE_EVENT) {
         publish("m2", meta, RETRY_COUNT);
         return;
-      } else if (eventType == DOOR_CLOSE_EVENT) {
+      } else if (eventType == DOOR_CLOSE_EVENT && door_side == 1) {
         publish("2", meta, RETRY_COUNT);
         return;
       }
@@ -296,13 +310,13 @@ typedef struct Person {
     
     if (starting_side() != side() && (!crossed || !reverted) && history >= MIN_HISTORY
         && avg_neighbors() > 2.5) {
-      if (SIDE1(starting_position) && checkForDoorClose()) {
+      if (SIDE(starting_position) == door_side && checkForDoorClose()) {
         publishPacket(DOOR_CLOSE_EVENT);
         return true;
       }
       publishPacket(MAYBE_EVENT);
       return true;
-    } else if (!pointOnEdge(past_position)) {
+    } else {
       revert(MAYBE_REVERT);
     }
     return false;
@@ -322,7 +336,7 @@ void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     Person p = known_people[i];
     if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
-        p.confidence > AVG_CONF_THRESHOLD && p.max_distance_covered >= MIN_DISTANCE &&
+        p.confidence > AVG_CONF_THRESHOLD && p.max_distance_covered >= MAX_DISTANCE &&
         p.history >= int(roundf(6.3 - p.confidence*MIN_HISTORY)) && p.avg_neighbors() > 2.5){
       p.publishPacket(FRD_EVENT);
       known_people[i] = p; // update known_people array
@@ -563,53 +577,49 @@ uint8_t findCurrentPoints(uint8_t *points) {
           float d1 = 100;
           float d2 = 100;
           for (uint8_t x=0; x<j; x++) {
+            if (pos_pixels[i] != pos_pixels[ordered_indexes_temp[x]]) continue;
             d1 = euclidean_distance(i, ordered_indexes_temp[x]);
             d2 = euclidean_distance(ordered_indexes_temp[j], ordered_indexes_temp[x]);
-            if (d1 <= MIN_DISTANCE || d2 <= MIN_DISTANCE) break;
+            if (d1 < MIN_DISTANCE_FRD || d2 < MIN_DISTANCE_FRD) break;
           }
-          if ((d1 <= MIN_DISTANCE || d2 <= MIN_DISTANCE)) {
-            if (d1 < d2) {
-              if (norm_pixels[i] < norm_pixels[ordered_indexes_temp[j]])
-                norm_pixels[i] = norm_pixels[ordered_indexes_temp[j]];
-              for (int8_t x=active_pixel_count; x>j; x--) {
-                ordered_indexes_temp[x] = ordered_indexes_temp[x-1];
-              }
-              ordered_indexes_temp[j] = i;
-              added = true;
-              break;
-            }
+          if (d1 < MIN_DISTANCE || d2 < MIN_DISTANCE) {
+            // pick point closer to a known peak
+            added = d1 < d2;
           } else {
-            // identical points as part of a spectrum, prefer point closer to middle
-            uint8_t axis1 = AXIS(i);
-            uint8_t axis2 = AXIS(ordered_indexes_temp[j]);
-            uint8_t col1 = NOT_AXIS(i);
-            uint8_t col2 = NOT_AXIS(ordered_indexes_temp[j]);
-            uint8_t LREdged1 = SIDEL(i) ? col1 : (GRID_EXTENT+1 - col1);
-            uint8_t LREdged2 = SIDEL(ordered_indexes_temp[j]) ? col2 : (GRID_EXTENT+1-col2);
-            uint8_t Edged1 = SIDE1(i) ? axis1 : (GRID_EXTENT+1 - axis1);
-            uint8_t Edged2 = SIDE1(ordered_indexes_temp[j]) ? axis2 : (GRID_EXTENT+1-axis2);
-            bool sameAxis = axis1 == axis2;
-            if ((sameAxis && LREdged1 > LREdged2) || (!sameAxis && Edged1 > Edged2)) {
-              if (norm_pixels[i] < norm_pixels[ordered_indexes_temp[j]])
-                norm_pixels[i] = norm_pixels[ordered_indexes_temp[j]];
-              for (int8_t x=active_pixel_count; x>j; x--) {
-                ordered_indexes_temp[x] = ordered_indexes_temp[x-1];
-              }
-              ordered_indexes_temp[j] = i;
-              added = true;
-              break;
+            // prefer point closer to middle of grid
+            uint8_t edge1 = AXIS(i);
+            uint8_t edge2 = AXIS(ordered_indexes_temp[j]);
+
+            // use columns instead of rows if same row
+            if (edge1 == edge2) {
+              edge1 = NOT_AXIS(i);
+              edge2 = NOT_AXIS(ordered_indexes_temp[j]);
             }
+
+            // calculate row # from opposite edge
+            if (edge1 > 4) edge1 = GRID_EXTENT+1 - edge1;
+            if (edge2 > 4) edge2 = GRID_EXTENT+1 - edge2;
+
+            added = edge1 > edge2;
+          }
+          if (added && norm_pixels[i] < norm_pixels[ordered_indexes_temp[j]]) {
+            norm_pixels[i] = norm_pixels[ordered_indexes_temp[j]];
           }
         } else if (norm_pixels[i] > norm_pixels[ordered_indexes_temp[j]]) {
+          added = true;
+        }
+
+        if (added) {
+          // insert point i in front of j
           for (int8_t x=active_pixel_count; x>j; x--) {
             ordered_indexes_temp[x] = ordered_indexes_temp[x-1];
           }
           ordered_indexes_temp[j] = i;
-          added = true;
           break;
         }
       }
       if (!added) {
+        // append i to end of array
         ordered_indexes_temp[active_pixel_count] = i;
       }
       active_pixel_count++;
@@ -621,17 +631,29 @@ uint8_t findCurrentPoints(uint8_t *points) {
   uint8_t sorted_size = 0;
   uint8_t total_masses = 0;
   for (uint8_t y=0; y<active_pixel_count; y++) {
-    if (ordered_indexes_temp[y] == UNDEF_POINT) continue;
-    points[total_masses] = ordered_indexes_temp[y];
-    total_masses++;
-    if (total_masses == MAX_PEOPLE) break;
+    uint8_t current_point = ordered_indexes_temp[y];
+    if (current_point == UNDEF_POINT) continue;
 
-    ordered_indexes[sorted_size] = ordered_indexes_temp[y];
+    bool addMe = true;
+    for (uint8_t x=0; x<total_masses; x++) {
+      if (euclidean_distance(points[x], current_point) < MIN_DISTANCE) {
+        // point too close to a known peak
+        addMe = false;
+        break;
+      }
+    }
+    if (addMe) {
+      points[total_masses] = current_point;
+      total_masses++;
+      if (total_masses == MAX_PEOPLE) break;
+    }
+
+    ordered_indexes[sorted_size] = current_point;
     sorted_size++;
     ordered_indexes_temp[y] = UNDEF_POINT;
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
-      bool edge = norm_pixels[points[total_masses-1]] - norm_pixels[ordered_indexes[x]]>0.3;
-
+      // since MIN_DISTANCE_FRD == 1.5, we know we can only be adding neighbors
+      // so we can stop looking once we've hit this point's max possible neighbors
       uint8_t added = 0;
       uint8_t max_added = 8;
       bool onYEdge = pointOnEdge(ordered_indexes[x]);
@@ -640,11 +662,13 @@ uint8_t findCurrentPoints(uint8_t *points) {
         max_added = (onYEdge && onXEdge) ? 3 : 5;
       }
 
+      bool blobEdge = norm_pixels[current_point] - norm_pixels[ordered_indexes[x]] > 0.5;
+
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
         uint8_t i = ordered_indexes_temp[k];
-        if (i != UNDEF_POINT && pos_pixels[i] == pos_pixels[points[total_masses-1]] &&
-              euclidean_distance(i, ordered_indexes[x]) <= MIN_DISTANCE) {
-          if (edge && norm_pixels[i] - norm_pixels[ordered_indexes[x]] > 0.1) continue;
+        if (i != UNDEF_POINT && pos_pixels[i] == pos_pixels[current_point] &&
+              euclidean_distance(i, ordered_indexes[x]) < MIN_DISTANCE_FRD) {
+          if (blobEdge && norm_pixels[i] - norm_pixels[ordered_indexes[x]] > 0.1) continue;
           ordered_indexes[sorted_size] = i;
           ordered_indexes_temp[k] = UNDEF_POINT;
           sorted_size++;
@@ -981,9 +1005,11 @@ void processSensor() {
       uint16_t n = neighbors_count[sp];
       uint8_t c = 1;
       bool retroMatched = false;
-      bool nobodyInFront = true;
 
-      if (an <= AVG_CONF_THRESHOLD || n < MIN_NEIGHBORS) continue;
+      if (an <= AVG_CONF_THRESHOLD || n < MIN_NEIGHBORS ||
+          // ignore new points on side 1 immediately after door opens/closes
+          (frames_since_door_open < 3 && SIDE(sp) == door_side) ||
+          (frames_since_door_open < 5 && door_state != DOOR_OPEN)) continue;
 
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
@@ -1014,49 +1040,9 @@ void processSensor() {
           ((SIDE1(sp) && pointsBelow(sp) >= 4) || (SIDE2(sp) && pointsAbove(sp) >= 4)))
         continue;
 
-      if (!retroMatched && pointInMiddle(sp)) {
-        bool nobodyOnBoard = false;
-        if (past_total_masses > 0) {
-          for (uint8_t j=0; j<MAX_PEOPLE; j++) {
-            Person p = known_people[j];
-            if (p.real() && p.past_conf > 0.8 &&
-                (p.count > 1 || pointOnEdge(p.past_position)) &&
-                p.confidence > 0.8 && p.fgm() > (FOREGROUND_GRADIENT + 0.1)) {
-              // there's already a person in the middle of the grid
-              // so it's unlikely a new valid person just appeared in the middle
-              // (person can't be running and door wasn't closed)
-              nobodyOnBoard = false;
-              if (SIDE1(sp)) {
-                if (AXIS(p.past_position) >= AXIS(sp)) {
-                  nobodyInFront = false;
-                  break;
-                }
-              } else if (AXIS(p.past_position) <= AXIS(sp)) {
-                nobodyInFront = false;
-                break;
-              }
-            }
-          }
-        }
-
-        // if point has mid confidence with nobody ahead...
-        if (nobodyInFront && an > 0.6 && doorOpenedAgo(4) &&
-            // and it is in row 5, allow it (door just opened)
-            (AXIS(sp) == (GRID_EXTENT/2 + 1) || (nobodyOnBoard && an > 0.9 &&
-              // or row 4 if person was already through door by the sensor registered it
-              AXIS(sp) == (GRID_EXTENT/2) && PIXEL_ACTIVE(sp+GRID_EXTENT)))) {
-          retroMatched = true;
-          sp += GRID_EXTENT;
-        }
-      }
-
-      // ignore new points on side 1 immediately after door opens/closes
-      if ((frames_since_door_open < 3 && SIDE1(sp)) ||
-          (frames_since_door_open < 5 && door_state != DOOR_OPEN)) continue;
-
       // ignore new points that showed up in middle 2 rows of grid
-      if (retroMatched || pointOnSmallBorder(sp) || pointOnLRBorder(sp) ||
-          norm_pixels[points[i]] > 0.6) {
+      if (retroMatched || norm_pixels[points[i]] > 0.6 || pointOnSmallBorder(sp) ||
+          pointOnLRBorder(sp)) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
           if (!known_people[j].real()) {
