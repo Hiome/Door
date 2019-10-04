@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.3"
+#define FIRMWARE_VERSION        "V0.7.4"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -570,59 +570,19 @@ bool normalizePixels() {
 }
 
 uint8_t findCurrentPoints(uint8_t *points) {
-  // sort pixels by confidence to find peaks
+  // sort pixels by confidence
   uint8_t ordered_indexes_temp[AMG88xx_PIXEL_ARRAY_SIZE];
   uint8_t active_pixel_count = 0;
-  // sort by confidence
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     if (PIXEL_ACTIVE(i)) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
-        if (pos_pixels[i] == pos_pixels[ordered_indexes_temp[j]] &&
-            abs(norm_pixels[i] - norm_pixels[ordered_indexes_temp[j]]) < 0.2) {
-          float d1 = 100;
-          float d2 = 100;
-          for (uint8_t x=0; x<j; x++) {
-            if (pos_pixels[i] != pos_pixels[ordered_indexes_temp[x]]) continue;
-            d1 = euclidean_distance(i, ordered_indexes_temp[x]);
-            d2 = euclidean_distance(ordered_indexes_temp[j], ordered_indexes_temp[x]);
-            if (d1 < MIN_DISTANCE_FRD || d2 < MIN_DISTANCE_FRD) break;
-          }
-          if (d1 < MIN_DISTANCE || d2 < MIN_DISTANCE) {
-            // pick point closer to a known peak
-            added = d1 < d2;
-          } else {
-            // prefer point closer to middle of grid
-            uint8_t edge1 = AXIS(i);
-            uint8_t edge2 = AXIS(ordered_indexes_temp[j]);
-
-            // use columns instead of rows if same row
-            if (edge1 == edge2) {
-              edge1 = NOT_AXIS(i);
-              edge2 = NOT_AXIS(ordered_indexes_temp[j]);
-            }
-
-            // calculate row # from opposite edge
-            if (edge1 > 4) edge1 = GRID_EXTENT+1 - edge1;
-            if (edge2 > 4) edge2 = GRID_EXTENT+1 - edge2;
-
-            added = edge1 > edge2;
-          }
-          if (added && norm_pixels[i] < norm_pixels[ordered_indexes_temp[j]]) {
-            norm_pixels[i] = norm_pixels[ordered_indexes_temp[j]];
-          } else if (!added && norm_pixels[ordered_indexes_temp[j]] < norm_pixels[i]) {
-            norm_pixels[ordered_indexes_temp[j]] = norm_pixels[i];
-          }
-        } else if (norm_pixels[i] > norm_pixels[ordered_indexes_temp[j]]) {
-          added = true;
-        }
-
-        if (added) {
-          // insert point i in front of j
+        if (norm_pixels[i] > norm_pixels[ordered_indexes_temp[j]]) {
           for (int8_t x=active_pixel_count; x>j; x--) {
             ordered_indexes_temp[x] = ordered_indexes_temp[x-1];
           }
           ordered_indexes_temp[j] = i;
+          added = true;
           break;
         }
       }
@@ -634,12 +594,80 @@ uint8_t findCurrentPoints(uint8_t *points) {
     }
   }
 
-  // reorder based on peaks
+  // reorder based on position
   uint8_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
+  for (uint8_t z=0; z<active_pixel_count; z++) {
+    uint8_t i = ordered_indexes_temp[z];
+    bool added = false;
+    for (uint8_t j=0; j<z; j++) {
+      if (pos_pixels[i] == pos_pixels[ordered_indexes[j]] &&
+          abs(norm_pixels[i] - norm_pixels[ordered_indexes[j]]) < 0.15) {
+        float d1 = 100;
+        float d2 = 100;
+        for (uint8_t x=0; x<j; x++) {
+          if (pos_pixels[i] != pos_pixels[ordered_indexes[x]]) continue;
+          d1 = euclidean_distance(i, ordered_indexes[x]);
+          d2 = euclidean_distance(ordered_indexes[j], ordered_indexes[x]);
+          if (d1 < MIN_DISTANCE || d2 < MIN_DISTANCE) break;
+        }
+        if (d1 < MIN_DISTANCE || d2 < MIN_DISTANCE) {
+          // pick point closer to a previous peak
+          added = d1 < d2;
+        } else {
+          // prefer point closer to middle of grid
+          uint8_t edge1 = AXIS(i);
+          uint8_t edge2 = AXIS(ordered_indexes[j]);
+
+          // use columns instead of rows if same row
+          if (edge1 == edge2) {
+            edge1 = NOT_AXIS(i);
+            edge2 = NOT_AXIS(ordered_indexes[j]);
+          }
+
+          // calculate row # from opposite edge
+          if (edge1 > 4) edge1 = GRID_EXTENT+1 - edge1;
+          if (edge2 > 4) edge2 = GRID_EXTENT+1 - edge2;
+
+          if (edge1 == edge2 && edge1 == 4 && SIDE(i) != SIDE(ordered_indexes[j])) {
+            // we're debating between 2 points on either side of border. Normally
+            // we'd just prefer the one on side1, but this can cause a messy flip-flopping
+            // between sides, so let's prefer the side that the point was already on
+            for (uint8_t x=0; x<MAX_PEOPLE; x++) {
+              if (known_people[x].real() && known_people[x].positive == pos_pixels[i] &&
+                    euclidean_distance(i, known_people[x].past_position) < MIN_DISTANCE) {
+                if (SIDE(i) == known_people[x].side()) edge1++;
+                break;
+              }
+            }
+          }
+
+          added = edge1 > edge2;
+        }
+        if (added && norm_pixels[i] < norm_pixels[ordered_indexes[j]]) {
+          norm_pixels[i] = norm_pixels[ordered_indexes[j]];
+        }
+      }
+
+      if (added) {
+        // insert point i in front of j
+        for (int8_t x=z; x>j; x--) {
+          ordered_indexes[x] = ordered_indexes[x-1];
+        }
+        ordered_indexes[j] = i;
+        break;
+      }
+    }
+    if (!added) {
+      // append i to end of array
+      ordered_indexes[z] = i;
+    }
+  }
+
+  // reorder based on blob boundaries
   uint8_t sorted_size = 0;
   uint8_t total_masses = 0;
   for (uint8_t y=0; y<active_pixel_count; y++) {
-    uint8_t current_point = ordered_indexes_temp[y];
+    uint8_t current_point = ordered_indexes[y];
     if (current_point == UNDEF_POINT) continue;
 
     bool addMe = true;
@@ -652,7 +680,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
     }
     if (addMe) {
       for (uint8_t x=1; x<sorted_size; x++) {
-        if (euclidean_distance(ordered_indexes[x], current_point) < MIN_DISTANCE_FRD) {
+        if (euclidean_distance(ordered_indexes_temp[x], current_point) < MIN_DISTANCE_FRD) {
           // point too close to edge of known blob
           addMe = false;
           break;
@@ -665,29 +693,30 @@ uint8_t findCurrentPoints(uint8_t *points) {
       if (total_masses == MAX_PEOPLE) break;
     }
 
-    ordered_indexes[sorted_size] = current_point;
+    ordered_indexes_temp[sorted_size] = current_point;
     sorted_size++;
-    ordered_indexes_temp[y] = UNDEF_POINT;
+    ordered_indexes[y] = UNDEF_POINT;
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
       // since MIN_DISTANCE_FRD == 1.5, we know we can only be adding neighbors
       // so we can stop looking once we've hit this point's max possible neighbors
       uint8_t added = 0;
       uint8_t max_added = 8;
-      bool onYEdge = pointOnEdge(ordered_indexes[x]);
-      bool onXEdge = pointOnLREdge(ordered_indexes[x]);
+      bool onYEdge = pointOnEdge(ordered_indexes_temp[x]);
+      bool onXEdge = pointOnLREdge(ordered_indexes_temp[x]);
       if (onYEdge || onXEdge) {
         max_added = (onYEdge && onXEdge) ? 3 : 5;
       }
 
-      bool blobEdge = norm_pixels[current_point] - norm_pixels[ordered_indexes[x]] > 0.5;
+      bool blobEdge = norm_pixels[current_point] - norm_pixels[ordered_indexes_temp[x]] >0.5;
 
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
-        uint8_t i = ordered_indexes_temp[k];
+        uint8_t i = ordered_indexes[k];
         if (i != UNDEF_POINT && pos_pixels[i] == pos_pixels[current_point] &&
-              euclidean_distance(i, ordered_indexes[x]) < MIN_DISTANCE_FRD) {
-          if (blobEdge && norm_pixels[i] - norm_pixels[ordered_indexes[x]] > 0.1) continue;
-          ordered_indexes[sorted_size] = i;
-          ordered_indexes_temp[k] = UNDEF_POINT;
+              euclidean_distance(i, ordered_indexes_temp[x]) < MIN_DISTANCE_FRD) {
+          if (blobEdge && norm_pixels[i] - norm_pixels[ordered_indexes_temp[x]] > 0.1)
+            continue;
+          ordered_indexes_temp[sorted_size] = i;
+          ordered_indexes[k] = UNDEF_POINT;
           sorted_size++;
           added++;
           if (added == max_added) break;
