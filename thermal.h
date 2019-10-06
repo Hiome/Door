@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.4"
+#define FIRMWARE_VERSION        "V0.7.5"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -18,9 +18,7 @@
 #define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
 #define BACKGROUND_GRADIENT     2.0
 #define FOREGROUND_GRADIENT     2.0
-#define T_THRESHOLD             0.5  // min change for a pixel to be considered
-#define MIN_NEIGHBORS           2    // min size of halo effect to consider a point legit
-#define NUM_STD_DEV             2.0  // max num of std dev to include in trimmed average
+#define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
 #define MIN_TRAVEL_RATIO        0.2
 
 #include <Adafruit_AMG88xx.h>
@@ -95,10 +93,6 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 
 uint8_t SIDE(uint8_t p) {
   return SIDE1(p) ? 1 : 2;
-}
-
-bool MAHALANBOIS(uint8_t x) {
-  return norm_pixels[(x)]-bgPixel(x) >= T_THRESHOLD;
 }
 
 // check if point is on the top or bottom edges
@@ -207,7 +201,8 @@ typedef struct Person {
     else if (eventType == MAYBE_REVERT)
       sprintf(rBuf, "e%d", crossed);
     char wBuf[30];
-    sprintf(wBuf, "%dx%dx%dx%dx%dx%dx%dx%d",
+    sprintf(wBuf, "%s%dx%dx%dx%dx%dx%dx%dx%d",
+      positive ? "+" : "-",
       int(past_conf*100.0),
       int(global_bgm*100.0),
       int(global_fgm*100.0),
@@ -311,10 +306,10 @@ typedef struct Person {
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
   bool publishMaybeEvent() {
-    if (!real() || confidence < AVG_CONF_THRESHOLD || history < 2) return false;
+    if (!real() || confidence < AVG_CONF_THRESHOLD || history < 2 ||
+          max_distance_covered < 2) return false;
     
-    if (starting_side() != side() && (!crossed || !reverted) && history >= MIN_HISTORY
-        && avg_neighbors() > MIN_NEIGHBORS) {
+    if (starting_side() != side() && (!crossed || !reverted) && history >= MIN_HISTORY) {
       if (SIDE(starting_position) == door_side && checkForDoorClose()) {
         publishPacket(DOOR_CLOSE_EVENT);
         return true;
@@ -342,8 +337,7 @@ void publishEvents() {
     Person p = known_people[i];
     if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
         p.confidence > AVG_CONF_THRESHOLD && p.max_distance_covered >= MIN_DISTANCE &&
-        p.history >= int(roundf(6.3 - p.confidence*MIN_HISTORY)) &&
-        p.avg_neighbors() > MIN_NEIGHBORS) {
+        p.history >= int(roundf(6.3 - p.confidence*MIN_HISTORY))) {
       p.publishPacket(FRD_EVENT);
       known_people[i] = p; // update known_people array
     }
@@ -417,6 +411,18 @@ bool pixelsChanged() {
   }
 }
 
+bool recheckPoint(uint8_t x, uint8_t i) {
+  if (pos_pixels[(x)] == pos_pixels[i]) {
+    if (norm_pixels[(x)] > CONFIDENCE_THRESHOLD) neighbors_count[i]++;
+    return false;
+  } else if (norm_pixels[(x)]/norm_pixels[i] > 0.5) {
+    SERIAL_PRINT("kill ");
+    SERIAL_PRINTLN(i);
+    return true;
+  }
+  return false;
+}
+
 bool normalizePixels() {
   if (!pixelsChanged()) return false;
 
@@ -440,25 +446,7 @@ bool normalizePixels() {
       sq_sum2 += sq(norm_pixels[i]);
     }
 
-    uint8_t neighbors = 0;
-    if (MAHALANBOIS(i)) {
-      if (i >= GRID_EXTENT) {
-        // not top row
-        if (MAHALANBOIS(i - GRID_EXTENT)) neighbors++;
-        if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-(GRID_EXTENT+1))) neighbors++;
-        if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i-(GRID_EXTENT-1))) neighbors++;
-      }
-      if (i < GRID_EXTENT*7) {
-        // not bottom row
-        if (MAHALANBOIS(i + GRID_EXTENT)) neighbors++;
-        if (NOT_AXIS(i) > 1 && MAHALANBOIS(i+(GRID_EXTENT-1))) neighbors++;
-        if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+(GRID_EXTENT+1))) neighbors++;
-      }
-      if (NOT_AXIS(i) > 1 && MAHALANBOIS(i-1)) neighbors++;
-      if (NOT_AXIS(i) < GRID_EXTENT && MAHALANBOIS(i+1)) neighbors++;
-    }
-
-    neighbors_count[i] = neighbors;
+    neighbors_count[i] = 1;
   }
 
   // calculate trimmed average
@@ -483,34 +471,34 @@ bool normalizePixels() {
   float fgm1 = FOREGROUND_GRADIENT;
   float fgm2 = FOREGROUND_GRADIENT;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (neighbors_count[i] > 1) {
-      // difference in points from foreground
-      float fgmt1 = abs(norm_pixels[i] - cavg1);
-      float fgmt2 = abs(norm_pixels[i] - cavg2);
-      if (fgmt1 < fgmt2) {
-        fgm1 = max(fgmt1, fgm1);
-      } else {
-        fgm2 = max(fgmt2, fgm2);
-      }
+    // difference in points from foreground
+    float fgmt1 = abs(norm_pixels[i] - cavg1);
+    float fgmt2 = abs(norm_pixels[i] - cavg2);
+    if (fgmt1 < fgmt2) {
+      fgm1 = max(fgmt1, fgm1);
+    } else {
+      fgm2 = max(fgmt2, fgm2);
     }
   }
 
   global_fgm = max(fgm1, fgm2);
   global_bgm = BACKGROUND_GRADIENT;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (neighbors_count[i] > 1) {
-      float fgmt1 = (norm_pixels[i] - cavg1)/fgm1;
-      fgmt1 = abs(fgmt1);
-      float fgmt2 = (norm_pixels[i] - cavg2)/fgm2;
-      fgmt2 = abs(fgmt2);
-      // pick the smaller of the 2 foreground gradients
-      if (min(fgmt1, fgmt2) < CONFIDENCE_THRESHOLD) {
-        neighbors_count[i] = 0;
-      } else {
-        // difference in points from background
-        float bgmt = abs(norm_pixels[i] - bgPixel(i));
-        global_bgm = max(bgmt, global_bgm);
-      }
+    float fgmt1 = abs(norm_pixels[i] - cavg1);
+    float fgmt2 = abs(norm_pixels[i] - cavg2);
+    if (fgmt1 < fgmt2) {
+      fgmt1 /= fgm1;
+    } else {
+      fgmt1 = fgmt2/fgm2;
+    }
+    // pick the smaller of the 2 foreground gradients
+    if (fgmt1 < CONFIDENCE_THRESHOLD) {
+      neighbors_count[i] = 0;
+    } else {
+      // difference in points from background
+      float bgmt = norm_pixels[i] - bgPixel(i);
+      bgmt = abs(bgmt);
+      global_bgm = max(bgmt, global_bgm);
     }
   }
 
@@ -518,25 +506,24 @@ bool normalizePixels() {
     float std = norm_pixels[i] - bgPixel(i);
 
     // normalize points
-    if (neighbors_count[i] <= 1) {
-      norm_pixels[i] = 0.0;
-      pos_pixels[i] = false;
+    float bgmt = std/global_bgm;
+    float fgmt1 = norm_pixels[i] - cavg1;
+    float fgmta1 = abs(fgmt1);
+    float fgmt2 = norm_pixels[i] - cavg2;
+    float fgmta2 = abs(fgmt2);
+    if (fgmta1 < fgmta2) {
+      fgmt1 /= fgm1;
+      fgmta1 /= fgm1;
     } else {
-      float fgmt1 = (norm_pixels[i] - cavg1)/fgm1;
-      float fgmta1 = abs(fgmt1);
-      float fgmt2 = (norm_pixels[i] - cavg2)/fgm2;
-      float fgmta2 = abs(fgmt2);
-      // pick the smaller of the 2 foreground gradients
-      if (fgmta1 > fgmta2) fgmt1 = fgmt2;
-      float bgmt = std/global_bgm;
+      fgmt1 = fgmt2/fgm2;
+      fgmta1 = fgmta2/fgm2;
+    }
 
-      if (fgmta1 < abs(bgmt)) {
-        norm_pixels[i] = min(fgmta1, 1);
-        pos_pixels[i] = fgmt1 >= 0;
-      } else {
-        norm_pixels[i] = abs(bgmt);
-        pos_pixels[i] = bgmt >= 0;
-      }
+    pos_pixels[i] = fgmt1 >= 0;
+    if (fgmta1 < abs(bgmt)) {
+      norm_pixels[i] = fgmta1;
+    } else {
+      norm_pixels[i] = abs(bgmt);
     }
 
     // update average baseline
@@ -564,6 +551,63 @@ bool normalizePixels() {
       std *= 5.0;
     }
     avg_pixels[i] += ((int)roundf(std));
+  }
+
+  bool killList[AMG88xx_PIXEL_ARRAY_SIZE];
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    if (norm_pixels[i] < CONFIDENCE_THRESHOLD || !neighbors_count[i]) {
+      killList[i] = true;
+      continue;
+    }
+
+    neighbors_count[i] = 0;
+
+    if (i >= GRID_EXTENT) {
+      // not top row
+      if (recheckPoint(i - GRID_EXTENT, i)) {
+        killList[i] = true;
+        continue;
+      }
+      if (NOT_AXIS(i) > 1 && recheckPoint(i-(GRID_EXTENT+1), i)) {
+        killList[i] = true;
+        continue;
+      }
+      if (NOT_AXIS(i) < GRID_EXTENT && recheckPoint(i-(GRID_EXTENT-1), i)) {
+        killList[i] = true;
+        continue;
+      }
+    }
+    if (i < GRID_EXTENT*7) {
+      // not bottom row
+      if (recheckPoint(i + GRID_EXTENT, i)) {
+        killList[i] = true;
+        continue;
+      }
+      if (NOT_AXIS(i) > 1 && recheckPoint(i+(GRID_EXTENT-1), i)) {
+        killList[i] = true;
+        continue;
+      }
+      if (NOT_AXIS(i) < GRID_EXTENT && recheckPoint(i+(GRID_EXTENT+1), i)) {
+        killList[i] = true;
+        continue;
+      }
+    }
+    if (NOT_AXIS(i) > 1 && recheckPoint(i-1, i)) {
+      killList[i] = true;
+      continue;
+    }
+    if (NOT_AXIS(i) < GRID_EXTENT && recheckPoint(i+1, i)) {
+      killList[i] = true;
+      continue;
+    }
+
+    killList[i] = false;
+  }
+
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    if (killList[i]) {
+      norm_pixels[i] = 0.0;
+    }
   }
 
   return true;
@@ -769,7 +813,7 @@ bool remember_person(Person p, uint8_t point, uint16_t &h, uint8_t &sp, uint8_t 
     }
 
     sp = p.starting_position;
-    h = point == sp ? 1 : min(p.history, MIN_HISTORY);
+    h = point == sp ? 1 : min(p.history, MIN_HISTORY-1);
     cross = p.crossed;
     revert = p.reverted;
     an += p.confidence;
@@ -846,7 +890,9 @@ void processSensor() {
             p.starting_side() != p.side()) {
           // gradient is still roughly similar or point never made it to end zone anyway,
           // so we'll tolerate a significant drop
-          float max_distance = MAX_DISTANCE + p.confidence * DISTANCE_BONUS;
+          float anei = p.avg_neighbors();
+          float max_distance = min(anei+MIN_DISTANCE_FRD, MAX_DISTANCE) +
+                                p.confidence * min(anei+1, DISTANCE_BONUS);
           float min_score = 100;
           for (uint8_t j=0; j<total_masses; j++) {
             float c = norm_pixels[points[j]] * scale_factor;
@@ -878,12 +924,20 @@ void processSensor() {
               else if (SIDE1(p.starting_position)) {
                 if (p.crossed) {
                   if (np_axis < sp_axis) directionBonus = 0.1;
-                } else if (np_axis > sp_axis) directionBonus = 0.1;
+                } else if (np_axis > sp_axis) {
+                  directionBonus = 0.1;
+                }
               } else { // side 2
                 if (p.crossed) {
                   if (np_axis > sp_axis) directionBonus = 0.1;
-                } else if (np_axis < sp_axis) directionBonus = 0.1;
+                } else if (np_axis < sp_axis) {
+                  directionBonus = 0.1;
+                }
               }
+              if (!p.crossed || (!inEndZone(p.past_position) && !inEndZone(points[j]))) {
+                if (neighbors_count[points[j]] >= anei) directionBonus += 0.2;
+              }
+
               float score = sq(d/max_distance) - ratioP - directionBonus +
                                 max(AVG_CONF_THRESHOLD - c, 0.0);
               if (min_score - score > 0.05) {
@@ -949,6 +1003,9 @@ void processSensor() {
               else if (SIDE1(p.starting_position)) {
                 if (AXIS(points[i]) > AXIS(p.past_position)) directionBonus = 1.0;
               } else if (AXIS(points[i]) < AXIS(p.past_position)) directionBonus = 1.0;
+            }
+            if (!p.crossed || (!inEndZone(p.past_position) && !inEndZone(points[i]))) {
+              if (neighbors_count[points[i]] >= p.avg_neighbors()) directionBonus += 0.5;
             }
             float td = p.totalDistance();
             if (td < 1) {
@@ -1061,7 +1118,7 @@ void processSensor() {
       uint8_t c = 1;
       bool retroMatched = false;
 
-      if (an <= AVG_CONF_THRESHOLD || n < MIN_NEIGHBORS) continue;
+      if (an <= AVG_CONF_THRESHOLD) continue;
 
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
@@ -1191,15 +1248,22 @@ void processSensor() {
       // print chart of what we saw in 8x8 grid
       for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
         SERIAL_PRINT(F(" "));
-        if (norm_pixels[idx] < CONFIDENCE_THRESHOLD)
-          SERIAL_PRINT(F("-----"));
-        else {
-          SERIAL_PRINT(pos_pixels[idx] ? '+' : '-');
+        SERIAL_PRINT(pos_pixels[idx] ? '+' : '-');
+        if (norm_pixels[idx] < CONFIDENCE_THRESHOLD) {
+          SERIAL_PRINT(F("----"));
+        } else {
           SERIAL_PRINT(norm_pixels[idx]);
         }
         SERIAL_PRINT(F(" "));
         if (x(idx) == GRID_EXTENT) SERIAL_PRINTLN();
       }
+//      SERIAL_PRINTLN("avg");
+//      for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
+//        SERIAL_PRINT(F(" "));
+//        SERIAL_PRINT(avg_pixels[idx]);
+//        SERIAL_PRINT(F(" "));
+//        if (x(idx) == GRID_EXTENT) SERIAL_PRINTLN();
+//      }
       SERIAL_PRINTLN();
       SERIAL_FLUSH;
     }
