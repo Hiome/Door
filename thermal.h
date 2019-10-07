@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.5"
+#define FIRMWARE_VERSION        "V0.7.6"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -14,8 +14,8 @@
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
 #define MAX_CLEARED_CYCLES      10   // max number of cycles before we assume frame is empty
-#define CONFIDENCE_THRESHOLD    0.2  // consider a point if we're 20% confident
-#define AVG_CONF_THRESHOLD      0.3  // consider a set of points if we're 30% confident
+#define CONFIDENCE_THRESHOLD    0.3  // consider a point if we're 30% confident
+#define AVG_CONF_THRESHOLD      0.4  // consider a set of points if we're 40% confident
 #define BACKGROUND_GRADIENT     2.0
 #define FOREGROUND_GRADIENT     2.0
 #define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
@@ -158,6 +158,24 @@ uint8_t readDoorState() {
       return DOOR_CLOSED;
     }
   #endif
+}
+
+uint8_t pointsAbove(uint8_t i) {
+  uint8_t height = 0;
+  for (uint8_t x = i - GRID_EXTENT; x > 0; x -= GRID_EXTENT) {
+    if (norm_pixels[x] > CONFIDENCE_THRESHOLD) height++;
+    else break;
+  }
+  return height;
+}
+
+uint8_t pointsBelow(uint8_t i) {
+  uint8_t height = 0;
+  for (uint8_t x = i + GRID_EXTENT; x < AMG88xx_PIXEL_ARRAY_SIZE; x += GRID_EXTENT) {
+    if (norm_pixels[x] > CONFIDENCE_THRESHOLD) height++;
+    else break;
+  }
+  return height;
 }
 
 typedef struct Person {
@@ -415,7 +433,7 @@ bool recheckPoint(uint8_t x, uint8_t i) {
   if (pos_pixels[(x)] == pos_pixels[i]) {
     if (norm_pixels[(x)] > CONFIDENCE_THRESHOLD) neighbors_count[i]++;
     return false;
-  } else if (norm_pixels[(x)]/norm_pixels[i] > 0.5) {
+  } else if (norm_pixels[(x)] > norm_pixels[i]) {
     SERIAL_PRINT("kill ");
     SERIAL_PRINTLN(i);
     return true;
@@ -531,8 +549,8 @@ bool normalizePixels() {
     if (frames_since_door_open < 5 &&
         ((door_state == DOOR_OPEN && norm_pixels[i] < CONFIDENCE_THRESHOLD) ||
          (door_state != DOOR_OPEN && norm_pixels[i] < 0.6))) {
-      // door just changed, increase alpha to 0.2 to adjust quickly to new background
-      std *= 200.0;
+      // door just changed, increase alpha to 0.1 to adjust quickly to new background
+      std *= 100.0;
     } else if (norm_pixels[i] > 0.5) {
       // looks like a person, lower alpha to 0.0001
       std *= 0.1;
@@ -657,6 +675,9 @@ uint8_t findCurrentPoints(uint8_t *points) {
         if (d1 < MIN_DISTANCE || d2 < MIN_DISTANCE) {
           // pick point closer to a previous peak
           added = d1 < d2;
+        } else if (neighbors_count[i] != neighbors_count[ordered_indexes[j]]) {
+          // prefer the point that's more in middle of blob
+          added = neighbors_count[i] > neighbors_count[ordered_indexes[j]];
         } else {
           // prefer point closer to middle of grid
           uint8_t edge1 = AXIS(i);
@@ -714,24 +735,30 @@ uint8_t findCurrentPoints(uint8_t *points) {
     uint8_t current_point = ordered_indexes[y];
     if (current_point == UNDEF_POINT) continue;
 
-    bool addMe = true;
-    for (uint8_t x=0; x<total_masses; x++) {
-      if (euclidean_distance(points[x], current_point) < MIN_DISTANCE) {
-        // point too close to a known peak
-        addMe = false;
-        break;
-      }
-    }
-    if (addMe) {
-      for (uint8_t x=1; x<sorted_size; x++) {
-        if (euclidean_distance(ordered_indexes_temp[x], current_point) < MIN_DISTANCE_FRD) {
-          // point too close to edge of known blob
-          addMe = false;
-          break;
+    if (neighbors_count[current_point] <= 2 &&
+          ((SIDE1(current_point) && pointsBelow(current_point) >= 4) ||
+          (SIDE2(current_point) && pointsAbove(current_point) >= 4))) {
+      // this looks like a hand, do nothing
+      ordered_indexes[y] = UNDEF_POINT;
+
+      if (neighbors_count[current_point] > 1) {
+        // delete the extra neighboring point too, lest it become a point
+        for (uint8_t k=y+1; k<active_pixel_count; k++) {
+          uint8_t i = ordered_indexes[k];
+          if (i == UNDEF_POINT) continue;
+          // ignore wrist of hand
+          if (SIDE1(current_point)) {
+            if (i == current_point + GRID_EXTENT) continue;
+          } else if (i == current_point - GRID_EXTENT) continue;
+          if (pos_pixels[i] == pos_pixels[current_point] &&
+                euclidean_distance(i, current_point) < MIN_DISTANCE_FRD) {
+            ordered_indexes[k] = UNDEF_POINT;
+            break;
+          }
         }
       }
-    }
-    if (addMe) {
+      continue;
+    } else {
       points[total_masses] = current_point;
       total_masses++;
       if (total_masses == MAX_PEOPLE) break;
@@ -741,29 +768,24 @@ uint8_t findCurrentPoints(uint8_t *points) {
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
-      // since MIN_DISTANCE_FRD == 1.5, we know we can only be adding neighbors
-      // so we can stop looking once we've hit this point's max possible neighbors
-      uint8_t added = 0;
-      uint8_t max_added = 8;
-      bool onYEdge = pointOnEdge(ordered_indexes_temp[x]);
-      bool onXEdge = pointOnLREdge(ordered_indexes_temp[x]);
-      if (onYEdge || onXEdge) {
-        max_added = (onYEdge && onXEdge) ? 3 : 5;
-      }
+      if (neighbors_count[ordered_indexes_temp[x]] == 0) continue;
 
+      uint8_t added = 0;
       bool blobEdge = norm_pixels[current_point] - norm_pixels[ordered_indexes_temp[x]] >0.5;
 
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
         uint8_t i = ordered_indexes[k];
         if (i != UNDEF_POINT && pos_pixels[i] == pos_pixels[current_point] &&
               euclidean_distance(i, ordered_indexes_temp[x]) < MIN_DISTANCE_FRD) {
-          if (blobEdge && norm_pixels[i] - norm_pixels[ordered_indexes_temp[x]] > 0.1)
-            continue;
-          ordered_indexes_temp[sorted_size] = i;
-          ordered_indexes[k] = UNDEF_POINT;
-          sorted_size++;
+          if (blobEdge && norm_pixels[i] - norm_pixels[ordered_indexes_temp[x]] > 0.1) {
+            // do nothing
+          } else {
+            ordered_indexes_temp[sorted_size] = i;
+            ordered_indexes[k] = UNDEF_POINT;
+            sorted_size++;
+          }
           added++;
-          if (added == max_added) break;
+          if (added == neighbors_count[ordered_indexes_temp[x]]) break;
         }
       }
     }
@@ -789,26 +811,15 @@ bool remember_person(Person p, uint8_t point, uint16_t &h, uint8_t &sp, uint8_t 
                       bool &revert, float &an, bool &pos, float &b, float &f, uint16_t &n,
                       uint8_t &c) {
   if (p.real() && pos == p.positive) {
-    float scale_factor = 1.0;
-    float past_bgm = p.bgm();
-    if (global_bgm < past_bgm) {
-      scale_factor = global_bgm/past_bgm;
-    }
-    if (p.crossed && scale_factor < 0.7 && inEndZone(p.past_position) &&
-        p.starting_side() == p.side()) {
-      // significant drop in gradient and point made it to end zone, point likely left
-      return false;
-    }
-    float adjusted_conf = an * scale_factor;
     // point cannot be more than 2x warmer than forgotten point
-    if ((p.confidence < adjusted_conf && p.confidence * 2.0 < adjusted_conf) ||
-        (adjusted_conf < p.confidence && adjusted_conf * 2.0 < p.confidence)) {
+    if ((p.confidence < an && p.confidence * 2.0 < an) ||
+        (an < p.confidence && an * 2.0 < p.confidence)) {
       return false;
     }
     // if switching sides with low confidence or moving too far, don't pair
     float d = euclidean_distance(p.past_position, point);
     if (d >= MAX_DISTANCE || (SIDE(point) != p.side() &&
-        (p.confidence < AVG_CONF_THRESHOLD || adjusted_conf/d < MIN_TRAVEL_RATIO))) {
+        (p.confidence < AVG_CONF_THRESHOLD || an/d < MIN_TRAVEL_RATIO))) {
       return false;
     }
 
@@ -817,31 +828,13 @@ bool remember_person(Person p, uint8_t point, uint16_t &h, uint8_t &sp, uint8_t 
     cross = p.crossed;
     revert = p.reverted;
     an += p.confidence;
-    b += past_bgm;
+    b += p.bgm();
     f += p.fgm();
     n += int(p.avg_neighbors());
     c++;
     return true;
   }
   return false;
-}
-
-uint8_t pointsAbove(uint8_t i) {
-  uint8_t height = 0;
-  for (uint8_t x = i - GRID_EXTENT; x > 0; x -= GRID_EXTENT) {
-    if (norm_pixels[x] > CONFIDENCE_THRESHOLD) height++;
-    else break;
-  }
-  return height;
-}
-
-uint8_t pointsBelow(uint8_t i) {
-  uint8_t height = 0;
-  for (uint8_t x = i + GRID_EXTENT; x < AMG88xx_PIXEL_ARRAY_SIZE; x += GRID_EXTENT) {
-    if (norm_pixels[x] > CONFIDENCE_THRESHOLD) height++;
-    else break;
-  }
-  return height;
 }
 
 void processSensor() {
@@ -881,85 +874,76 @@ void processSensor() {
       Person p = known_people[idx];
       if (p.real()) {
         uint8_t min_index = UNDEF_POINT;
-        float scale_factor = 1.0;
-        float past_bgm = p.bgm();
-        if (global_bgm < past_bgm) {
-          scale_factor = global_bgm/past_bgm;
-        }
-        if (!p.crossed || scale_factor > 0.7 || !inEndZone(p.past_position) ||
-            p.starting_side() != p.side()) {
-          // gradient is still roughly similar or point never made it to end zone anyway,
-          // so we'll tolerate a significant drop
-          float anei = p.avg_neighbors();
-          float max_distance = min(anei+MIN_DISTANCE_FRD, MAX_DISTANCE) +
-                                p.confidence * min(anei+1, DISTANCE_BONUS);
-          float min_score = 100;
-          for (uint8_t j=0; j<total_masses; j++) {
-            float c = norm_pixels[points[j]] * scale_factor;
-            // if confidence doesn't share same sign
-            if (pos_pixels[points[j]] != p.positive ||
-            // or if more than a 2x difference between these points, don't pair them
-                (c < p.confidence && c * 2.0 < p.confidence) ||
-                (p.confidence < c && p.confidence * 2.0 < c)) {
-              continue;
-            }
-  
-            float d = euclidean_distance(p.past_position, points[j]);
-  
-            // if switching sides with low confidence, don't pair
-            if (SIDE(points[j]) != p.side() &&
-                (p.confidence < AVG_CONF_THRESHOLD ||
-                  norm_pixels[points[j]]/d < MIN_TRAVEL_RATIO)) {
-              continue;
-            }
-  
-            if (d < max_distance) {
-              float ratioP = min(norm_pixels[points[j]]/p.confidence,
-                                 p.confidence/norm_pixels[points[j]]);
-              if (p.crossed) ratioP /= 2.0; // ratio matters less once point is crossed
-              float directionBonus = 0;
-              uint8_t sp_axis = AXIS(p.past_position);
-              uint8_t np_axis = AXIS(points[j]);
-              if (np_axis == sp_axis) directionBonus = 0.05;
-              else if (SIDE1(p.starting_position)) {
-                if (p.crossed) {
-                  if (np_axis < sp_axis) directionBonus = 0.1;
-                } else if (np_axis > sp_axis) {
-                  directionBonus = 0.1;
-                }
-              } else { // side 2
-                if (p.crossed) {
-                  if (np_axis > sp_axis) directionBonus = 0.1;
-                } else if (np_axis < sp_axis) {
-                  directionBonus = 0.1;
-                }
-              }
-              if (!p.crossed || (!inEndZone(p.past_position) && !inEndZone(points[j]))) {
-                if (neighbors_count[points[j]] >= anei) directionBonus += 0.2;
-              }
+        float anei = p.avg_neighbors();
+        float max_distance = MIN_DISTANCE_FRD + min(anei, MIN_DISTANCE_FRD) +
+                              p.confidence * min(anei+1, DISTANCE_BONUS);
+        float min_score = 100;
+        for (uint8_t j=0; j<total_masses; j++) {
+          // if confidence doesn't share same sign
+          if (pos_pixels[points[j]] != p.positive ||
+          // or if more than a 2x difference between these points, don't pair them
+              (norm_pixels[points[j]] < p.confidence &&
+                norm_pixels[points[j]] * 2.0 < p.confidence) ||
+              (p.confidence < norm_pixels[points[j]] &&
+                p.confidence * 2.0 < norm_pixels[points[j]])) {
+            continue;
+          }
 
-              float score = sq(d/max_distance) - ratioP - directionBonus +
-                                max(AVG_CONF_THRESHOLD - c, 0.0);
-              if (min_score - score > 0.05) {
+          float d = euclidean_distance(p.past_position, points[j]);
+
+          // if switching sides with low confidence, don't pair
+          if (SIDE(points[j]) != p.side() &&
+              (p.confidence < AVG_CONF_THRESHOLD ||
+                norm_pixels[points[j]]/d < MIN_TRAVEL_RATIO)) {
+            continue;
+          }
+
+          if (d < max_distance) {
+            float ratioP = min(norm_pixels[points[j]]/p.confidence,
+                               p.confidence/norm_pixels[points[j]]);
+            if (p.crossed) ratioP /= 2.0; // ratio matters less once point is crossed
+            float directionBonus = 0;
+            uint8_t sp_axis = AXIS(p.past_position);
+            uint8_t np_axis = AXIS(points[j]);
+            if (np_axis == sp_axis) directionBonus = 0.05;
+            else if (SIDE1(p.starting_position)) {
+              if (p.crossed) {
+                if (np_axis < sp_axis) directionBonus = 0.1;
+              } else if (np_axis > sp_axis) {
+                directionBonus = 0.1;
+              }
+            } else { // side 2
+              if (p.crossed) {
+                if (np_axis > sp_axis) directionBonus = 0.1;
+              } else if (np_axis < sp_axis) {
+                directionBonus = 0.1;
+              }
+            }
+            if (!p.crossed || (!inEndZone(p.past_position) && !inEndZone(points[j]))) {
+              if (neighbors_count[points[j]] >= anei) directionBonus += 0.2;
+            }
+
+            float score = sq(d/max_distance) - ratioP - directionBonus +
+                              max(AVG_CONF_THRESHOLD - norm_pixels[points[j]], 0.0);
+            if (min_score - score > 0.05) {
+              min_score = score;
+              min_index = j;
+            } else if (min_index != UNDEF_POINT && score - min_score < 0.05) {
+              // score is the same, pick the point that lets this one move farthest
+              bool useJ = false;
+              uint8_t axis1 = AXIS(points[j]);
+              uint8_t axis2 = AXIS(points[min_index]);
+              if (axis1 == axis2) {
+                // points on same axis, choose the one with higher confidence
+                useJ = norm_pixels[points[j]] > norm_pixels[points[min_index]];
+              } else if (p.crossed) {
+                useJ = SIDE1(p.starting_position) ? axis1 < axis2 : axis1 > axis2;
+              } else {
+                useJ = SIDE1(p.starting_position) ? axis1 > axis2 : axis1 < axis2;
+              }
+              if (useJ) {
                 min_score = score;
                 min_index = j;
-              } else if (min_index != UNDEF_POINT && score - min_score < 0.05) {
-                // score is the same, pick the point that lets this one move farthest
-                bool useJ = false;
-                uint8_t axis1 = AXIS(points[j]);
-                uint8_t axis2 = AXIS(points[min_index]);
-                if (axis1 == axis2) {
-                  // points on same axis, choose the one with higher confidence
-                  useJ = norm_pixels[points[j]] > norm_pixels[points[min_index]];
-                } else if (p.crossed) {
-                  useJ = SIDE1(p.starting_position) ? axis1 < axis2 : axis1 > axis2;
-                } else {
-                  useJ = SIDE1(p.starting_position) ? axis1 > axis2 : axis1 < axis2;
-                }
-                if (useJ) {
-                  min_score = score;
-                  min_index = j;
-                }
               }
             }
           }
@@ -1076,12 +1060,12 @@ void processSensor() {
           } else {
             if (p.past_position != points[i]) {
               if (SIDE(points[i]) != p.side()) {
-                if (p.confidence > 0.8 && norm_pixels[points[i]] > 0.8) {
+                if (!p.crossed && p.confidence > 0.8 && norm_pixels[points[i]] > 0.8) {
                   p.history++;
                 } else {
                   // point just crossed threshold, let's reduce its history to force
                   // it to spend another cycle on this side before we count the event
-                  p.history = min(p.history + 1, MIN_HISTORY);
+                  p.history = min(p.history + 1, MIN_HISTORY-1);
                 }
               } else if (points[i] == p.starting_position) {
                 p.history = 1;
@@ -1145,11 +1129,22 @@ void processSensor() {
         }
       }
 
+      if (!retroMatched && an > 0.8 && sp >= GRID_EXTENT*3 && sp < GRID_EXTENT*5) {
+        // if point is right in middle, drag it to the side it appears to be coming from
+        if (SIDE1(sp)) {
+          if (pointsBelow(sp) > pointsAbove(sp)) {
+            sp += GRID_EXTENT;
+            retroMatched = true;
+          }
+        } else if (pointsAbove(sp) > pointsBelow(sp)) {
+          sp -= GRID_EXTENT;
+          retroMatched = true;
+        }
+      }
+
       // ignore new points on side 1 immediately after door opens/closes
       if ((frames_since_door_open < 3 && SIDE(sp) == door_side) ||
-          (frames_since_door_open < 5 && door_state != DOOR_OPEN) ||
-          (!retroMatched &&
-            ((SIDE1(sp) && pointsBelow(sp) >= 4) || (SIDE2(sp) && pointsAbove(sp) >= 4))))
+          (frames_since_door_open < 5 && door_state != DOOR_OPEN))
         continue;
 
       // ignore new points that showed up in middle 2 rows of grid
