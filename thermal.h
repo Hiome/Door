@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.6"
+#define FIRMWARE_VERSION        "V0.7.7"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -162,8 +162,9 @@ uint8_t readDoorState() {
 
 uint8_t pointsAbove(uint8_t i) {
   uint8_t height = 0;
+  bool pos = pos_pixels[i];
   for (uint8_t x = i - GRID_EXTENT; x > 0; x -= GRID_EXTENT) {
-    if (norm_pixels[x] > CONFIDENCE_THRESHOLD) height++;
+    if (pos_pixels[x] == pos && norm_pixels[x] > CONFIDENCE_THRESHOLD) height++;
     else break;
   }
   return height;
@@ -171,8 +172,9 @@ uint8_t pointsAbove(uint8_t i) {
 
 uint8_t pointsBelow(uint8_t i) {
   uint8_t height = 0;
+  bool pos = pos_pixels[i];
   for (uint8_t x = i + GRID_EXTENT; x < AMG88xx_PIXEL_ARRAY_SIZE; x += GRID_EXTENT) {
-    if (norm_pixels[x] > CONFIDENCE_THRESHOLD) height++;
+    if (pos_pixels[x] == pos && norm_pixels[x] > CONFIDENCE_THRESHOLD) height++;
     else break;
   }
   return height;
@@ -436,7 +438,7 @@ bool recheckPoint(uint8_t x, uint8_t i) {
   } else if (norm_pixels[(x)] > norm_pixels[i]) {
     SERIAL_PRINT("kill ");
     SERIAL_PRINTLN(i);
-    return true;
+    return false;
   }
   return false;
 }
@@ -991,12 +993,14 @@ void processSensor() {
             if (!p.crossed || (!inEndZone(p.past_position) && !inEndZone(points[i]))) {
               if (neighbors_count[points[i]] >= p.avg_neighbors()) directionBonus += 0.5;
             }
+            float historyBonus = p.crossed ? 1.0 : p.history / MIN_HISTORY;
             float td = p.totalDistance();
             if (td < 1) {
               if (p.count == 1) td = 1.0;
               else td = 1.0/((float)(p.count - 1));
             }
             score *= td + directionBonus;
+            score *= max(historyBonus, 1.0);
             score *= (1.0 - abs(norm_pixels[points[i]] - p.past_conf));
             score /= max(d, 0.9);
           }
