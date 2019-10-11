@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.8"
+#define FIRMWARE_VERSION        "V0.7.9"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -820,7 +820,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
 void forget_person(uint8_t idx, Person *temp_forgotten_people, uint8_t *pairs,
                     uint8_t &temp_forgotten_num) {
   Person p = known_people[idx];
-  if (p.confidence > 0.5 && ((p.count > (p.forgotten ? 3 : 1) && !p.crossed) ||
+  if (p.confidence > 0.5 && ((p.history > (p.forgotten ? 2 : 1) && !p.crossed) ||
       (p.crossed && p.checkForRevert()))) {
     p.publishMaybeEvent();
     temp_forgotten_people[temp_forgotten_num] = p;
@@ -847,19 +847,15 @@ bool remember_person(Person p, uint8_t point, uint16_t &h, uint8_t &sp, uint8_t 
     }
 
     sp = p.starting_position;
-    if (point == sp) {
+    if ((SIDE1(sp) && AXIS(sp) >= AXIS(mp)) ||
+        (SIDE2(sp) && AXIS(sp) <= AXIS(mp))) {
       h = 1;
-    } else if ((SIDE1(sp) && AXIS(sp) > AXIS(mp)) ||
-        (SIDE2(sp) && AXIS(sp) < AXIS(mp))) {
-      mp = sp;
-      h = 1;
-    } else if ((SIDE1(sp) && AXIS(p.max_position) > AXIS(mp)) ||
-        (SIDE2(sp) && AXIS(p.max_position) < AXIS(mp))) {
-      mp = p.max_position;
-      md = p.max_distance_covered;
-      h = min(p.history, MIN_HISTORY-1);
     } else {
-      md = euclidean_distance(sp, mp);
+      if ((SIDE1(sp) && AXIS(p.max_position) > AXIS(mp)) ||
+          (SIDE2(sp) && AXIS(p.max_position) < AXIS(mp))) {
+        mp = p.max_position;
+      }
+      md = euclidean_distance(sp, point);
       h = min(p.history, MIN_HISTORY-1);
     }
     cross = p.crossed;
