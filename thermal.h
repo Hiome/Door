@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.9"
+#define FIRMWARE_VERSION        "V0.7.10"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -1207,7 +1207,7 @@ void processSensor() {
         continue;
 
       // ignore new points that showed up in middle 2 rows of grid
-      if (retroMatched || norm_pixels[points[i]] > 0.6 || pointOnSmallBorder(sp) ||
+      if (retroMatched || norm_pixels[points[i]] > 0.5 || pointOnSmallBorder(sp) ||
           pointOnLRBorder(sp)) {
         for (uint8_t j=0; j<MAX_PEOPLE; j++) {
           // look for first empty slot in past_points to use
