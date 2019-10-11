@@ -5,7 +5,8 @@
 #define THERMAL
 //#define BED
 
+#define NODEID        5   // unique for each node on same network
+// WARNING MAKE SURE THIS IS SET CORRECTLY OR YOU CAN BRICK DEVICE
 //#define R3
-
-#define NODEID        2   // unique for each node on same network
-#define ENABLE_SERIAL
+//#define RECESSED
+//#define ENABLE_SERIAL
