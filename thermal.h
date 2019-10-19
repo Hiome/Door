@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.12"
+#define FIRMWARE_VERSION        "V0.7.13"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -175,7 +175,7 @@ bool checkRawPos(uint8_t x, uint8_t i) {
 uint8_t pointsAbove(uint8_t i) {
   uint8_t height = 0;
   for (int8_t x = i - GRID_EXTENT; x >= 0; x -= GRID_EXTENT) {
-    if (checkRawPos(x, i) && norm_pixels[x] > CONFIDENCE_THRESHOLD) height++;
+    if (norm_pixels[x] > CONFIDENCE_THRESHOLD && checkRawPos(x, i)) height++;
     else break;
   }
   return height;
@@ -184,7 +184,7 @@ uint8_t pointsAbove(uint8_t i) {
 uint8_t pointsBelow(uint8_t i) {
   uint8_t height = 0;
   for (uint8_t x = i + GRID_EXTENT; x < AMG88xx_PIXEL_ARRAY_SIZE; x += GRID_EXTENT) {
-    if (checkRawPos(x, i) && norm_pixels[x] > CONFIDENCE_THRESHOLD) height++;
+    if (norm_pixels[x] > CONFIDENCE_THRESHOLD && checkRawPos(x, i)) height++;
     else break;
   }
   return height;
@@ -198,11 +198,11 @@ uint8_t calcWidth(uint8_t i) {
   uint8_t width = 0;
   uint8_t axis = AXIS(i);
   for (uint8_t x = i+1; x < AMG88xx_PIXEL_ARRAY_SIZE && AXIS(x) == axis; x++) {
-    if (checkRawPos(x, i) && norm_pixels[x] > CONFIDENCE_THRESHOLD) width++;
+    if (norm_pixels[x] > CONFIDENCE_THRESHOLD && checkRawPos(x, i)) width++;
     else break;
   }
   for (int8_t x = i-1; x >= 0 && AXIS(x) == axis; x--) {
-    if (checkRawPos(x, i) && norm_pixels[x] > CONFIDENCE_THRESHOLD) width++;
+    if (norm_pixels[x] > CONFIDENCE_THRESHOLD && checkRawPos(x, i)) width++;
     else break;
   }
   return width;
@@ -223,6 +223,20 @@ typedef struct Person {
   uint16_t  total_height;
   uint16_t  total_width;
   uint16_t  count;
+
+  void resetIfNecessary() {
+    if (total_neighbors > 60000 || total_height > 60000 ||
+        total_width > 60000 || count > 60000) {
+      history = min(history, MIN_HISTORY);
+      total_conf = confidence();
+      total_bgm = bgm();
+      total_fgm = fgm();
+      total_neighbors = int(neighbors());
+      total_height = int(height());
+      total_width = int(width());
+      count = 1;
+    }
+  };
 
   bool      real() { return past_position != UNDEF_POINT; };
   float     confidence() { return total_conf/((float)count); };
@@ -260,7 +274,7 @@ typedef struct Person {
       int(width()*10.0),
       int(max_distance_covered()*10.0)
     );
-    publish(rBuf, wBuf, RETRY_COUNT);
+    publish(rBuf, wBuf, eventType == REVERT_FRD ? RETRY_COUNT : 0);
   };
 
   bool checkForDoorClose() {
@@ -323,7 +337,7 @@ typedef struct Person {
         int s = past_position - GRID_EXTENT;
         starting_position = max(s, 0);
       } else if (eventType == MAYBE_EVENT) {
-        publish("m1", meta, RETRY_COUNT);
+        publish("m1", meta, 5);
         return;
       } else if (eventType == DOOR_CLOSE_EVENT && door_side == 2) {
         publish("1", meta, RETRY_COUNT);
@@ -335,7 +349,7 @@ typedef struct Person {
         int s = past_position + GRID_EXTENT;
         starting_position = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
       } else if (eventType == MAYBE_EVENT) {
-        publish("m2", meta, RETRY_COUNT);
+        publish("m2", meta, 5);
         return;
       } else if (eventType == DOOR_CLOSE_EVENT && door_side == 1) {
         publish("2", meta, RETRY_COUNT);
@@ -581,17 +595,17 @@ bool normalizePixels() {
     bool pos2 = fgmt2 >= 0;
     if (fgmta1 < fgmta2) {
       fgmta1 /= fgm1;
+      pos_pixels[i] = fgmt1 >= 0 ? POS_SIGN : NEG_SIGN;
     } else {
-      fgmt1 = fgmt2;
       fgmta1 = fgmta2/fgm2;
+      pos_pixels[i] = fgmt2 >= 0 ? POS_SIGN : NEG_SIGN;
     }
 
     if (pos1 != pos2 && abs(fgmt1 + fgmt2) < UNKNOWN_SIGN_BAND) {
       // point is (almost) perfectly in middle of 2 sides
       pos_pixels[i] = UNKNOWN_SIGN;
-    } else {
-      pos_pixels[i] = fgmt1 >= 0 ? POS_SIGN : NEG_SIGN;
     }
+
     norm_pixels[i] = min(fgmta1, bgmt);
 
     // update average baseline
@@ -627,64 +641,36 @@ bool normalizePixels() {
       continue;
     }
 
-    uint8_t possible_neighbors = 0;
     neighbors_count[i] = 0;
 
     if (i >= GRID_EXTENT) {
       // not top row
-      possible_neighbors++;
       recheckPoint(i - GRID_EXTENT, i);
       if (NOT_AXIS(i) > 1) {
-        possible_neighbors++;
         recheckPoint(i-(GRID_EXTENT+1), i);
       }
       if (NOT_AXIS(i) < GRID_EXTENT) {
-        possible_neighbors++;
         recheckPoint(i-(GRID_EXTENT-1), i);
       }
     }
     if (i < GRID_EXTENT*7) {
       // not bottom row
-      possible_neighbors++;
       recheckPoint(i + GRID_EXTENT, i);
       if (NOT_AXIS(i) > 1) {
-        possible_neighbors++;
         recheckPoint(i+(GRID_EXTENT-1), i);
       }
       if (NOT_AXIS(i) < GRID_EXTENT) {
-        possible_neighbors++;
         recheckPoint(i+(GRID_EXTENT+1), i);
       }
     }
     if (NOT_AXIS(i) > 1) {
-      possible_neighbors++;
       recheckPoint(i-1, i);
     }
     if (NOT_AXIS(i) < GRID_EXTENT) {
-      possible_neighbors++;
       recheckPoint(i+1, i);
     }
 
     neighbors_count[i] = max(neighbors_count[i], 0);
-
-    // scale possible noise down (the value of the rest of this block is dubious)
-    // it's my attempt to mitigate the issue that noise can skew fgm and
-    // make real points look less confident. Ideally a better solution would prevent
-    // the fgm skew from happening in the first place earlier in this method.
-    // That is harder and we don't have the memory to do it, so will need to think of a
-    // cleaner solution. For now, let's test this.
-    if (possible_neighbors - neighbors_count[i] < 2) continue;
-    float adj_fgm = norm_pixels[i]*global_fgm - FOREGROUND_GRADIENT;
-    if (adj_fgm > 0) {
-      adj_fgm = min(adj_fgm, possible_neighbors);
-      int8_t diff = int(adj_fgm) - neighbors_count[i];
-      if (diff > 0) {
-        norm_pixels[i] -= (0.1*min(diff, 5));
-        if (norm_pixels[i] < CONFIDENCE_THRESHOLD) {
-          norm_pixels[i] = 0.0;
-        }
-      }
-    }
   }
 
   return true;
@@ -798,7 +784,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
     for (uint8_t x=0; x<total_masses; x++) {
       if (!checkRawPos(points[x], current_point)) continue;
       int8_t nc = max(neighbors_count[points[x]], neighbors_count[current_point]);
-      float distance = nc >= 2 ? MIN_DISTANCE : MIN_DISTANCE_FRD;
+      float distance = nc > 2 ? MIN_DISTANCE : MIN_DISTANCE_FRD;
       if (euclidean_distance(points[x], current_point) < distance) {
         // point too close to a known peak
         addMe = false;
@@ -818,10 +804,14 @@ uint8_t findCurrentPoints(uint8_t *points) {
 
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
       // scan all points added after current_point, since they must be part of same blob
-      int8_t added = 1;
-      if (ordered_indexes_temp[x] == current_point) added = 0;
-      if (neighbors_count[ordered_indexes_temp[x]] == added) continue;
-
+      uint8_t added = 0;
+      uint8_t max_added = 8;
+      bool lrEdge = pointOnLREdge(ordered_indexes_temp[x]);
+      bool tbEdge = pointOnEdge(ordered_indexes_temp[x]);
+      if (lrEdge || tbEdge) {
+        if (lrEdge && tbEdge) max_added = 3;
+        else max_added = 5;
+      }
       bool blobEdge = norm_pixels[current_point] - norm_pixels[ordered_indexes_temp[x]] >0.6;
 
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
@@ -837,7 +827,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
             sorted_size++;
           }
           added++;
-          if (added == neighbors_count[ordered_indexes_temp[x]]) break;
+          if (added == max_added) break;
         }
       }
     }
@@ -849,9 +839,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
 void forget_person(uint8_t idx, Person *temp_forgotten_people, uint8_t *pairs,
                     uint8_t &temp_forgotten_num) {
   Person p = known_people[idx];
-  float conf = p.confidence();
-  if (conf > 0.5 && ((!p.crossed && (p.history > 2 ||
-      (p.history == 2 && conf > 0.8))) || (p.crossed && p.checkForRevert()))) {
+  if (p.confidence() > 0.5 && ((p.crossed && p.checkForRevert()) || p.history >= 2)) {
     p.publishMaybeEvent();
     temp_forgotten_people[temp_forgotten_num] = p;
     temp_forgotten_num++;
@@ -864,7 +852,7 @@ bool remember_person(Person p, uint8_t point, uint16_t &h, uint8_t &sp, uint8_t 
                       uint8_t &cross, bool &revert, float &an, uint8_t &pos,
                       float &b, float &f, uint16_t &n, uint16_t &height, uint16_t &width,
                       uint16_t &c) {
-  if (p.real() && checkPos(p.positive, pos)) {
+  if (p.real() && checkPos(p.positive, point)) {
     float conf = p.confidence();
     // point cannot be more than 2x warmer than forgotten point
     if ((conf < an && conf * 2.0 < an) || (an < conf && an * 2.0 < conf)) {
@@ -945,11 +933,11 @@ void processSensor() {
     for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
       Person p = known_people[idx];
       if (p.real()) {
+        p.resetIfNecessary();
         uint8_t min_index = UNDEF_POINT;
         float conf = p.confidence();
         float anei = p.neighbors();
-        float max_distance = MIN_DISTANCE_FRD + min(anei, MIN_DISTANCE_FRD) +
-                              conf * min(anei+1, MIN_DISTANCE_FRD);
+        float max_distance = MIN_DISTANCE + (conf * min(anei, MIN_DISTANCE));
         float min_score = 100;
         for (uint8_t j=0; j<total_masses; j++) {
           // if confidence doesn't share same sign
@@ -976,13 +964,13 @@ void processSensor() {
             uint8_t np_axis = AXIS(points[j]);
             if (np_axis == sp_axis) directionBonus = 0.05;
             else if (SIDE1(p.starting_position)) {
-              if (p.crossed) {
+              if (p.crossed && SIDE(p.starting_position) == SIDE(points[j])) {
                 if (np_axis < sp_axis) directionBonus = 0.1;
               } else if (np_axis > sp_axis) {
                 directionBonus = 0.1;
               }
             } else { // side 2
-              if (p.crossed) {
+              if (p.crossed && SIDE(p.starting_position) == SIDE(points[j])) {
                 if (np_axis > sp_axis) directionBonus = 0.1;
               } else if (np_axis < sp_axis) {
                 directionBonus = 0.1;
@@ -1372,8 +1360,8 @@ void initialize() {
     for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
       if (norm_pixels[i] < 0 || norm_pixels[i] > 65) continue;
       float std = norm_pixels[i] - bgPixel(i);
-      // implicit alpha of 0.1
-      avg_pixels[i] += ((int)roundf(100.0 * std));
+      // implicit alpha of 0.2
+      avg_pixels[i] += ((int)roundf(200.0 * std));
     }
   }
 }
