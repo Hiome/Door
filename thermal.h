@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.13"
+#define FIRMWARE_VERSION        "V0.7.14"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -281,8 +281,7 @@ typedef struct Person {
     // This could possibly fail if person's hand is on door knob opening door and sensor
     // detects that as a person. We'll see hand go from 1->2, and then get dropped as door
     // opens, and this if block will prevent it from reverting properly.
-    if (confidence() > 0.6 && (SIDE(past_position) != door_side ||
-                            !pointOnBorder(past_position))) {
+    if (confidence() > 0.6 && (side() != door_side || !pointOnBorder(past_position))) {
       if (frames_since_door_open == 0) {
         return door_state != DOOR_OPEN;
       } else if (door_state == DOOR_OPEN) {
@@ -296,14 +295,12 @@ typedef struct Person {
   bool checkForRevert() {
     if (!real() || !crossed) return false;
   
-    if (reverted && side() == starting_side() &&
-        (inEndZone(past_position) || checkForDoorClose())) {
+    if (reverted && side() == starting_side()) {
       // we had previously reverted this point, but it came back and made it through
       revert(REVERT_FRD);
       reverted = false;
       return true;
-    } else if (!reverted && !checkForDoorClose() && (side() != starting_side() ||
-                !inEndZone(past_position))) {
+    } else if (!reverted && side() != starting_side() && pointOnBorder(past_position)) {
       // point disappeared in middle of grid, revert its crossing (probably noise or a hand)
       revert(REVERT_FRD);
       reverted = true;
@@ -387,8 +384,10 @@ typedef struct Person {
   uint8_t min_history() {
     uint8_t h = MIN_HISTORY;
     float conf = confidence();
-    if (conf * fgm() < 1.5 || conf * bgm() < 1.5) h++;
-    if (neighbors() < 1.5) h++;
+    float b = bgm();
+    float f = fgm();
+    if (conf*f < 1.5 && conf*b < 1.5) h++;
+    else if (conf < 0.7 && (f < 2.1 || b < 2.1)) h++;
     return h;
   };
 };
@@ -964,13 +963,13 @@ void processSensor() {
             uint8_t np_axis = AXIS(points[j]);
             if (np_axis == sp_axis) directionBonus = 0.05;
             else if (SIDE1(p.starting_position)) {
-              if (p.crossed && SIDE(p.starting_position) == SIDE(points[j])) {
+              if (p.crossed && p.starting_side() == SIDE(points[j])) {
                 if (np_axis < sp_axis) directionBonus = 0.1;
               } else if (np_axis > sp_axis) {
                 directionBonus = 0.1;
               }
             } else { // side 2
-              if (p.crossed && SIDE(p.starting_position) == SIDE(points[j])) {
+              if (p.crossed && p.starting_side() == SIDE(points[j])) {
                 if (np_axis > sp_axis) directionBonus = 0.1;
               } else if (np_axis < sp_axis) {
                 directionBonus = 0.1;
@@ -1035,7 +1034,7 @@ void processSensor() {
           } else {
             score = sq(score);
             float directionBonus = 0;
-            if (p.crossed && SIDE(points[i]) == SIDE(p.starting_position)) {
+            if (p.crossed && SIDE(points[i]) == p.starting_side()) {
               if (AXIS(points[i]) == AXIS(p.past_position)) directionBonus = 2.5;
               else if (SIDE1(p.starting_position)) {
                 if (AXIS(points[i]) < AXIS(p.past_position)) directionBonus = 3.0;
@@ -1104,10 +1103,9 @@ void processSensor() {
             p.crossed = 0;
             p.reverted = false;
           } else if (p.past_position != points[i]) {
-            if ((SIDE1(p.starting_position) &&
-                        AXIS(points[i]) <= AXIS(p.max_position)) ||
-                       (SIDE2(p.starting_position) &&
-                        AXIS(points[i]) >= AXIS(p.max_position))) {
+            if (!p.reverted &&
+                ((SIDE1(p.starting_position) && AXIS(points[i]) <= AXIS(p.max_position)) ||
+                 (SIDE2(p.starting_position) && AXIS(points[i]) >= AXIS(p.max_position)))) {
               // don't increase history if point is not moving forward
               if ((SIDE1(p.starting_position) &&
                     AXIS(points[i]) <= AXIS(p.starting_position)) ||
