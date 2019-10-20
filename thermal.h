@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.14"
+#define FIRMWARE_VERSION        "V0.7.15"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -879,7 +879,7 @@ bool remember_person(Person p, uint8_t point, uint16_t &h, uint8_t &sp, uint8_t 
         h = 1;
       } else {
         // point is moving forward
-        h = min(p.history, MIN_HISTORY-1);
+        h = min(p.history, (SIDE(point) != p.side() ? MIN_HISTORY-1 : MIN_HISTORY));
       }
     }
     cross = p.crossed;
