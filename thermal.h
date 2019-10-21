@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.15"
+#define FIRMWARE_VERSION        "V0.7.16"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -106,22 +106,16 @@ uint8_t SIDE(uint8_t p) {
 // xxxxxxxx
 #ifdef YAXIS
   #define pointOnBorder(i)      ( (i) < (GRID_EXTENT * 3) || (i) >= (GRID_EXTENT * 5) )
-  #define pointOnSmallBorder(i) ( (i) < (GRID_EXTENT * 2) || (i) >= (GRID_EXTENT * 6) )
-  #define pointInMiddle(i)      ( (i) >= (GRID_EXTENT * 2) && (i) < (GRID_EXTENT * 6) )
   #define pointOnEdge(i)        ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
   #define pointOnLREdge(i)      ( NOT_AXIS(i) == 1 || NOT_AXIS(i) == GRID_EXTENT )
-  #define pointOnLRBorder(i)    ( NOT_AXIS(i) <= 2 || NOT_AXIS(i) >= 7 )
 #else
   #define pointOnBorder(i)      ( AXIS(i) <= 3 || AXIS(i) >= 6 )
-  #define pointOnSmallBorder(i) ( AXIS(i) <= 2 || AXIS(i) >= 7 )
-  #define pointInMiddle(i)      ( AXIS(i) > 2 && AXIS(i) < 7 )
   #define pointOnEdge(i)        ( AXIS(i) == 1 || AXIS(i) == 8 )
   #define pointOnLREdge(i)      ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
-  #define pointOnLRBorder(i)    ( (i) < (GRID_EXTENT * 2) || (i) >= (GRID_EXTENT * 6) )
 #endif
 
-bool inEndZone(uint8_t p) {
-  return pointOnBorder(p) || pointOnLRBorder(p);
+bool pointOnAnyEdge(uint8_t p) {
+  return pointOnEdge(p) || pointOnLREdge(p);
 }
 
 uint8_t cycles_since_person = MAX_CLEARED_CYCLES;
@@ -226,7 +220,7 @@ typedef struct Person {
 
   void resetIfNecessary() {
     if (total_neighbors > 60000 || total_height > 60000 ||
-        total_width > 60000 || count > 60000) {
+        total_width > 60000 || count > 60000) { // https://xkcd.com/2200/
       history = min(history, MIN_HISTORY);
       total_conf = confidence();
       total_bgm = bgm();
@@ -253,28 +247,30 @@ typedef struct Person {
   uint8_t   starting_side() { return SIDE(starting_position); };
   uint8_t   side() { return SIDE(past_position); };
 
+  #define METALENGTH  45
+  void generateMeta(char *meta) {
+    sprintf(meta, "%s%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%d",
+      positive == UNKNOWN_SIGN ? "?" : (positive == POS_SIGN ? "+" : "-"),  // 1  +
+      int(confidence()*100.0),            // 3  100
+      int(bgm()*100.0),                   // 4  1020
+      int(fgm()*100.0),                   // 4  1020
+      starting_position,                  // 2  23
+      past_position,                      // 2  37
+      history,                            // 5  65536
+      count,                              // 5  65536
+      int(neighbors()*10.0),              // 2  80
+      int(height()*10.0),                 // 2  70
+      int(width()*10.0),                  // 2  70
+      int(max_distance_covered()*10.0)    // 2  99
+    );                                    // + 10 'x' + 1 null => 45 total
+  };
+
   void revert(uint8_t eventType) {
     char rBuf[3];
-    if (eventType == REVERT_FRD)
-      sprintf(rBuf, "r%d", crossed);
-    else if (eventType == MAYBE_REVERT)
-      sprintf(rBuf, "e%d", crossed);
-    char wBuf[45];
-    sprintf(wBuf, "%s%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%d",
-      positive == UNKNOWN_SIGN ? "?" : (positive == POS_SIGN ? "+" : "-"),
-      int(confidence()*100.0),
-      int(global_bgm*100.0),
-      int(global_fgm*100.0),
-      starting_position,
-      past_position,
-      history,
-      count,
-      int(neighbors()*10.0),
-      int(height()*10.0),
-      int(width()*10.0),
-      int(max_distance_covered()*10.0)
-    );
-    publish(rBuf, wBuf, eventType == REVERT_FRD ? RETRY_COUNT : 0);
+    char meta[METALENGTH];
+    generateMeta(meta);
+    sprintf(rBuf, "%s%d", (eventType == REVERT_FRD ? "r" : "e"), crossed);
+    publish(rBuf, meta, eventType == REVERT_FRD ? RETRY_COUNT : 0);
   };
 
   bool checkForDoorClose() {
@@ -310,21 +306,8 @@ typedef struct Person {
   };
 
   void publishPacket(uint8_t eventType) {
-    char meta[45];
-    sprintf(meta, "%s%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%d",
-      positive == UNKNOWN_SIGN ? "?" : (positive == POS_SIGN ? "+" : "-"),  // 1  +
-      int(confidence()*100.0),            // 3  100
-      int(bgm()*100.0),                   // 4  1020
-      int(fgm()*100.0),                   // 4  1020
-      starting_position,                  // 2  23
-      past_position,                      // 2  37
-      history,                            // 5  65536
-      count,                              // 5  65536
-      int(neighbors()*10.0),              // 2  80
-      int(height()*10.0),                 // 2  70
-      int(width()*10.0),                  // 2  70
-      int(max_distance_covered()*10.0)    // 2  70
-    );                                    // + 10 'x' + 1 null => 45 total
+    char meta[METALENGTH];
+    generateMeta(meta);
     uint8_t old_crossed = crossed;
     if (SIDE1(past_position)) {
       if (eventType == FRD_EVENT) {
@@ -879,7 +862,8 @@ bool remember_person(Person p, uint8_t point, uint16_t &h, uint8_t &sp, uint8_t 
         h = 1;
       } else {
         // point is moving forward
-        h = min(p.history, (SIDE(point) != p.side() ? MIN_HISTORY-1 : MIN_HISTORY));
+        uint8_t minh = SIDE(point) != p.side() ? MIN_HISTORY-1 : MIN_HISTORY;
+        h = min(p.history, minh);
       }
     }
     cross = p.crossed;
@@ -975,7 +959,7 @@ void processSensor() {
                 directionBonus = 0.1;
               }
             }
-            if (!p.crossed || (!inEndZone(p.past_position) && !inEndZone(points[j]))) {
+            if (!p.crossed || !pointOnAnyEdge(p.past_position)) {
               if (neighbors_count[points[j]] >= anei) directionBonus += 0.2;
             }
 
@@ -1045,7 +1029,7 @@ void processSensor() {
                 if (AXIS(points[i]) > AXIS(p.past_position)) directionBonus = 1.0;
               } else if (AXIS(points[i]) < AXIS(p.past_position)) directionBonus = 1.0;
             }
-            if (!p.crossed || (!inEndZone(p.past_position) && !inEndZone(points[i]))) {
+            if (!p.crossed || !pointOnAnyEdge(p.past_position)) {
               if (neighbors_count[points[i]] >= p.neighbors()) directionBonus += 0.5;
             }
             float historyBonus = p.crossed ? 1.0 : (p.history / MIN_HISTORY);
@@ -1141,11 +1125,11 @@ void processSensor() {
           break;
         }
       }
-    } else if (taken[i] == 0) {
+    } else if (taken[i] == 0 && norm_pixels[points[i]] > AVG_CONF_THRESHOLD) {
       // new point appeared (no past point found), start tracking it
-      uint16_t h = 1;
       uint8_t sp = points[i];
-      uint8_t mp = points[i];
+      uint8_t mp = sp;
+      uint16_t h = 1;
       uint8_t cross = 0;
       bool revert = false;
       float an = norm_pixels[sp];
@@ -1157,8 +1141,6 @@ void processSensor() {
       uint16_t width = calcWidth(sp);
       uint16_t c = 1;
       bool retroMatched = false;
-
-      if (an <= AVG_CONF_THRESHOLD) continue;
 
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
@@ -1185,16 +1167,14 @@ void processSensor() {
         }
       }
 
-      if (!retroMatched && an > 0.8 && sp >= GRID_EXTENT*3 && sp < GRID_EXTENT*5) {
+      if (!retroMatched && !pointOnBorder(sp)) {
         // if point is right in middle, drag it to the side it appears to be coming from
         if (SIDE1(sp)) {
           if (pointsBelow(sp) > pointsAbove(sp)) {
             sp += GRID_EXTENT;
-            retroMatched = true;
           }
         } else if (pointsAbove(sp) > pointsBelow(sp)) {
           sp -= GRID_EXTENT;
-          retroMatched = true;
         }
       }
 
@@ -1203,30 +1183,26 @@ void processSensor() {
           (frames_since_door_open < 5 && door_state != DOOR_OPEN))
         continue;
 
-      // ignore new points that showed up in middle 2 rows of grid
-      if (retroMatched || norm_pixels[points[i]] > 0.5 || pointOnSmallBorder(sp) ||
-          pointOnLRBorder(sp)) {
-        for (uint8_t j=0; j<MAX_PEOPLE; j++) {
-          // look for first empty slot in past_points to use
-          if (!known_people[j].real()) {
-            Person p;
-            p.past_position = points[i];
-            p.max_position = mp;
-            p.history = h;
-            p.starting_position = sp;
-            p.crossed = cross;
-            p.reverted = revert;
-            p.positive = pos;
-            p.total_conf = an;
-            p.total_bgm = b;
-            p.total_fgm = f;
-            p.total_neighbors = n;
-            p.total_height = height;
-            p.total_width = width;
-            p.count = c;
-            known_people[j] = p;
-            break;
-          }
+      for (uint8_t j=0; j<MAX_PEOPLE; j++) {
+        // look for first empty slot in past_points to use
+        if (!known_people[j].real()) {
+          Person p;
+          p.past_position = points[i];
+          p.max_position = mp;
+          p.history = h;
+          p.starting_position = sp;
+          p.crossed = cross;
+          p.reverted = revert;
+          p.positive = pos;
+          p.total_conf = an;
+          p.total_bgm = b;
+          p.total_fgm = f;
+          p.total_neighbors = n;
+          p.total_height = height;
+          p.total_width = width;
+          p.count = c;
+          known_people[j] = p;
+          break;
         }
       }
     }
