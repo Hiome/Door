@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.16"
+#define FIRMWARE_VERSION        "V0.7.17"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -469,6 +469,44 @@ void recheckPoint(uint8_t x, uint8_t i) {
   }
 }
 
+void calculateFgm(float cavg1, float cavg2) {
+  global_fgm = FOREGROUND_GRADIENT;
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    if (!neighbors_count[i]) continue;
+    if (global_bgm > 1) {
+      float bgmt = norm_pixels[i] - bgPixel(i);
+      bgmt = abs(bgmt)/global_bgm;
+      if (bgmt <= CONFIDENCE_THRESHOLD) {
+        neighbors_count[i] = 0;
+        continue;
+      }
+    }
+    float fgmt1 = abs(norm_pixels[i] - cavg1);
+    float fgmt2 = abs(norm_pixels[i] - cavg2);
+    fgmt1 = min(fgmt1, fgmt2);
+    global_fgm = max(fgmt1, global_fgm);
+  }
+}
+
+void calculateBgm(float cavg1, float cavg2) {
+  global_bgm = BACKGROUND_GRADIENT;
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    if (!neighbors_count[i]) continue;
+    float fgmt1 = abs(norm_pixels[i] - cavg1);
+    float fgmt2 = abs(norm_pixels[i] - cavg2);
+    fgmt1 = min(fgmt1, fgmt2);
+    fgmt1 /= global_fgm;
+    if (fgmt1 <= CONFIDENCE_THRESHOLD) {
+      neighbors_count[i] = 0;
+    } else {
+      // difference in points from background
+      float bgmt = norm_pixels[i] - bgPixel(i);
+      bgmt = abs(bgmt);
+      global_bgm = max(bgmt, global_bgm);
+    }
+  }
+}
+
 bool normalizePixels() {
   if (!pixelsChanged()) return false;
 
@@ -512,83 +550,31 @@ bool normalizePixels() {
     SERIAL_PRINTLN((cavg1 + cavg2)/2);
   #endif
 
-  // calculate foreground CSM gradient
-  float fgmp1 = FOREGROUND_GRADIENT;
-  float fgmp2 = FOREGROUND_GRADIENT;
-  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    // difference in points from foreground
-    float fgmt1 = abs(norm_pixels[i] - cavg1);
-    float fgmt2 = abs(norm_pixels[i] - cavg2);
-    if (fgmt1 < fgmt2) {
-      fgmp1 = max(fgmt1, fgmp1);
-    } else {
-      fgmp2 = max(fgmt2, fgmp2);
-    }
-  }
-
-  // calculate background CSM gradient
-  global_bgm = BACKGROUND_GRADIENT;
-  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    float fgmt1 = abs(norm_pixels[i] - cavg1);
-    float fgmt2 = abs(norm_pixels[i] - cavg2);
-    // pick the smaller of the 2 foreground gradients
-    float fgmt = fgmt1 < fgmt2 ? (fgmt1/fgmp1) : (fgmt2/fgmp2);
-    if (fgmt <= CONFIDENCE_THRESHOLD) {
-      neighbors_count[i] = 0;
-    } else {
-      // difference in points from background
-      float bgmt = norm_pixels[i] - bgPixel(i);
-      bgmt = abs(bgmt);
-      global_bgm = max(bgmt, global_bgm);
-    }
-  }
-
-  // calculate foreground CSM gradient again
-  float fgm1 = FOREGROUND_GRADIENT;
-  float fgm2 = FOREGROUND_GRADIENT;
-  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (!neighbors_count[i]) continue;
-    float bgmt = norm_pixels[i] - bgPixel(i);
-    bgmt = abs(bgmt)/global_bgm;
-    if (bgmt <= CONFIDENCE_THRESHOLD) {
-      neighbors_count[i] = 0;
-    } else {
-      float fgmt1 = abs(norm_pixels[i] - cavg1);
-      float fgmt2 = abs(norm_pixels[i] - cavg2);
-      if (fgmt1 < fgmt2) {
-        fgm1 = max(fgmt1, fgm1);
-      } else {
-        fgm2 = max(fgmt2, fgm2);
-      }
-    }
-  }
-  global_fgm = max(fgm1, fgm2);
+  // calculate CSM gradients
+  global_bgm = 0; // needed to skip bgm check in first calculateFgm
+  calculateFgm(cavg1, cavg2);
+  // run 2 passes to amplify real points over noise
+  calculateBgm(cavg1, cavg2);
+  calculateFgm(cavg1, cavg2);
+  calculateBgm(cavg1, cavg2);
+  calculateFgm(cavg1, cavg2);
 
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     float std = norm_pixels[i] - bgPixel(i);
 
     // normalize points
-    float bgmt = abs(std)/global_bgm;
-    float fgmt1 = norm_pixels[i] - cavg1;
-    float fgmta1 = abs(fgmt1);
-    bool pos1 = fgmt1 >= 0;
-    float fgmt2 = norm_pixels[i] - cavg2;
-    float fgmta2 = abs(fgmt2);
-    bool pos2 = fgmt2 >= 0;
-    if (fgmta1 < fgmta2) {
-      fgmta1 /= fgm1;
-      pos_pixels[i] = fgmt1 >= 0 ? POS_SIGN : NEG_SIGN;
-    } else {
-      fgmta1 = fgmta2/fgm2;
-      pos_pixels[i] = fgmt2 >= 0 ? POS_SIGN : NEG_SIGN;
-    }
+    float bgmt = std/global_bgm;
+    pos_pixels[i] = bgmt >= 0 ? POS_SIGN : NEG_SIGN;
+    bgmt = abs(bgmt);
+    float fgmt1 = abs(norm_pixels[i] - cavg1);
+    float fgmt2 = abs(norm_pixels[i] - cavg2);
+    fgmt1 = min(fgmt1, fgmt2);
+    fgmt1 /= global_fgm;
+    norm_pixels[i] = min(fgmt1, bgmt);
 
-    if (pos1 != pos2 && abs(fgmt1 + fgmt2) < UNKNOWN_SIGN_BAND) {
-      // point is (almost) perfectly in middle of 2 sides
-      pos_pixels[i] = UNKNOWN_SIGN;
+    if (norm_pixels[i] < CONFIDENCE_THRESHOLD || !neighbors_count[i]) {
+      norm_pixels[i] = 0.0;
     }
-
-    norm_pixels[i] = min(fgmta1, bgmt);
 
     // update average baseline
     // implicit alpha of 0.001
@@ -618,8 +604,7 @@ bool normalizePixels() {
   }
 
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (norm_pixels[i] < CONFIDENCE_THRESHOLD || !neighbors_count[i]) {
-      norm_pixels[i] = 0.0;
+    if (norm_pixels[i] < CONFIDENCE_THRESHOLD) {
       continue;
     }
 
@@ -801,7 +786,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
         uint8_t i = ordered_indexes[k];
         if (i != UNDEF_POINT && checkRawPos(i, current_point) &&
               euclidean_distance(i, ordered_indexes_temp[x]) < MIN_DISTANCE_FRD) {
-          if (blobEdge && norm_pixels[i] - norm_pixels[ordered_indexes_temp[x]] > 0.15) {
+          if (blobEdge && norm_pixels[i] - norm_pixels[ordered_indexes_temp[x]] > 0.2) {
             // do nothing
           } else {
             ordered_indexes_temp[sorted_size] = i;
@@ -960,11 +945,14 @@ void processSensor() {
               }
             }
             if (!p.crossed || !pointOnAnyEdge(p.past_position)) {
-              if (neighbors_count[points[j]] >= anei) directionBonus += 0.2;
+              directionBonus += (0.1*neighbors_count[points[j]]);
             }
 
-            float score = sq(d/max_distance) - ratioP - directionBonus +
-                              max(AVG_CONF_THRESHOLD - norm_pixels[points[j]], 0.0);
+            if (norm_pixels[points[j]] < AVG_CONF_THRESHOLD) {
+              directionBonus -= (AVG_CONF_THRESHOLD - norm_pixels[points[j]]);
+            }
+
+            float score = sq(d/max_distance) - ratioP - directionBonus;
             if (min_score - score > 0.05) {
               min_score = score;
               min_index = j;
@@ -1029,17 +1017,19 @@ void processSensor() {
                 if (AXIS(points[i]) > AXIS(p.past_position)) directionBonus = 1.0;
               } else if (AXIS(points[i]) < AXIS(p.past_position)) directionBonus = 1.0;
             }
-            if (!p.crossed || !pointOnAnyEdge(p.past_position)) {
-              if (neighbors_count[points[i]] >= p.neighbors()) directionBonus += 0.5;
+            directionBonus += (0.2*p.neighbors());
+            float historyBonus = 1.0;
+            if (!p.crossed) {
+              historyBonus = p.history / MIN_HISTORY;
+              historyBonus = min(historyBonus, 0.9);
             }
-            float historyBonus = p.crossed ? 1.0 : (p.history / MIN_HISTORY);
             float td = p.max_distance_covered();
             if (td < 1) {
               if (p.count == 1 || p.crossed) td = 1.0;
               else td = 1.0/((float)(p.count - 1));
             }
             score *= (td + directionBonus);
-            score *= max(historyBonus, 1.0);
+            score *= historyBonus;
             score *= (1.0 - abs(norm_pixels[points[i]] - conf));
             score /= max(d, 0.9);
           }
@@ -1169,12 +1159,18 @@ void processSensor() {
 
       if (!retroMatched && !pointOnBorder(sp)) {
         // if point is right in middle, drag it to the side it appears to be coming from
+        uint8_t a = pointsAbove(sp);
+        uint8_t b = pointsBelow(sp);
         if (SIDE1(sp)) {
-          if (pointsBelow(sp) > pointsAbove(sp)) {
+          if (width < 2 && b >= (7 - AXIS(sp))) continue;
+          if (b >= max(2*a, 2)) {
             sp += GRID_EXTENT;
           }
-        } else if (pointsAbove(sp) > pointsBelow(sp)) {
-          sp -= GRID_EXTENT;
+        } else {
+          if (width < 2 && a >= (AXIS(sp) - 2)) continue;
+          if (a >= max(2*b, 2)) {
+            sp -= GRID_EXTENT;
+          }
         }
       }
 
