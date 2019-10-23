@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.17"
+#define FIRMWARE_VERSION        "V0.7.18"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -749,7 +749,6 @@ uint8_t findCurrentPoints(uint8_t *points) {
 
     bool addMe = true;
     for (uint8_t x=0; x<total_masses; x++) {
-      if (!checkRawPos(points[x], current_point)) continue;
       int8_t nc = max(neighbors_count[points[x]], neighbors_count[current_point]);
       float distance = nc > 2 ? MIN_DISTANCE : MIN_DISTANCE_FRD;
       if (euclidean_distance(points[x], current_point) < distance) {
@@ -1018,18 +1017,13 @@ void processSensor() {
               } else if (AXIS(points[i]) < AXIS(p.past_position)) directionBonus = 1.0;
             }
             directionBonus += (0.2*p.neighbors());
-            float historyBonus = 1.0;
-            if (!p.crossed) {
-              historyBonus = p.history / MIN_HISTORY;
-              historyBonus = min(historyBonus, 0.9);
-            }
             float td = p.max_distance_covered();
             if (td < 1) {
               if (p.count == 1 || p.crossed) td = 1.0;
               else td = 1.0/((float)(p.count - 1));
             }
             score *= (td + directionBonus);
-            score *= historyBonus;
+            score *= p.history;
             score *= (1.0 - abs(norm_pixels[points[i]] - conf));
             score /= max(d, 0.9);
           }
