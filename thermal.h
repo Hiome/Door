@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.18"
+#define FIRMWARE_VERSION        "V0.7.19"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -89,7 +89,6 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 #define UNDEF_POINT     ( AMG88xx_PIXEL_ARRAY_SIZE + 10 )
 #define PIXEL_ACTIVE(i) ( norm_pixels[(i)] > CONFIDENCE_THRESHOLD )
 #define bgPixel(x)      ( ((float)avg_pixels[(x)])/1000.0 )
-#define doorOpenedAgo(n)( frames_since_door_open < (n) && door_state == DOOR_OPEN )
 
 uint8_t SIDE(uint8_t p) {
   return SIDE1(p) ? 1 : 2;
@@ -152,6 +151,11 @@ uint8_t readDoorState() {
       return DOOR_CLOSED;
     }
   #endif
+}
+
+bool doorJustOpened() {
+  if (door_state == DOOR_OPEN) return frames_since_door_open == 0;
+  else return readDoorState() == DOOR_OPEN;
 }
 
 #define NEG_SIGN      0
@@ -944,7 +948,7 @@ void processSensor() {
               }
             }
             if (!p.crossed || !pointOnAnyEdge(p.past_position)) {
-              directionBonus += (0.1*neighbors_count[points[j]]);
+              directionBonus += (0.02*neighbors_count[points[j]]);
             }
 
             if (norm_pixels[points[j]] < AVG_CONF_THRESHOLD) {
@@ -1016,7 +1020,7 @@ void processSensor() {
                 if (AXIS(points[i]) > AXIS(p.past_position)) directionBonus = 1.0;
               } else if (AXIS(points[i]) < AXIS(p.past_position)) directionBonus = 1.0;
             }
-            directionBonus += (0.2*p.neighbors());
+            directionBonus += (0.1*p.neighbors());
             float td = p.max_distance_covered();
             if (td < 1) {
               if (p.count == 1 || p.crossed) td = 1.0;
@@ -1034,7 +1038,7 @@ void processSensor() {
             if (max_idx == UNDEF_POINT) {
               max_score = score;
               max_idx = idx;
-            } else {
+            } else { // score is identical
               // if 2 competing points have the same score, pick the closer one
               float d2 = euclidean_distance(known_people[max_idx].past_position, points[i]);
               if (d+0.05 < d2 ||
@@ -1151,18 +1155,23 @@ void processSensor() {
         }
       }
 
-      if (!retroMatched && !pointOnBorder(sp)) {
+      if (!retroMatched) {
         // if point is right in middle, drag it to the side it appears to be coming from
         uint8_t a = pointsAbove(sp);
         uint8_t b = pointsBelow(sp);
-        if (SIDE1(sp)) {
-          if (width < 2 && b >= (7 - AXIS(sp))) continue;
-          if (b >= max(2*a, 2)) {
-            sp += GRID_EXTENT;
-          }
-        } else {
-          if (width < 2 && a >= (AXIS(sp) - 2)) continue;
-          if (a >= max(2*b, 2)) {
+        if (width < 2 && height > 2) {
+          if (SIDE1(sp)) {
+            if (b >= (7 - AXIS(sp) + width)) continue;
+          } else if (a >= (AXIS(sp) - 2 + width)) continue;
+        }
+        if (!pointOnBorder(sp)) {
+          if (SIDE1(sp)) {
+            if (b >= max(2*a, 2) || (door_side == 1 && b > a &&
+                  an > 0.6 && doorJustOpened())) {
+              sp += GRID_EXTENT;
+            }
+          } else if (a >= max(2*b, 2) || (door_side == 2 && a > b &&
+                  an > 0.6 && doorJustOpened())) {
             sp -= GRID_EXTENT;
           }
         }
