@@ -231,10 +231,6 @@ typedef struct Person {
   float     height() { return (float)total_height/(float)count; };
   float     width()  { return (float)total_width/(float)count; };
 
-  float     max_distance_covered() {
-    return euclidean_distance(starting_position, max_position);
-  };
-
   uint8_t   starting_side() { return SIDE(starting_position); };
   uint8_t   side() { return SIDE(past_position); };
 
@@ -337,8 +333,9 @@ typedef struct Person {
   // called when a point is about to be forgotten to diagnose if min history is an issue
   bool publishMaybeEvent() {
     if (!real() || confidence() < AVG_CONF_THRESHOLD || history < 2 ||
-          max_distance_covered() < 2) return false;
-    
+        euclidean_distance(starting_position, max_position) < MIN_DISTANCE_FRD)
+      return false;
+
     if (starting_side() != side() && (!crossed || !reverted) && history >= MIN_HISTORY) {
       if (SIDE(starting_position) == door_side && checkForDoorClose()) {
         publishPacket(DOOR_CLOSE_EVENT);
@@ -376,7 +373,7 @@ void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     Person p = known_people[i];
     if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
-        p.confidence() > AVG_CONF_THRESHOLD && p.max_distance_covered() >= MIN_DISTANCE &&
+        p.confidence() > AVG_CONF_THRESHOLD &&
         pointOnBorder(p.past_position) && p.history >= p.min_history()) {
       p.publishPacket(FRD_EVENT);
       known_people[i] = p; // update known_people array
@@ -668,18 +665,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
     for (uint8_t j=0; j<z; j++) {
       if (pos_pixels[i] == pos_pixels[ordered_indexes[j]] &&
           abs(norm_pixels[i] - norm_pixels[ordered_indexes[j]]) < 0.15) {
-        float d1 = 100;
-        float d2 = 100;
-        for (uint8_t x=0; x<j; x++) {
-          if (pos_pixels[i] != pos_pixels[ordered_indexes[x]]) continue;
-          d1 = euclidean_distance(i, ordered_indexes[x]);
-          d2 = euclidean_distance(ordered_indexes[j], ordered_indexes[x]);
-          if (d1 < MIN_DISTANCE || d2 < MIN_DISTANCE) break;
-        }
-        if (d1 < MIN_DISTANCE || d2 < MIN_DISTANCE) {
-          // pick point closer to a previous peak
-          added = d1 < d2;
-        } else if (neighbors_count[i] != neighbors_count[ordered_indexes[j]]) {
+        if (neighbors_count[i] != neighbors_count[ordered_indexes[j]]) {
           // prefer the point that's more in middle of blob
           added = neighbors_count[i] > neighbors_count[ordered_indexes[j]];
         } else {
@@ -739,22 +725,9 @@ uint8_t findCurrentPoints(uint8_t *points) {
     uint8_t current_point = ordered_indexes[y];
     if (current_point == UNDEF_POINT) continue;
 
-    bool addMe = true;
-    for (uint8_t x=0; x<total_masses; x++) {
-      int8_t nc = max(neighbors_count[points[x]], neighbors_count[current_point]);
-      float distance = nc > 2 ? MIN_DISTANCE : MIN_DISTANCE_FRD;
-      if (euclidean_distance(points[x], current_point) < distance) {
-        // point too close to a known peak
-        addMe = false;
-        break;
-      }
-    }
-
-    if (addMe) {
-      points[total_masses] = current_point;
-      total_masses++;
-      if (total_masses == MAX_PEOPLE) break;
-    }
+    points[total_masses] = current_point;
+    total_masses++;
+    if (total_masses == MAX_PEOPLE) break;
 
     ordered_indexes_temp[sorted_size] = current_point;
     sorted_size++;
@@ -777,7 +750,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
         uint8_t i = ordered_indexes[k];
         if (i != UNDEF_POINT && pos_pixels[i] == pos_pixels[current_point] &&
               euclidean_distance(i, ordered_indexes_temp[x]) < MIN_DISTANCE_FRD) {
-          if (blobEdge && norm_pixels[i] - norm_pixels[ordered_indexes_temp[x]] > 0.2) {
+          if (blobEdge && norm_pixels[i] - norm_pixels[ordered_indexes_temp[x]] > 0.15) {
             // do nothing
           } else {
             ordered_indexes_temp[sorted_size] = i;
@@ -1016,7 +989,7 @@ void processSensor() {
               } else if (paxis < axis) directionBonus = 1.0;
             }
             directionBonus += (0.1*p.neighbors());
-            float td = p.max_distance_covered();
+            float td = euclidean_distance(p.starting_position, p.past_position);
             if (td < 1) {
               if (p.count == 1 || p.crossed) td = 1.0;
               else td = 1.0/((float)(p.count - 1));
@@ -1059,37 +1032,45 @@ void processSensor() {
         Person p = known_people[idx];
         if (p.real() && pairs[idx] == i) {
           // closest point matched, update trackers
-          if (pointOnEdge(points[i]) && p.starting_side() == SIDE(points[i])) {
-            // always consider a point on the outer edge as just starting off
-            p.past_position = points[i];
-            p.max_position = points[i];
-            p.checkForRevert();
-            // reset everything
-            p.starting_position = points[i];
-            p.max_jump = 0;
-            p.history = 1;
-            p.crossed = 0;
-            p.reverted = false;
-          } else if (p.past_position != points[i]) {
+          if (p.past_position != points[i]) {
             uint8_t newJump = int(euclidean_distance(p.past_position, points[i])*10.0);
             p.max_jump = max(newJump, p.max_jump);
 
-            if (!p.reverted &&
-                ((SIDE1(p.starting_position) && AXIS(points[i]) <= AXIS(p.max_position)) ||
-                 (SIDE2(p.starting_position) && AXIS(points[i]) >= AXIS(p.max_position)))) {
+            if ((SIDE1(p.starting_position) && AXIS(points[i]) <= AXIS(p.max_position)) ||
+                (SIDE2(p.starting_position) && AXIS(points[i]) >= AXIS(p.max_position))) {
               // don't increase history if point is not moving forward
               if ((SIDE1(p.starting_position) &&
                     AXIS(points[i]) <= AXIS(p.starting_position)) ||
                   (SIDE2(p.starting_position) &&
                     AXIS(points[i]) >= AXIS(p.starting_position))) {
                 // reset history if point is further back than where it started
-                p.history = 1;
-                p.starting_position = points[i];
+                if (!p.crossed || pointOnEdge(points[i])) {
+                  // reset everything, unless point is crossed and could still move back
+                  p.past_position = points[i]; // needs to be set before checkForRevert
+                  p.checkForRevert();
+                  p.crossed = 0;
+                  p.reverted = false;
+                  p.total_conf = 0;
+                  p.total_bgm = 0;
+                  p.total_fgm = 0;
+                  p.total_neighbors = 0;
+                  p.total_height = 0;
+                  p.total_width = 0;
+                  p.count = 0;
+                }
+                // reset start position, unless point is in a revert crisis
+                if (!p.count || !p.reverted) {
+                  p.history = 1;
+                  p.starting_position = points[i];
+                  p.max_position = points[i];
+                  p.max_jump = 0;
+                }
+              } else if (p.reverted) {
+                // pull back max position if person is waffling in middle
                 p.max_position = points[i];
-                p.max_jump = 0;
               }
             } else {
-              // always forward, forward always
+              // "always forward, forward always" - Luke Cage
               p.history++;
               if ((SIDE(points[i]) != p.side() && (p.confidence() < 0.8 ||
                     norm_pixels[points[i]] < 0.8)) || p.history > 10) {
@@ -1156,23 +1137,36 @@ void processSensor() {
         }
       }
 
-      if (!retroMatched) {
+      if (!retroMatched && !pointOnBorder(sp)) {
         // if point is right in middle, drag it to the side it appears to be coming from
         uint8_t a = pointsAbove(sp);
         uint8_t b = pointsBelow(sp);
-        if (width < 2 && height > 2) {
+        if (an > 0.6 && doorJustOpened()) {
           if (SIDE1(sp)) {
-            if (b >= (7 - AXIS(sp) + width)) continue;
-          } else if (a >= (AXIS(sp) - 2 + width)) continue;
-        }
-        if (!pointOnBorder(sp)) {
-          if (an > 0.6 && doorJustOpened()) {
+            if (door_side == 1 && b > a) sp += GRID_EXTENT;
+          } else if (door_side == 2 && a > b) sp -= GRID_EXTENT;
+        } else {
+          uint8_t personSide = 0;
+          for (uint8_t x=0; x<MAX_PEOPLE; x++) {
+            if (known_people[x].real() && known_people[x].positive == pos &&
+                known_people[x].confidence() > 0.5 && known_people[x].height() >= 1 &&
+                euclidean_distance(known_people[x].past_position, sp) < 4) {
+              personSide = known_people[x].side();
+              break;
+            }
+          }
+          if (personSide) {
+            // there's another person in the frame, assume this is a split of that person
+            if (SIDE(sp) != personSide) {
+              if (personSide == 2) sp += GRID_EXTENT;
+              else sp -= GRID_EXTENT;
+            }
+          } else {
+            // nobody else in frame, choose the side that has more of the blob
             if (SIDE1(sp)) {
-              if (door_side == 1 && b > a) sp += GRID_EXTENT;
-            } else if (door_side == 2 && a > b) sp -= GRID_EXTENT;
-          } else if (SIDE1(sp)) {
-            if (b >= max(2*a, 2)) sp += GRID_EXTENT;
-          } else if (a >= max(2*b, 2)) sp -= GRID_EXTENT;
+              if (b >= max(2*a, 2)) sp += GRID_EXTENT;
+            } else if (a >= max(2*b, 2)) sp -= GRID_EXTENT;
+          }
         }
       }
 
