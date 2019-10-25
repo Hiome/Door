@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.20"
+#define FIRMWARE_VERSION        "V0.7.21"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -100,10 +100,12 @@ uint8_t SIDE(uint8_t p) {
 // xxxxxxxx
 #ifdef YAXIS
   #define pointOnBorder(i)      ( (i) < (GRID_EXTENT * 3) || (i) >= (GRID_EXTENT * 5) )
+  #define pointOnSmallBorder(i) ( (i) < (GRID_EXTENT * 2) || (i) >= (GRID_EXTENT * 6) )
   #define pointOnEdge(i)        ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
   #define pointOnLREdge(i)      ( NOT_AXIS(i) == 1 || NOT_AXIS(i) == GRID_EXTENT )
 #else
   #define pointOnBorder(i)      ( AXIS(i) <= 3 || AXIS(i) >= 6 )
+  #define pointOnSmallBorder(i) ( AXIS(i) <= 2 || AXIS(i) >= 7 )
   #define pointOnEdge(i)        ( AXIS(i) == 1 || AXIS(i) == 8 )
   #define pointOnLREdge(i)      ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
 #endif
@@ -327,7 +329,7 @@ typedef struct Person {
     history = 1;
     max_jump = 0;
     reverted = false;
-    max_position = starting_position;
+    max_position = past_position;
   };
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
@@ -373,8 +375,7 @@ void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     Person p = known_people[i];
     if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
-        p.confidence() > AVG_CONF_THRESHOLD &&
-        pointOnBorder(p.past_position) && p.history >= p.min_history()) {
+        p.confidence() > AVG_CONF_THRESHOLD && p.history >= p.min_history()) {
       p.publishPacket(FRD_EVENT);
       known_people[i] = p; // update known_people array
     }
@@ -900,19 +901,19 @@ void processSensor() {
             uint8_t np_axis = AXIS(points[j]);
             if (np_axis == sp_axis) directionBonus = 0.05;
             else if (SIDE1(p.starting_position)) {
-              if (p.crossed && p.starting_side() == SIDE(points[j])) {
+              if (p.crossed && !pointOnSmallBorder(p.starting_position)) {
                 if (np_axis < sp_axis) directionBonus = 0.1;
               } else if (np_axis > sp_axis) {
                 directionBonus = 0.1;
               }
             } else { // side 2
-              if (p.crossed && p.starting_side() == SIDE(points[j])) {
+              if (p.crossed && !pointOnSmallBorder(p.starting_position)) {
                 if (np_axis > sp_axis) directionBonus = 0.1;
               } else if (np_axis < sp_axis) {
                 directionBonus = 0.1;
               }
             }
-            if (!p.crossed || !pointOnAnyEdge(p.past_position)) {
+            if (!p.crossed || pointOnSmallBorder(p.starting_position)) {
               directionBonus += (0.02*neighbors_count[points[j]]);
             }
 
@@ -977,16 +978,22 @@ void processSensor() {
             score = sq(score);
             float directionBonus = 0;
             uint8_t paxis = AXIS(points[i]);
-            if (p.crossed && SIDE(points[i]) == p.starting_side()) {
-              if (paxis == axis) directionBonus = 2.5;
-              else if (SIDE1(p.starting_position)) {
+            if (paxis == axis) { // and allies
+              if (p.crossed && SIDE(points[i]) == p.starting_side()) {
+                directionBonus = 2.5;
+              } else directionBonus = 0.5;
+            } else if (SIDE1(p.starting_position)) {
+              if (p.crossed && !pointOnSmallBorder(p.starting_position)) {
                 if (paxis < axis) directionBonus = 3.0;
-              } else if (paxis > axis) directionBonus = 3.0;
-            } else {
-              if (paxis == axis) directionBonus = 0.5;
-              else if (SIDE1(p.starting_position)) {
-                if (paxis > axis) directionBonus = 1.0;
-              } else if (paxis < axis) directionBonus = 1.0;
+              } else if (paxis > axis) {
+                directionBonus = 1.0;
+              }
+            } else { // side 2
+              if (p.crossed && !pointOnSmallBorder(p.starting_position)) {
+                if (paxis > axis) directionBonus = 3.0;
+              } else if (paxis < axis) {
+                directionBonus = 1.0;
+              }
             }
             directionBonus += (0.1*p.neighbors());
             float td = euclidean_distance(p.starting_position, p.past_position);
