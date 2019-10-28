@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.21"
+#define FIRMWARE_VERSION        "V0.7.22"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -19,7 +19,6 @@
 #define FOREGROUND_GRADIENT     2.0
 #define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
 #define MIN_TRAVEL_RATIO        0.2
-#define UNKNOWN_SIGN_BAND       1.0  // size of band where we are not sure about sign of fgm
 
 #include <Adafruit_AMG88xx.h>
 Adafruit_AMG88xx amg;
@@ -266,7 +265,7 @@ typedef struct Person {
     // This could possibly fail if person's hand is on door knob opening door and sensor
     // detects that as a person. We'll see hand go from 1->2, and then get dropped as door
     // opens, and this if block will prevent it from reverting properly.
-    if (confidence() > 0.6 && (side() != door_side || !pointOnBorder(past_position))) {
+    if (starting_side() == door_side && confidence() > 0.6) {
       if (frames_since_door_open == 0) {
         return door_state != DOOR_OPEN;
       } else if (door_state == DOOR_OPEN) {
@@ -285,7 +284,7 @@ typedef struct Person {
       revert(REVERT_FRD);
       reverted = false;
       return true;
-    } else if (!reverted && side() != starting_side() && pointOnBorder(past_position)) {
+    } else if (!reverted && side() != starting_side()) {
       // point disappeared in middle of grid, revert its crossing (probably noise or a hand)
       revert(REVERT_FRD);
       reverted = true;
@@ -334,20 +333,29 @@ typedef struct Person {
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
   bool publishMaybeEvent() {
-    if (!real() || confidence() < AVG_CONF_THRESHOLD || history < 2 ||
-        euclidean_distance(starting_position, max_position) < MIN_DISTANCE_FRD)
-      return false;
+    if (!real() || confidence() < AVG_CONF_THRESHOLD) return false;
 
-    if (starting_side() != side() && (!crossed || !reverted) && history >= MIN_HISTORY) {
-      if (SIDE(starting_position) == door_side && checkForDoorClose()) {
-        publishPacket(DOOR_CLOSE_EVENT);
-        return true;
-      }
-      publishPacket(MAYBE_EVENT);
+    if (history >= MIN_HISTORY && (!crossed || !reverted)) {
+      if (starting_side() != side()) {
+        if (checkForDoorClose()) // publish full event (not a2) even if door is closed
+          publishPacket(DOOR_CLOSE_EVENT);
+        else
+          publishPacket(FRD_EVENT);
+      } else if (starting_side() != SIDE(max_position) && !pointOnBorder(past_position) &&
+                  checkForDoorClose()) {
+        // door just closed and point made it across but then died on border.
+        // this might be somebody leaning in to close the door
+        publishPacket(MAYBE_EVENT);
+      } else if (euclidean_distance(starting_position, max_position) > MIN_DISTANCE_FRD) {
+        revert(MAYBE_REVERT);
+        return false;
+      } else return false;
       return true;
-    } else {
+    } else if (crossed || reverted || (history >= 2 &&
+                euclidean_distance(starting_position, max_position) > MIN_DISTANCE_FRD)) {
       revert(MAYBE_REVERT);
     }
+
     return false;
   };
 
@@ -375,7 +383,9 @@ void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     Person p = known_people[i];
     if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
-        p.confidence() > AVG_CONF_THRESHOLD && p.history >= p.min_history()) {
+        p.confidence() > AVG_CONF_THRESHOLD && p.history >= p.min_history() &&
+        pointOnBorder(p.past_position) &&
+        euclidean_distance(p.starting_position, p.past_position) > MIN_DISTANCE) {
       p.publishPacket(FRD_EVENT);
       known_people[i] = p; // update known_people array
     }
@@ -504,12 +514,15 @@ bool normalizePixels() {
   float sq_sum1 = 0.0;
   float x_sum2 = 0.0;
   float sq_sum2 = 0.0;
+  float bg_avg = 0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     // reading is invalid if less than -20 or greater than 100,
     // but we use a smaller range than that to determine validity
     if (norm_pixels[i] < 0 || norm_pixels[i] > 65) {
       norm_pixels[i] = bgPixel(i);
     }
+
+    bg_avg += bgPixel(i);
 
     if (SIDE1(i)) {
       x_sum1 += norm_pixels[i];
@@ -521,6 +534,8 @@ bool normalizePixels() {
 
     neighbors_count[i] = 1;
   }
+
+  bg_avg /= 64.0;
 
   // calculate trimmed average
   float cavg1 = trimMean(x_sum1, sq_sum1, 1);
@@ -554,7 +569,7 @@ bool normalizePixels() {
 
     // normalize points
     float bgmt = std/global_bgm;
-    pos_pixels[i] = bgmt >= 0;
+    pos_pixels[i] = norm_pixels[i] >= bg_avg;
     bgmt = abs(bgmt);
     float fgmt1 = abs(norm_pixels[i] - cavg1);
     float fgmt2 = abs(norm_pixels[i] - cavg2);
