@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.22"
+#define FIRMWARE_VERSION        "V0.7.23"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -200,33 +200,39 @@ typedef struct Person {
   uint8_t   starting_position :6;   // 0-63
   uint8_t   max_position      :6;   // 0-63
   uint8_t   max_jump          :6;   // max possible jump of 55
-  uint8_t   history           :4;   // 1-11
+  uint8_t   history           :4;   // 1-10
   uint8_t   crossed           :4;   // 0-9
   bool      reverted          :1;   // 0-1
   bool      positive          :1;   // 0-1
   float     total_bgm;
   float     total_fgm;
-  uint16_t  total_neighbors;
-  uint16_t  total_height;
-  uint16_t  total_width;
-  uint16_t  total_bgm_conf;
-  uint16_t  total_fgm_conf;
-  uint16_t  count;
+  uint8_t   total_neighbors;        // 0-80
+  uint8_t   total_height;           // 0-80
+  uint8_t   total_width;            // 0-80
+  uint16_t  total_bgm_conf    :10;  // 0-1000
+  uint16_t  total_fgm_conf    :10;  // 0-1000
+  uint8_t   count             :4;   // 1-7
+  uint16_t  count_frd;
 
-  void resetIfNecessary() {
-    if (total_neighbors > 60000 || total_height > 60000 || total_bgm_conf > 60000 ||
-        total_fgm_conf > 60000 || total_width > 60000 || count > 60000) {
-      // https://xkcd.com/2200/
-      history = min(history, MIN_HISTORY);
-      total_bgm = bgm();
-      total_fgm = fgm();
-      total_bgm_conf = int(bgm_confidence());
-      total_fgm_conf = int(fgm_confidence());
-      total_neighbors = int(neighbors());
-      total_height = int(height());
-      total_width = int(width());
-      count = 1;
+  bool resetIfNecessary() {
+    if (count > 5) {
+      resetTotals();
+      if (count_frd > 60000) count_frd = 1000;
+      return true;
     }
+    return false;
+  };
+
+  void resetTotals() {
+    history = min(history, MIN_HISTORY);
+    total_bgm = bgm();
+    total_fgm = fgm();
+    total_bgm_conf = int(bgm_confidence());
+    total_fgm_conf = int(fgm_confidence());
+    total_neighbors = int(neighbors());
+    total_height = int(height());
+    total_width = int(width());
+    count = 1;
   };
 
   bool      real() { return past_position != UNDEF_POINT; };
@@ -245,7 +251,7 @@ typedef struct Person {
   float     scaled_fgm() { return fgm_confidence()/100.0 * fgm(); };
   float     confidence() {
     uint16_t c = min(total_bgm_conf, total_fgm_conf);
-    float conf = (float)c/100.0;
+    float conf = ((float)c)/100.0;
     return conf/((float)count);
   };
 
@@ -260,7 +266,7 @@ typedef struct Person {
       starting_position,                  // 2  23
       past_position,                      // 2  37
       history,                            // 5  65536
-      count,                              // 5  65536
+      count_frd,                          // 5  65536
       int(neighbors()*10.0),              // 2  80
       int(height()*10.0),                 // 2  70
       int(width()*10.0),                  // 2  70
@@ -388,7 +394,7 @@ void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     Person p = known_people[i];
     if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
-        p.confidence() > AVG_CONF_THRESHOLD && p.history >= MIN_HISTORY &&
+        p.confidence() > AVG_CONF_THRESHOLD && p.history > MIN_HISTORY &&
         pointOnBorder(p.past_position) &&
         euclidean_distance(p.starting_position, p.past_position) > MIN_DISTANCE) {
       p.publishPacket(FRD_EVENT);
@@ -809,9 +815,9 @@ void forget_person(uint8_t idx, Person *temp_forgotten_people, uint8_t *pairs,
 }
 
 bool remember_person(Person p, uint8_t point, uint8_t &h, uint8_t &sp, uint8_t &mp,
-                      uint8_t mj, uint8_t &cross, bool &revert, float an, uint16_t &bn,
-                      uint16_t &fn, bool &pos, float &b, float &f, uint16_t &n,
-                      uint16_t &height, uint16_t &width, uint16_t &c) {
+                      uint8_t &mj, uint8_t &cross, bool &revert, float an, uint16_t &bn,
+                      uint16_t &fn, bool &pos, float &b, float &f, uint8_t &n,
+                      uint8_t &height, uint8_t &width, uint8_t &c, uint16_t &cfrd) {
   if (p.real() && p.positive == pos_pixels[point]) {
     float conf = p.confidence();
     // point cannot be more than 2x warmer than forgotten point
@@ -831,6 +837,8 @@ bool remember_person(Person p, uint8_t point, uint8_t &h, uint8_t &sp, uint8_t &
       return false;
     }
 
+    if (p.count > 1) p.resetTotals();
+
     // point is ahead of starting point at least
     sp = p.starting_position;
 
@@ -841,8 +849,7 @@ bool remember_person(Person p, uint8_t point, uint8_t &h, uint8_t &sp, uint8_t &
       h = 1;
     } else {
       // point is moving forward
-      uint8_t minh = SIDE(point) != p.side() ? MIN_HISTORY-1 : MIN_HISTORY;
-      h = min(p.history, minh);
+      h = min(p.history, MIN_HISTORY);
     }
 
     uint8_t newJump = int(d*10.0);
@@ -858,6 +865,7 @@ bool remember_person(Person p, uint8_t point, uint8_t &h, uint8_t &sp, uint8_t &
     height += p.total_height;
     width += p.total_width;
     c += p.count;
+    cfrd += p.count_frd;
     return true;
   }
   return false;
@@ -899,7 +907,7 @@ void processSensor() {
     for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
       Person p = known_people[idx];
       if (p.real()) {
-        p.resetIfNecessary();
+        if (p.resetIfNecessary()) known_people[idx] = p;
         uint8_t min_index = UNDEF_POINT;
         float conf = p.confidence();
         float anei = p.neighbors();
@@ -1075,6 +1083,7 @@ void processSensor() {
             if ((SIDE1(p.starting_position) && AXIS(points[i]) <= AXIS(p.max_position)) ||
                 (SIDE2(p.starting_position) && AXIS(points[i]) >= AXIS(p.max_position))) {
               // don't increase history if point is not moving forward
+              if (p.count > 1) p.resetTotals();
               if ((SIDE1(p.starting_position) &&
                     AXIS(points[i]) <= AXIS(p.starting_position)) ||
                   (SIDE2(p.starting_position) &&
@@ -1109,8 +1118,7 @@ void processSensor() {
             } else {
               // "always forward, forward always" - Luke Cage
               p.history++;
-              if ((SIDE(points[i]) != p.side() && (p.confidence() < 0.8 ||
-                    norm_pixels[points[i]] < 0.8)) || p.history > 10) {
+              if (SIDE(points[i]) != p.side() || p.history > 9) {
                 // point just crossed threshold, let's reduce its history to force
                 // it to spend another cycle on this side before we count the event
                 p.history = min(p.history, MIN_HISTORY);
@@ -1132,6 +1140,7 @@ void processSensor() {
           p.total_height += calcHeight(points[i]);
           p.total_width += calcWidth(points[i]);
           p.count++;
+          p.count_frd++;
           cycles_since_person = 0;
           known_people[idx] = p;
           break;
@@ -1158,17 +1167,18 @@ void processSensor() {
       bool pos = pos_pixels[sp];
       float b = global_bgm;
       float f = global_fgm;
-      uint16_t n = neighbors_count[sp];
-      uint16_t height = calcHeight(sp);
-      uint16_t width = calcWidth(sp);
-      uint16_t c = 1;
+      uint8_t n = neighbors_count[sp];
+      uint8_t height = calcHeight(sp);
+      uint8_t width = calcWidth(sp);
+      uint8_t c = 1;
+      uint16_t cfrd = 1;
       bool retroMatched = false;
 
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
         for (uint8_t j=0; j<temp_forgotten_num; j++) {
-          if (remember_person(temp_forgotten_people[j], points[i],
-                h, sp, mp, mj, cross, revert, an, bn, fn, pos, b, f, n, height, width, c)) {
+          if (remember_person(temp_forgotten_people[j], points[i], h, sp, mp, mj, cross,
+                revert, an, bn, fn, pos, b, f, n, height, width, c, cfrd)) {
             retroMatched = true;
             temp_forgotten_people[j] = UNDEF_PERSON;
             SERIAL_PRINTLN(F("af"));
@@ -1180,8 +1190,8 @@ void processSensor() {
       if (!retroMatched && cycles_since_forgotten < MAX_EMPTY_CYCLES) {
         // second let's check past forgotten points for a match
         for (uint8_t j=0; j<forgotten_num; j++) {
-          if (remember_person(forgotten_people[j], points[i],
-                h, sp, mp, mj, cross, revert, an, bn, fn, pos, b, f, n, height, width, c)) {
+          if (remember_person(forgotten_people[j], points[i], h, sp, mp, mj, cross,
+                revert, an, bn, fn, pos, b, f, n, height, width, c, cfrd)) {
             retroMatched = true;
             forgotten_people[j] = UNDEF_PERSON;
             break;
@@ -1249,6 +1259,7 @@ void processSensor() {
           p.total_height = height;
           p.total_width = width;
           p.count = c;
+          p.count_frd = cfrd;
           known_people[j] = p;
           break;
         }
