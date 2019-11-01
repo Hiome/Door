@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.7.23"
+#define FIRMWARE_VERSION        "V0.7.24"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -367,13 +367,13 @@ typedef struct Person {
         // door just closed and point made it across but then died on border.
         // this might be somebody leaning in to close the door
         publishPacket(MAYBE_EVENT);
-      } else if (euclidean_distance(starting_position, max_position) > MIN_DISTANCE_FRD) {
+      } else if (euclidean_distance(starting_position, max_position) > MAX_DISTANCE) {
         revert(MAYBE_REVERT);
         return false;
       } else return false;
       return true;
     } else if (crossed || reverted || (history >= 2 &&
-                euclidean_distance(starting_position, max_position) > MIN_DISTANCE_FRD)) {
+                euclidean_distance(starting_position, max_position) > MAX_DISTANCE)) {
       revert(MAYBE_REVERT);
     }
 
@@ -579,9 +579,8 @@ bool normalizePixels() {
     float std = norm_pixels[i] - bgPixel(i);
 
     // normalize points
-    float bgmt = std/global_bgm;
     pos_pixels[i] = norm_pixels[i] >= bg_avg;
-    bgmt = abs(bgmt);
+    float bgmt = abs(std/global_bgm);
     float fgmt1 = abs(norm_pixels[i] - cavg1);
     float fgmt2 = abs(norm_pixels[i] - cavg2);
     fgmt1 = min(fgmt1, fgmt2);
