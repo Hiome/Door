@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.0"
+#define FIRMWARE_VERSION        "V0.8.1"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -20,6 +20,7 @@
 #define FOREGROUND_GRADIENT     2.0
 #define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
 #define MIN_TRAVEL_RATIO        20
+#define MAX_TEMP_DIFFERENCE     3.0  // max temp difference between 2 matchable points
 
 #include <Adafruit_AMG88xx.h>
 Adafruit_AMG88xx amg;
@@ -349,16 +350,55 @@ Person UNDEF_PERSON = {UNDEF_POINT};
 Person known_people[MAX_PEOPLE];
 Person forgotten_people[MAX_PEOPLE];
 
-bool compareTemps(float r1, float r2, uint8_t c1, uint8_t c2) {
-  return (abs(r1 - r2) - ((float)min(c1, c2)/100.0)) < (0.5*min(global_bgm, global_fgm));
+float diffFromPerson(uint8_t a, Person b) {
+  float d = raw_pixels[(a)] - b.raw_temp();
+  return abs(d);
 }
 
 bool samePoints(uint8_t a, uint8_t b) {
-  return compareTemps(raw_pixels[(a)], raw_pixels[(b)], norm_pixels[(a)], norm_pixels[(b)]);
+  return abs(raw_pixels[(a)] - raw_pixels[(b)]) < min(global_bgm, MAX_TEMP_DIFFERENCE);
 }
 
 bool samePerson(uint8_t a, Person b) {
-  return compareTemps(raw_pixels[(a)], b.raw_temp(), norm_pixels[(a)], int(b.confidence()));
+  return diffFromPerson(a, b) < MAX_TEMP_DIFFERENCE;
+}
+
+uint8_t findClosestPerson(Person *arr, uint8_t i, float maxDistance) {
+  uint8_t p = UNDEF_POINT;
+  float minTemp = 2.0;
+  for (uint8_t x=0; x<MAX_PEOPLE; x++) {
+    if (arr[x].real()) {
+      float dist = euclidean_distance(arr[x].past_position, i);
+      if (dist > maxDistance) continue;
+      float tempDiff = diffFromPerson(i, arr[x]);
+      if (tempDiff > MAX_TEMP_DIFFERENCE) continue;
+
+      tempDiff = tempDiff/MAX_TEMP_DIFFERENCE * dist/maxDistance;
+      if (tempDiff < minTemp) {
+        p = x;
+        minTemp = tempDiff;
+      }
+    }
+  }
+  return p;
+}
+
+Person findLargestPerson(uint8_t i) {
+  Person a = UNDEF_PERSON;
+  float minScore = 100.0;
+  for (uint8_t x=0; x<MAX_PEOPLE; x++) {
+    Person p = known_people[x]; 
+    if (p.real() && p.height() >= 1) {
+      float dist = euclidean_distance(p.past_position, i);
+      if (dist > 4.0) continue;
+      float score = dist - p.height() - p.width() - p.neighbors();
+      if (score < minScore) {
+        a = p;
+        minScore = score;
+      }
+    }
+  }
+  return a;
 }
 
 uint8_t pointsAbove(uint8_t i) {
@@ -719,13 +759,8 @@ uint8_t findCurrentPoints(uint8_t *points) {
             // we're debating between 2 points on either side of border. Normally
             // we'd just prefer the one on side1, but this can cause a messy flip-flopping
             // between sides, so let's prefer the side that the point was already on
-            for (uint8_t x=0; x<MAX_PEOPLE; x++) {
-              if (known_people[x].real() && samePerson(i, known_people[x]) &&
-                    euclidean_distance(i, known_people[x].past_position) < MIN_DISTANCE) {
-                if (SIDE(i) == known_people[x].side()) edge1++;
-                break;
-              }
-            }
+            uint8_t x = findClosestPerson(known_people, i, MIN_DISTANCE);
+            if (x != UNDEF_POINT && SIDE(i) == known_people[x].side()) edge1++;
           }
 
           added = edge1 > edge2;
@@ -811,16 +846,17 @@ void forget_person(uint8_t idx, Person *temp_forgotten_people, uint8_t *pairs,
   known_people[idx] = UNDEF_PERSON;
 }
 
-bool remember_person(Person p, uint8_t point, uint8_t &h, uint8_t &sp, uint8_t &mp,
+bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_t &mp,
                       uint8_t &mj, uint8_t &cross, bool &revert, uint16_t &bn,
                       uint16_t &fn, float &b, float &f, float &rt, uint8_t &n,
                       uint8_t &height, uint8_t &width, uint8_t &c, uint16_t &cfrd) {
-  if (p.real() && samePerson(point, p)) {
+  uint8_t pi = findClosestPerson(arr, point, MAX_DISTANCE);
+  if (pi != UNDEF_POINT) {
+    Person p = arr[pi];
     // if switching sides with low confidence or moving too far, don't pair
     float d = euclidean_distance(p.past_position, point);
-    if (d >= MAX_DISTANCE || (SIDE(point) != p.side() &&
-        (p.confidence() < AVG_CONF_THRESHOLD ||
-          ((float)norm_pixels[sp])/d < MIN_TRAVEL_RATIO))) {
+    if (SIDE(point) != p.side() && (p.confidence() < AVG_CONF_THRESHOLD ||
+          ((float)norm_pixels[sp])/d < MIN_TRAVEL_RATIO)) {
       return false;
     }
 
@@ -860,6 +896,7 @@ bool remember_person(Person p, uint8_t point, uint8_t &h, uint8_t &sp, uint8_t &
     width += p.total_width;
     c += p.count;
     cfrd += p.count_frd;
+    arr[pi] = UNDEF_PERSON;
     return true;
   }
   return false;
@@ -909,7 +946,8 @@ void processSensor() {
         float min_score = 100;
         for (uint8_t j=0; j<total_masses; j++) {
           // if difference from background is more than 1º, skip
-          if (!samePerson(points[j], p)) continue;
+          float tempDiff = diffFromPerson(points[j], p);
+          if (tempDiff > MAX_TEMP_DIFFERENCE) continue;
 
           float d = euclidean_distance(p.past_position, points[j]);
 
@@ -948,7 +986,8 @@ void processSensor() {
               directionBonus -= (((float)(AVG_CONF_THRESHOLD-norm_pixels[points[j]]))/100.0);
             }
 
-            float score = sq(d/max_distance) - ratioP - directionBonus;
+            float score = sq(d/max_distance) - ratioP - directionBonus -
+                    tempDiff/MAX_TEMP_DIFFERENCE;
             if (min_score - score > 0.05) {
               min_score = score;
               min_index = j;
@@ -1029,6 +1068,8 @@ void processSensor() {
               else td = 1.0/((float)(p.count - 1));
             }
             score *= (td + directionBonus);
+            float tempDiff = diffFromPerson(points[i], p);
+            score *= (1.0 - tempDiff/MAX_TEMP_DIFFERENCE);
             score *= p.history;
             float newConf = (float)norm_pixels[points[i]];
             newConf = abs(newConf - conf);
@@ -1161,26 +1202,18 @@ void processSensor() {
 
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
-        for (uint8_t j=0; j<temp_forgotten_num; j++) {
-          if (remember_person(temp_forgotten_people[j], points[i], h, sp, mp, mj, cross,
-                revert, bn, fn, b, f, rt, n, height, width, c, cfrd)) {
-            retroMatched = true;
-            temp_forgotten_people[j] = UNDEF_PERSON;
-            SERIAL_PRINTLN(F("af"));
-            break;
-          }
+        if (remember_person(temp_forgotten_people, points[i], h, sp, mp, mj, cross,
+              revert, bn, fn, b, f, rt, n, height, width, c, cfrd)) {
+          retroMatched = true;
+          SERIAL_PRINTLN(F("af"));
         }
       }
 
-      if (!retroMatched && cycles_since_forgotten < MAX_EMPTY_CYCLES) {
+      if (!retroMatched && cycles_since_forgotten < MAX_EMPTY_CYCLES && forgotten_num > 0) {
         // second let's check past forgotten points for a match
-        for (uint8_t j=0; j<forgotten_num; j++) {
-          if (remember_person(forgotten_people[j], points[i], h, sp, mp, mj, cross,
-                revert, bn, fn, b, f, rt, n, height, width, c, cfrd)) {
-            retroMatched = true;
-            forgotten_people[j] = UNDEF_PERSON;
-            break;
-          }
+        if (remember_person(forgotten_people, points[i], h, sp, mp, mj, cross,
+              revert, bn, fn, b, f, rt, n, height, width, c, cfrd)) {
+          retroMatched = true;
         }
       }
 
@@ -1193,19 +1226,11 @@ void processSensor() {
             if (door_side == 1 && b > a) sp += GRID_EXTENT;
           } else if (door_side == 2 && a > b) sp -= GRID_EXTENT;
         } else {
-          uint8_t personSide = 0;
-          for (uint8_t x=0; x<MAX_PEOPLE; x++) {
-            if (known_people[x].real() && samePerson(sp, known_people[x]) &&
-                known_people[x].height() >= 1 &&
-                euclidean_distance(known_people[x].past_position, sp) < 4) {
-              personSide = known_people[x].side();
-              break;
-            }
-          }
-          if (personSide) {
+          Person x = findLargestPerson(sp);
+          if (x.real()) {
             // there's another person in the frame, assume this is a split of that person
-            if (SIDE(sp) != personSide) {
-              if (personSide == 2) sp += GRID_EXTENT;
+            if (SIDE(sp) != x.starting_side()) {
+              if (x.starting_side() == 2) sp += GRID_EXTENT;
               else sp -= GRID_EXTENT;
             }
           } else {
