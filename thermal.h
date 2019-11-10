@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.2"
+#define FIRMWARE_VERSION        "V0.8.3"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -20,7 +20,7 @@
 #define FOREGROUND_GRADIENT     2.0
 #define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
 #define MIN_TRAVEL_RATIO        20
-#define MAX_TEMP_DIFFERENCE     4.0  // max temp difference between 2 matchable points
+#define MAX_TEMP_DIFFERENCE     3.0  // max temp difference between 2 matchable points
 
 #include <Adafruit_AMG88xx.h>
 Adafruit_AMG88xx amg;
@@ -381,8 +381,6 @@ uint8_t findClosestPerson(Person *arr, uint8_t i, float maxDistance) {
       float dist = euclidean_distance(arr[x].past_position, i);
       if (dist > maxDistance) continue;
       float tempDiff = diffFromPerson(i, arr[x]);
-      if (tempDiff > MAX_TEMP_DIFFERENCE) continue;
-
       tempDiff = tempDiff/MAX_TEMP_DIFFERENCE * dist/maxDistance;
       if (tempDiff < minTemp) {
         p = x;
@@ -963,12 +961,7 @@ void processSensor() {
         float max_distance = MIN_DISTANCE + (conf/100.0 * min(anei, MIN_DISTANCE));
         float min_score = 100;
         for (uint8_t j=0; j<total_masses; j++) {
-          // if difference from background is more than 1º, skip
-          float tempDiff = diffFromPerson(points[j], p);
-          if (tempDiff > MAX_TEMP_DIFFERENCE) continue;
-
           float d = euclidean_distance(p.past_position, points[j]);
-
           // if switching sides with low confidence, don't pair
           if (SIDE(points[j]) != p.side() && (conf < AVG_CONF_THRESHOLD ||
                 ((float)norm_pixels[points[j]])/d < MIN_TRAVEL_RATIO)) {
@@ -1004,8 +997,10 @@ void processSensor() {
               directionBonus -= (((float)(AVG_CONF_THRESHOLD-norm_pixels[points[j]]))/100.0);
             }
 
-            float score = sq(d/max_distance) - ratioP - directionBonus -
-                    tempDiff/MAX_TEMP_DIFFERENCE;
+            float tempDiff = diffFromPerson(points[j], p);
+
+            float score = sq(d/max_distance) + tempDiff/MAX_TEMP_DIFFERENCE - ratioP -
+                            directionBonus;
             if (min_score - score > 0.05) {
               min_score = score;
               min_index = j;
@@ -1085,9 +1080,8 @@ void processSensor() {
               if (p.count == 1 || p.crossed) td = 1.0;
               else td = 1.0/((float)(p.count - 1));
             }
-            score *= (td + directionBonus);
             float tempDiff = diffFromPerson(points[i], p);
-            score *= (1.0 - tempDiff/MAX_TEMP_DIFFERENCE);
+            score *= (td + directionBonus - tempDiff/MAX_TEMP_DIFFERENCE);
             score *= p.history;
             float newConf = (float)norm_pixels[points[i]];
             newConf = abs(newConf - conf);
