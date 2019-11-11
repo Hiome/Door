@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.3"
+#define FIRMWARE_VERSION        "V0.8.4"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -18,7 +18,7 @@
 #define HIGH_CONF_THRESHOLD     60   // consider 60% confidence as very high
 #define BACKGROUND_GRADIENT     2.0
 #define FOREGROUND_GRADIENT     2.0
-#define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
+#define NUM_STD_DEV             2.0  // max num of std dev to include in trimmed average
 #define MIN_TRAVEL_RATIO        20
 #define MAX_TEMP_DIFFERENCE     3.0  // max temp difference between 2 matchable points
 
@@ -494,7 +494,7 @@ float trimMean(float sum, float sq_sum, uint8_t side) {
   float variance = sq_sum - sq(sum)/32.0;
   variance = NUM_STD_DEV * sqrt(variance);
   float cavg = 0.0;
-  uint8_t total = 0.0;
+  uint8_t total = 0;
   for (uint8_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
     if (raw_pixels[i] > (mean - variance) && raw_pixels[i] < (mean + variance)) {
       cavg += raw_pixels[i];
@@ -516,7 +516,7 @@ bool pixelsChanged() {
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     _hsh += sq(raw_pixels[i] + i);
   }
-  if (abs(_hsh - cur_pixels_hash) < 0.01) {
+  if (abs(_hsh - cur_pixels_hash) < 0.001) {
     // nothing changed, stop here
     return false;
   } else {
@@ -636,8 +636,6 @@ bool normalizePixels() {
   calculateFgm();
 
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    float std = raw_pixels[i] - bgPixel(i);
-
     uint8_t bgm = calcBgm(i);
     uint8_t fgm = calcFgm(i);
     uint8_t conf = min(bgm, fgm);
@@ -648,32 +646,6 @@ bool normalizePixels() {
     } else {
       norm_pixels[i] = conf;
     }
-
-    // update average baseline
-    // implicit alpha of 0.001
-    if (frames_since_door_open < 5 &&
-        ((door_state == DOOR_OPEN && norm_pixels[i] < CONFIDENCE_THRESHOLD) ||
-         (door_state != DOOR_OPEN && norm_pixels[i] < HIGH_CONF_THRESHOLD))) {
-      // door just changed, increase alpha to 0.1 to adjust quickly to new background
-      std *= 100.0;
-    } else if (norm_pixels[i] > 50) {
-      // looks like a person, lower alpha to 0.0001
-      std *= 0.1;
-    } else if (cycles_since_person < 2) {
-      for (uint8_t x=0; x<MAX_PEOPLE; x++) {
-        if (known_people[x].real() &&
-              diffFromPerson(i, known_people[x]) < MAX_TEMP_DIFFERENCE &&
-              euclidean_distance(known_people[x].past_position, i) < 4) {
-          std *= 0.1;
-          break;
-        }
-      }
-    } else if (cycles_since_person == MAX_CLEARED_CYCLES &&
-                norm_pixels[i] < CONFIDENCE_THRESHOLD) {
-      // nothing going on, increase alpha to 0.005
-      std *= 5.0;
-    }
-    avg_pixels[i] += ((int)roundf(std));
   }
 
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
@@ -712,6 +684,37 @@ bool normalizePixels() {
   }
 
   return true;
+}
+
+void updateBgAverage() {
+  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    // update average baseline
+    // implicit alpha of 0.001
+    float std = raw_pixels[i] - bgPixel(i);
+    if (frames_since_door_open < 5 &&
+        ((door_state == DOOR_OPEN && norm_pixels[i] < CONFIDENCE_THRESHOLD) ||
+         (door_state != DOOR_OPEN && norm_pixels[i] < HIGH_CONF_THRESHOLD))) {
+      // door just changed, increase alpha to 0.1 to adjust quickly to new background
+      std *= 100.0;
+    } else if (norm_pixels[i] > 50) {
+      // looks like a person, lower alpha to 0.0001
+      std *= 0.1;
+    } else if (cycles_since_person < 2) {
+      for (uint8_t x=0; x<MAX_PEOPLE; x++) {
+        if (known_people[x].real() && known_people[x].confidence() > 50 &&
+              diffFromPerson(i, known_people[x]) < MAX_TEMP_DIFFERENCE &&
+              euclidean_distance(known_people[x].past_position, i) < MAX_DISTANCE) {
+          std *= 0.1;
+          break;
+        }
+      }
+    } else if (cycles_since_person == MAX_CLEARED_CYCLES &&
+                norm_pixels[i] < CONFIDENCE_THRESHOLD) {
+      // nothing going on, increase alpha to 0.005
+      std *= 5.0;
+    }
+    avg_pixels[i] += ((int)roundf(std));
+  }
 }
 
 uint8_t findCurrentPoints(uint8_t *points) {
@@ -1333,6 +1336,8 @@ void processSensor() {
   if (cycles_since_person < MAX_CLEARED_CYCLES) {
     cycles_since_person++;
   }
+
+  updateBgAverage();
 
   // wrap up with debugging output
 
