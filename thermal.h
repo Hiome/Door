@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.5"
+#define FIRMWARE_VERSION        "V0.8.6"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -18,6 +18,7 @@
 #define HIGH_CONF_THRESHOLD     60   // consider 60% confidence as very high
 #define BACKGROUND_GRADIENT     2.0
 #define FOREGROUND_GRADIENT     2.0
+#define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
 #define MIN_TRAVEL_RATIO        20
 #define MAX_TEMP_DIFFERENCE     3.0  // max temp difference between 2 matchable points
 
@@ -494,7 +495,7 @@ void clearPointsAfterDoorClose() {
 float trimMean(float sum, float sq_sum, uint8_t side) {
   float mean = sum/32.0;
   float variance = sq_sum - sq(sum)/32.0;
-  variance = sqrt(variance);
+  variance = NUM_STD_DEV * sqrt(variance);
   float cavg = 0.0;
   uint8_t total = 0;
   for (uint8_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
