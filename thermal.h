@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.6"
+#define FIRMWARE_VERSION        "V0.8.7"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -18,7 +18,7 @@
 #define HIGH_CONF_THRESHOLD     60   // consider 60% confidence as very high
 #define BACKGROUND_GRADIENT     2.0
 #define FOREGROUND_GRADIENT     2.0
-#define NUM_STD_DEV             3.0  // max num of std dev to include in trimmed average
+#define NUM_STD_DEV             2.0  // max num of std dev to include in trimmed average
 #define MIN_TRAVEL_RATIO        20
 #define MAX_TEMP_DIFFERENCE     3.0  // max temp difference between 2 matchable points
 
@@ -40,6 +40,8 @@ float global_bgm = 0;
 float global_fgm = 0;
 float cavg1 = 0.0;
 float cavg2 = 0.0;
+float var1 = 0.0;
+float var2 = 0.0;
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -122,8 +124,8 @@ uint8_t forgotten_num = 0;
 uint8_t cycles_since_forgotten = MAX_EMPTY_CYCLES;
 
 #define DOOR_CLOSED 0
-#define DOOR_AJAR   1
-#define DOOR_OPEN   2
+#define DOOR_OPEN   1
+#define DOOR_AJAR   2
 uint8_t door_state = DOOR_OPEN;
 uint8_t last_published_door_state = 9;
 uint8_t frames_since_door_open = 0;
@@ -170,6 +172,7 @@ typedef struct Person {
   uint8_t   starting_temp     :6;   // 0-63
   uint8_t   past_temp         :6;   // 0-63
   float     total_raw_temp;
+  uint8_t   total_variance;
   float     total_bgm;
   float     total_fgm;
   uint8_t   total_neighbors;        // 0-80
@@ -196,6 +199,7 @@ typedef struct Person {
     total_bgm = bgm();
     total_fgm = fgm();
     total_raw_temp = raw_temp();
+    total_variance = int(roundf(variance()));
     total_bgm_conf = int(bgm_confidence());
     total_fgm_conf = int(fgm_confidence());
     total_neighbors = int(neighbors());
@@ -209,6 +213,7 @@ typedef struct Person {
   float     bgm() { return total_bgm/((float)count); };
   float     fgm() { return total_fgm/((float)count); };
   float     raw_temp()  { return total_raw_temp/((float)count); };
+  float     variance()  { return (float)total_variance/((float)count); };
   float     neighbors() { return (float)total_neighbors/(float)count; };
   float     height() { return (float)total_height/(float)count; };
   float     width()  { return (float)total_width/(float)count; };
@@ -227,9 +232,9 @@ typedef struct Person {
     return ((float)conf)/((float)count);
   };
 
-  #define METALENGTH  51
+  #define METALENGTH  54
   void generateMeta(char *meta) {
-    sprintf(meta, "%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%d",
+    sprintf(meta, "%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%d",
       int(bgm_confidence()),              // 3  100
       int(fgm_confidence()),              // 3  100
       int(bgm()*100.0),                   // 4  1020
@@ -244,8 +249,9 @@ typedef struct Person {
       int(width()*10.0),                  // 2  70
       max_jump,                           // 1  5
       temp_drift(),                       // 1  4
-      max_temp_jump                       // 1  9
-    );                                    // + 14 'x' + 1 null => 51 total
+      max_temp_jump,                      // 1  9
+      int(roundf(variance()))             // 2  10
+    );                                    // + 15 'x' + 1 null => 54 total
   };
 
   void revert(uint8_t eventType) {
@@ -471,10 +477,10 @@ bool checkDoorState() {
     SERIAL_PRINTLN(door_state);
   }
 
-  if (((door_state == DOOR_CLOSED && last_published_door_state != DOOR_CLOSED) ||
-       (door_state != DOOR_CLOSED && last_published_door_state != DOOR_OPEN)) &&
-      publish(door_state == DOOR_CLOSED ? "d0" : "d1", "0", 0)) {
-    last_published_door_state = door_state == DOOR_CLOSED ? DOOR_CLOSED : DOOR_OPEN;
+  if (door_state != last_published_door_state) {
+    publish(
+      (door_state == DOOR_CLOSED ? "d0" : (door_state == DOOR_OPEN ? "d1" : "d2")), "0", 0);
+    last_published_door_state = door_state;
   }
 
   return last_door_state != door_state;
@@ -494,22 +500,22 @@ void clearPointsAfterDoorClose() {
 
 float trimMean(float sum, float sq_sum, uint8_t side) {
   float mean = sum/32.0;
-  float variance = sq_sum - sq(sum)/32.0;
-  variance = NUM_STD_DEV * sqrt(variance);
+  float variance = (sq_sum - sq(sum)/32.0)/31.0;
+  variance = sqrt(variance);
+  if (side == 1) var1 = variance;
+  else var2 = variance;
+  SERIAL_PRINTLN(variance);
+  float lowerBound = mean - (NUM_STD_DEV * variance);
+  float upperBound = mean + (NUM_STD_DEV * variance);
   float cavg = 0.0;
   uint8_t total = 0;
   for (uint8_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
-    if (raw_pixels[i] > (mean - variance) && raw_pixels[i] < (mean + variance)) {
+    if (raw_pixels[i] > lowerBound && raw_pixels[i] < upperBound) {
       cavg += raw_pixels[i];
       total++;
     }
   }
-  if (total > 0) {
-    return cavg/(float)total;
-  } else {
-    // somehow variance was perfectly 0, pretty much impossible to get here
-    return mean;
-  }
+  return total > 0 ? cavg/(float)total : mean;
 }
 
 bool pixelsChanged() {
@@ -535,7 +541,9 @@ void recheckPoint(uint8_t x, uint8_t i) {
 uint8_t calcFgm(uint8_t i) {
   if (neighbors_count[i] < 1) return 0;
   float fgmt1 = abs(raw_pixels[i] - cavg1);
+  if (fgmt1 < var1) fgmt1 = 0.0;
   float fgmt2 = abs(raw_pixels[i] - cavg2);
+  if (fgmt2 < var2) fgmt2 = 0.0;
   fgmt1 = min(fgmt1, fgmt2);
   if (fgmt1 < 0.6) {
     neighbors_count[i] = 0;
@@ -566,7 +574,9 @@ void calculateFgm() {
       continue;
     }
     float fgmt1 = abs(raw_pixels[i] - cavg1);
+    if (fgmt1 < var1) fgmt1 = 0.0;
     float fgmt2 = abs(raw_pixels[i] - cavg2);
+    if (fgmt2 < var2) fgmt2 = 0.0;
     fgmt1 = min(fgmt1, fgmt2);
     global_fgm = max(fgmt1, global_fgm);
   }
@@ -695,11 +705,16 @@ void updateBgAverage() {
     // update average baseline
     // implicit alpha of 0.001
     float std = raw_pixels[i] - bgPixel(i);
-    if (frames_since_door_open < 5 &&
-        ((door_state == DOOR_OPEN && norm_pixels[i] < CONFIDENCE_THRESHOLD) ||
-         (door_state != DOOR_OPEN && norm_pixels[i] < HIGH_CONF_THRESHOLD))) {
-      // door just changed, increase alpha to 0.1 to adjust quickly to new background
-      std *= 100.0;
+    float fgm = calcFgm(i);
+    if (fgm < CONFIDENCE_THRESHOLD) std *= 900.0; // fuck it
+    else if (frames_since_door_open < 5 && fgm < HIGH_CONF_THRESHOLD) {
+      if (door_state != DOOR_OPEN || (frames_since_door_open < 2 && SIDE(i) == door_side)) {
+        // door just opened, imprint everything on side 1
+        std *= 900.0;
+      } else {
+        // door is open, either for more than 2 frames or we're on side 2
+        std *= 200.0;
+      }
     } else if (cycles_since_person == 0) {
       for (uint8_t x=0; x<MAX_PEOPLE; x++) {
         if (known_people[x].real() && known_people[x].total_count() > 5 &&
@@ -864,7 +879,7 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
                       uint8_t &mj, uint8_t &tj, uint8_t &st, uint8_t &cross, bool &revert,
                       uint16_t &bn, uint16_t &fn, float &b, float &f, float &rt, uint8_t &n,
                       uint8_t &height, uint8_t &width, uint8_t &c, uint16_t &cstart,
-                      uint8_t &cend) {
+                      uint8_t &cend, uint8_t &v) {
   uint8_t pi = findClosestPerson(arr, point, MAX_DISTANCE);
   if (pi != UNDEF_POINT) {
     Person p = arr[pi];
@@ -911,6 +926,7 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
     fn += p.total_fgm_conf;
     b += p.total_bgm;
     f += p.total_fgm;
+    v += p.total_variance;
     n += p.total_neighbors;
     height += p.total_height;
     width += p.total_width;
@@ -1151,6 +1167,7 @@ void processSensor() {
                   p.crossed = 0;
                   p.reverted = false;
                   p.total_raw_temp = 0;
+                  p.total_variance = 0;
                   p.total_bgm_conf = 0;
                   p.total_fgm_conf = 0;
                   p.total_bgm = 0;
@@ -1195,6 +1212,7 @@ void processSensor() {
           fgmt1 = min(fgmt1, fgmt2);
           p.total_bgm += abs(bgm);
           p.total_fgm += fgmt1;
+          p.total_variance += ((int)roundf(max(var1, var2)));
           p.total_neighbors += neighbors_count[points[i]];
           p.total_height += calcHeight(points[i]);
           p.total_width += calcWidth(points[i]);
@@ -1224,6 +1242,7 @@ void processSensor() {
       float rt = raw_pixels[sp];
       float b = global_bgm;
       float f = global_fgm;
+      uint8_t v = ((int)roundf(max(var1, var2)));
       uint8_t n = neighbors_count[sp];
       uint8_t height = calcHeight(sp);
       uint8_t width = calcWidth(sp);
@@ -1235,7 +1254,7 @@ void processSensor() {
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
         if (remember_person(temp_forgotten_people, points[i], h, sp, mp, mj, tj, st, cross,
-              revert, bn, fn, b, f, rt, n, height, width, c, cstart, cend)) {
+              revert, bn, fn, b, f, rt, n, height, width, c, cstart, cend, v)) {
           retroMatched = true;
           SERIAL_PRINTLN(F("af"));
         }
@@ -1244,7 +1263,7 @@ void processSensor() {
       if (!retroMatched && cycles_since_forgotten < MAX_EMPTY_CYCLES && forgotten_num > 0) {
         // second let's check past forgotten points for a match
         if (remember_person(forgotten_people, points[i], h, sp, mp, mj, tj, st, cross,
-              revert, bn, fn, b, f, rt, n, height, width, c, cstart, cend)) {
+              revert, bn, fn, b, f, rt, n, height, width, c, cstart, cend, v)) {
           retroMatched = true;
         }
       }
@@ -1275,7 +1294,7 @@ void processSensor() {
       }
 
       // ignore new points on side 1 immediately after door opens/closes
-      if ((frames_since_door_open < 3 && SIDE(sp) == door_side) ||
+      if ((frames_since_door_open < 2 && SIDE(sp) == door_side) ||
           (frames_since_door_open < 5 && door_state != DOOR_OPEN))
         continue;
 
@@ -1298,6 +1317,7 @@ void processSensor() {
           p.total_fgm_conf = fn;
           p.total_bgm = b;
           p.total_fgm = f;
+          p.total_variance = v;
           p.total_neighbors = n;
           p.total_height = height;
           p.total_width = width;
