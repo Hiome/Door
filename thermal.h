@@ -386,6 +386,10 @@ bool samePoints(uint8_t a, uint8_t b) {
           abs(raw_pixels[(a)] - raw_pixels[(b)]) < NORMAL_TEMP_DIFFERENCE;
 }
 
+void recheckPoint(uint8_t x, uint8_t i) {
+  if (samePoints(x, i)) neighbors_count[i]++;
+}
+
 uint8_t findClosestPerson(Person *arr, uint8_t i, float maxDistance) {
   uint8_t p = UNDEF_POINT;
   float minTemp = 2.0;
@@ -393,7 +397,10 @@ uint8_t findClosestPerson(Person *arr, uint8_t i, float maxDistance) {
     if (arr[x].real()) {
       float dist = euclidean_distance(arr[x].past_position, i);
       if (dist > maxDistance) continue;
+
       float tempDiff = diffFromPerson(i, arr[x]);
+      if (tempDiff > 1.5) continue;
+
       float tempRatio = tempDiff/NORMAL_TEMP_DIFFERENCE;
       tempRatio = max(tempRatio, 0.1);
       float distRatio = dist/maxDistance;
@@ -522,10 +529,6 @@ float trimMean(float sum, float sq_sum, uint8_t side) {
     }
   }
   return total > 0 ? cavg/(float)total : mean;
-}
-
-void recheckPoint(uint8_t x, uint8_t i) {
-  if (samePoints(x, i)) neighbors_count[i]++;
 }
 
 // calculate difference from foreground
@@ -668,21 +671,26 @@ bool normalizePixels() {
 float calculateNewBackground(uint8_t i) {
   // implicit alpha of 0.001
   float std = raw_pixels[i] - bgPixel(i);
-  float fgm = calcFgm(i);
 
-  if (door_state == DOOR_AJAR && SIDE(i) == door_side)
+  if ((door_state == DOOR_AJAR && SIDE(i) == door_side) ||
+      (door_state == DOOR_OPEN && frames_since_door_open < 2 && SIDE(i) == door_side))
     // ignore points on door side when door is ajar
+    // or door just opened, any points immediately on door side must be noise
     // increase alpha to 0.9
     return std * 900.0;
 
-  if (door_state == DOOR_OPEN && frames_since_door_open < 2 && SIDE(i) == door_side)
-    // door just opened, any points immediately on door side must be noise
-    // increase alpha to 0.9
-    return std * 900.0;
-
-  if (fgm < CONFIDENCE_THRESHOLD)
-    // increase alpha to 0.2
-    return std * 200.0;
+  float fd = fgDiff(i);
+  float v = SIDE1(i) ? var1 : var2;
+  float fgm = calcGradient(fd, global_fgm);
+  if (fd < v*1.2) {
+    if (fgm < CONFIDENCE_THRESHOLD)
+      return std * 900.0;
+    if (fgm < AVG_CONF_THRESHOLD)
+      return std * 700.0;
+    if (frames_since_door_open < 5)
+      return std * 500.0;
+  } else if (fgm < CONFIDENCE_THRESHOLD)
+    return std * 400.0;
 
   if (cycles_since_person == 0) {
     for (uint8_t x=0; x<MAX_PEOPLE; x++) {
@@ -696,14 +704,7 @@ float calculateNewBackground(uint8_t i) {
         return std * 0.01;
       }
     }
-  }
-
-  if (frames_since_door_open < 5 && fgm < 50 && SIDE(i) != door_side)
-    // door just changed and there is low confidence pixels on side opposite of door
-    // increase alpha to 0.3
-    return std * 300.0;
-
-  if (cycles_since_person == MAX_CLEARED_CYCLES) {
+  } else if (cycles_since_person == MAX_CLEARED_CYCLES) {
     // nothing going on, increase alpha to 0.1
     return std * 100.0;
   }
@@ -1346,8 +1347,8 @@ void processSensor() {
           SERIAL_PRINT(p.starting_position);
           SERIAL_PRINT(F("-"));
           SERIAL_PRINT(p.history);
-          SERIAL_PRINT(F("-"));
-          SERIAL_PRINT(neighbors_count[p.past_position]);
+//          SERIAL_PRINT(F("-"));
+//          SERIAL_PRINT(neighbors_count[p.past_position]);
           SERIAL_PRINT(F("),"));
         }
       }
