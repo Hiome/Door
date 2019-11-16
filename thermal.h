@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.8"
+#define FIRMWARE_VERSION        "V0.8.9"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -494,7 +494,8 @@ bool checkDoorState() {
 }
 
 void clearPointsAfterDoorClose() {
-  if (checkDoorState()) {
+  uint8_t last_door_state = door_state;
+  if (checkDoorState() && (door_state == DOOR_CLOSED || last_door_state == DOOR_CLOSED)) {
     for (uint8_t i = 0; i<MAX_PEOPLE; i++) {
       known_people[i].forget();
       known_people[i] = UNDEF_PERSON;
@@ -540,11 +541,8 @@ float bgDiff(uint8_t i) {
   return abs(std);
 }
 
-uint8_t calcGradient(uint8_t i, float diff, float scale) {
-  if (diff < 0.6) {
-    neighbors_count[i] = 0;
-    return 0;
-  }
+uint8_t calcGradient(float diff, float scale) {
+  if (diff < 0.6) return 0;
   diff /= scale;
   diff = min(diff, 1.0);
   return ((int)roundf(diff*100.0));
@@ -552,21 +550,18 @@ uint8_t calcGradient(uint8_t i, float diff, float scale) {
 
 // calculate foreground gradient percent
 uint8_t calcFgm(uint8_t i) {
-  if (neighbors_count[i] < 1) return 0;
-  return calcGradient(i, fgDiff(i), global_fgm);
+  return calcGradient(fgDiff(i), global_fgm);
 }
 
 // calculate background gradient percent
 uint8_t calcBgm(uint8_t i) {
-  if (neighbors_count[i] < 1) return 0;
-  return calcGradient(i, bgDiff(i), global_bgm);
+  return calcGradient(bgDiff(i), global_bgm);
 }
 
 // calculate foreground gradient scale
 void calculateFgm() {
   global_fgm = FOREGROUND_GRADIENT;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (neighbors_count[i] < 1) continue;
     float fgmt = fgDiff(i);
     if (global_bgm > 1.0)
       fgmt *= (calcBgm(i)/100.0);
@@ -578,7 +573,6 @@ void calculateFgm() {
 void calculateBgm() {
   global_bgm = BACKGROUND_GRADIENT;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (neighbors_count[i] < 1) continue;
     float bgmt = bgDiff(i);
     bgmt *= (calcFgm(i)/100.0);
     global_bgm = max(bgmt, global_bgm);
@@ -600,8 +594,6 @@ bool normalizePixels() {
       x_sum2 += raw_pixels[i];
       sq_sum2 += sq(raw_pixels[i]);
     }
-
-    neighbors_count[i] = 1;
   }
 
   // calculate trimmed average
@@ -634,20 +626,13 @@ bool normalizePixels() {
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     uint8_t bgm = calcBgm(i);
     uint8_t fgm = calcFgm(i);
-    uint8_t conf = min(bgm, fgm);
-
-    if (conf < CONFIDENCE_THRESHOLD) {
-      neighbors_count[i] = 0;
-      norm_pixels[i] = 0;
-    } else {
-      norm_pixels[i] = conf;
-    }
+    norm_pixels[i] = min(bgm, fgm);
   }
 
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (neighbors_count[i] < 1) continue;
-
     neighbors_count[i] = 0;
+
+    if (norm_pixels[i] < CONFIDENCE_THRESHOLD) continue;
 
     if (i >= GRID_EXTENT) {
       // not top row
@@ -680,37 +665,55 @@ bool normalizePixels() {
   return true;
 }
 
+float calculateNewBackground(uint8_t i) {
+  // implicit alpha of 0.001
+  float std = raw_pixels[i] - bgPixel(i);
+  float fgm = calcFgm(i);
+
+  if (door_state == DOOR_AJAR && SIDE(i) == door_side)
+    // ignore points on door side when door is ajar
+    // increase alpha to 0.9
+    return std * 900.0;
+
+  if (door_state == DOOR_OPEN && frames_since_door_open < 2 && SIDE(i) == door_side)
+    // door just opened, any points immediately on door side must be noise
+    // increase alpha to 0.9
+    return std * 900.0;
+
+  if (fgm < CONFIDENCE_THRESHOLD)
+    // increase alpha to 0.2
+    return std * 200.0;
+
+  if (cycles_since_person == 0) {
+    for (uint8_t x=0; x<MAX_PEOPLE; x++) {
+      if (known_people[x].real() && known_people[x].total_count() > 5 &&
+            known_people[x].confidence() > 50 &&
+            diffFromPerson(i, known_people[x]) < NORMAL_TEMP_DIFFERENCE &&
+            (known_people[x].total_distance() > MIN_DISTANCE_FRD ||
+              known_people[x].fgm() > 1.5*known_people[x].variance()) &&
+            euclidean_distance(known_people[x].past_position, i) < MAX_DISTANCE) {
+        // decrease alpha to 0.00001
+        return std * 0.01;
+      }
+    }
+  }
+
+  if (frames_since_door_open < 5 && fgm < 50 && SIDE(i) != door_side)
+    // door just changed and there is low confidence pixels on side opposite of door
+    // increase alpha to 0.3
+    return std * 300.0;
+
+  if (cycles_since_person == MAX_CLEARED_CYCLES) {
+    // nothing going on, increase alpha to 0.1
+    return std * 100.0;
+  }
+
+  return std;
+}
+
 void updateBgAverage() {
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    // update average baseline
-    // implicit alpha of 0.001
-    float std = raw_pixels[i] - bgPixel(i);
-    float fgm = calcFgm(i);
-    if (fgm < CONFIDENCE_THRESHOLD) std *= 900.0; // fuck it
-    else if (frames_since_door_open < 5 && fgm < HIGH_CONF_THRESHOLD) {
-      if (door_state != DOOR_OPEN || (frames_since_door_open < 2 && SIDE(i) == door_side)) {
-        // door just opened, imprint everything on side 1
-        std *= 900.0;
-      } else {
-        // door is open, either for more than 2 frames or we're on side 2
-        std *= 200.0;
-      }
-    } else if (cycles_since_person == 0) {
-      for (uint8_t x=0; x<MAX_PEOPLE; x++) {
-        if (known_people[x].real() && known_people[x].total_count() > 5 &&
-              known_people[x].confidence() > 50 &&
-              known_people[x].total_distance() > MIN_DISTANCE &&
-              diffFromPerson(i, known_people[x]) < NORMAL_TEMP_DIFFERENCE &&
-              euclidean_distance(known_people[x].past_position, i) < MAX_DISTANCE) {
-          std *= 0.1;
-          break;
-        }
-      }
-    } else if (cycles_since_person == MAX_CLEARED_CYCLES) {
-      // nothing going on, increase alpha to 0.01
-      std *= 10.0;
-    }
-    avg_pixels[i] += ((int)roundf(std));
+    avg_pixels[i] += ((int)roundf(calculateNewBackground(i)));
   }
 }
 
@@ -745,7 +748,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
     uint8_t i = ordered_indexes_temp[z];
     bool added = false;
     for (uint8_t j=0; j<z; j++) {
-      if (abs(norm_pixels[i] - norm_pixels[ordered_indexes[j]]) < 15) {
+      if (norm_pixels[ordered_indexes[j]] - norm_pixels[i] < 15) {
         if (neighbors_count[i] != neighbors_count[ordered_indexes[j]]) {
           // prefer the point that's more in middle of blob
           added = neighbors_count[i] > neighbors_count[ordered_indexes[j]];
@@ -774,18 +777,15 @@ uint8_t findCurrentPoints(uint8_t *points) {
 
           added = edge1 > edge2;
         }
-        if (added && norm_pixels[i] < norm_pixels[ordered_indexes[j]]) {
+        if (added) {
           norm_pixels[i] = norm_pixels[ordered_indexes[j]];
+          // insert point i in front of j
+          for (int8_t x=z; x>j; x--) {
+            ordered_indexes[x] = ordered_indexes[x-1];
+          }
+          ordered_indexes[j] = i;
+          break;
         }
-      }
-
-      if (added) {
-        // insert point i in front of j
-        for (int8_t x=z; x>j; x--) {
-          ordered_indexes[x] = ordered_indexes[x-1];
-        }
-        ordered_indexes[j] = i;
-        break;
       }
     }
     if (!added) {
@@ -1263,7 +1263,7 @@ void processSensor() {
 
       // ignore new points on side 1 immediately after door opens/closes
       if ((frames_since_door_open < 2 && SIDE(sp) == door_side) ||
-          (frames_since_door_open < 5 && door_state != DOOR_OPEN))
+          (frames_since_door_open < 5 && door_state == DOOR_CLOSED))
         continue;
 
       for (uint8_t j=0; j<MAX_PEOPLE; j++) {
@@ -1322,14 +1322,14 @@ void processSensor() {
 
   publishEvents();
 
+  updateBgAverage();
+
   if (frames_since_door_open < 5) {
     frames_since_door_open++;
   }
   if (cycles_since_person < MAX_CLEARED_CYCLES) {
     cycles_since_person++;
   }
-
-  updateBgAverage();
 
   // wrap up with debugging output
 
@@ -1346,8 +1346,8 @@ void processSensor() {
           SERIAL_PRINT(p.starting_position);
           SERIAL_PRINT(F("-"));
           SERIAL_PRINT(p.history);
-//          SERIAL_PRINT(F("-"));
-//          SERIAL_PRINT(neighbors_count[p.past_position]);
+          SERIAL_PRINT(F("-"));
+          SERIAL_PRINT(neighbors_count[p.past_position]);
           SERIAL_PRINT(F("),"));
         }
       }
