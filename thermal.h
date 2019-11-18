@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.9"
+#define FIRMWARE_VERSION        "V0.8.10"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -283,17 +283,17 @@ typedef struct Person {
   bool checkForRevert() {
     if (!real() || !crossed) return false;
   
-    if (reverted && side() == starting_side()) {
-      // we had previously reverted this point, but it came back and made it through
+    if ((reverted && side() == starting_side()) ||
+        (!reverted && side() != starting_side()) ||
+        (checkForDoorClose() && !pointOnBorder(past_position))) {
+      // we had previously reverted this point, but it came back and made it through,
+      // or point never reverted but is back on the starting side,
+      // or door just closed and point was in the middle of frame where door closed
       revert(REVERT_FRD);
-      reverted = false;
-      return true;
-    } else if (!reverted && side() != starting_side()) {
-      // point disappeared in middle of grid, revert its crossing (probably noise or a hand)
-      revert(REVERT_FRD);
-      reverted = true;
+      reverted = !reverted;
       return true;
     }
+
     return false;
   };
 
@@ -399,7 +399,7 @@ uint8_t findClosestPerson(Person *arr, uint8_t i, float maxDistance) {
       if (dist > maxDistance) continue;
 
       float tempDiff = diffFromPerson(i, arr[x]);
-      if (tempDiff > 1.5) continue;
+      if (tempDiff > NORMAL_TEMP_DIFFERENCE) continue;
 
       float tempRatio = tempDiff/NORMAL_TEMP_DIFFERENCE;
       tempRatio = max(tempRatio, 0.1);
@@ -676,21 +676,21 @@ float calculateNewBackground(uint8_t i) {
       (door_state == DOOR_OPEN && frames_since_door_open < 2 && SIDE(i) == door_side))
     // ignore points on door side when door is ajar
     // or door just opened, any points immediately on door side must be noise
-    // increase alpha to 0.9
-    return std * 900.0;
+    // increase alpha to 0.5
+    return std * 500.0;
 
   float fd = fgDiff(i);
   float v = SIDE1(i) ? var1 : var2;
   float fgm = calcGradient(fd, global_fgm);
   if (fd < v*1.2) {
     if (fgm < CONFIDENCE_THRESHOLD)
-      return std * 900.0;
-    if (fgm < AVG_CONF_THRESHOLD)
-      return std * 700.0;
-    if (frames_since_door_open < 5)
       return std * 500.0;
+    if (fgm < AVG_CONF_THRESHOLD)
+      return std * 400.0;
+    if (frames_since_door_open < 5)
+      return std * 300.0;
   } else if (fgm < CONFIDENCE_THRESHOLD)
-    return std * 400.0;
+    return std * 200.0;
 
   if (cycles_since_person == 0) {
     for (uint8_t x=0; x<MAX_PEOPLE; x++) {
@@ -862,10 +862,13 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
     Person p = arr[pi];
     // if switching sides with low confidence or moving too far, don't pair
     float d = euclidean_distance(p.past_position, point);
-    if (SIDE(point) != p.side() && (p.confidence() < AVG_CONF_THRESHOLD ||
+    float conf = p.confidence();
+    if (SIDE(point) != p.side() && (conf < AVG_CONF_THRESHOLD ||
           ((float)norm_pixels[sp])/d < MIN_TRAVEL_RATIO)) {
       return false;
     }
+
+    if (conf < 80 && diffFromPerson(point, p) > MAX_TEMP_DIFFERENCE) return false;
 
     if ((SIDE1(p.starting_position) && AXIS(p.starting_position) >= AXIS(mp)) ||
         (SIDE2(p.starting_position) && AXIS(p.starting_position) <= AXIS(mp))) {
@@ -965,6 +968,9 @@ void processSensor() {
             continue;
           }
 
+          float tempDiff = diffFromPerson(points[j], p);
+          if (tempDiff > MAX_TEMP_DIFFERENCE && conf < 80) continue;
+
           if (d < max_distance) {
             float ratioP = min(((float)norm_pixels[points[j]])/conf,
                                conf/((float)norm_pixels[points[j]]));
@@ -991,8 +997,7 @@ void processSensor() {
               directionBonus -= (((float)(AVG_CONF_THRESHOLD-norm_pixels[points[j]]))/100.0);
             }
 
-            float tempDiff = diffFromPerson(points[j], p);
-            if (tempDiff < NORMAL_TEMP_DIFFERENCE) {
+            if (!p.crossed || pointOnSmallBorder(p.starting_position)) {
               directionBonus += (0.1*neighbors_count[points[j]]);
             }
 
@@ -1071,13 +1076,11 @@ void processSensor() {
                 directionBonus = 1.0;
               }
             }
+            directionBonus += (0.1*p.neighbors());
             float tempDiff = diffFromPerson(points[i], p);
             directionBonus -= sq(tempDiff/MAX_TEMP_DIFFERENCE);
-            if (tempDiff < NORMAL_TEMP_DIFFERENCE)
-              directionBonus += (0.1*p.neighbors());
             if (p.max_jump > 1)
-              directionBonus -= sq((p.max_jump - 1)/3.0);
-            directionBonus -= sq(p.max_temp_jump/MAX_TEMP_DIFFERENCE);
+              directionBonus -= sq((p.max_jump - 1)/MAX_DISTANCE);
             float td = p.total_distance();
             if (td < 1) {
               if (p.total_count() == 1 || p.crossed) td = 1.0;
@@ -1209,8 +1212,8 @@ void processSensor() {
       bool revert = false;
       uint16_t conf = norm_pixels[sp];
       float rt = raw_pixels[sp];
-      float b = global_bgm;
-      float f = global_fgm;
+      float b = bgDiff(sp);
+      float f = fgDiff(sp);
       uint8_t v = ((int)roundf(max(var1, var2)));
       uint8_t n = neighbors_count[sp];
       uint8_t height = calcHeight(sp);
