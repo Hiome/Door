@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.10"
+#define FIRMWARE_VERSION        "V0.8.11"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -178,11 +178,8 @@ typedef struct Person {
   uint8_t   history           :4;   // 1-10
   uint8_t   crossed           :4;   // 0-9
   bool      reverted          :1;   // 0-1
-  uint8_t   max_temp_jump     :3;   // 0-7
-  uint8_t   starting_temp     :6;   // 0-63
-  uint8_t   past_temp         :6;   // 0-63
   float     total_raw_temp;
-  uint8_t   total_variance;
+  float     total_variance;
   float     total_bgm;
   float     total_fgm;
   uint8_t   total_neighbors;        // 0-80
@@ -209,7 +206,7 @@ typedef struct Person {
     total_bgm = bgm();
     total_fgm = fgm();
     total_raw_temp = raw_temp();
-    total_variance = int(roundf(variance()));
+    total_variance = variance();
     total_conf = int(confidence());
     total_neighbors = int(neighbors());
     total_height = int(height());
@@ -223,7 +220,7 @@ typedef struct Person {
   float     bgm() { return total_bgm/((float)count); };
   float     fgm() { return total_fgm/((float)count); };
   float     raw_temp()  { return total_raw_temp/((float)count); };
-  float     variance()  { return (float)total_variance/((float)count); };
+  float     variance()  { return total_variance/((float)count); };
   float     neighbors() { return (float)total_neighbors/(float)count; };
   float     height() { return (float)total_height/(float)count; };
   float     width()  { return (float)total_width/(float)count; };
@@ -233,11 +230,10 @@ typedef struct Person {
 
   uint8_t   starting_side() { return SIDE(starting_position); };
   uint8_t   side() { return SIDE(past_position); };
-  uint8_t   temp_drift() { return abs(starting_temp - past_temp); };
 
-  #define METALENGTH  52
+  #define METALENGTH  50
   void generateMeta(char *meta) {
-    sprintf(meta, "%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%d",
+    sprintf(meta, "%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%d",
       int(confidence()),                  // 3  100
       int(bgm()*100.0),                   // 4  1020
       int(fgm()*100.0),                   // 4  1020
@@ -250,11 +246,9 @@ typedef struct Person {
       int(height()*10.0),                 // 2  70
       int(width()*10.0),                  // 2  70
       max_jump,                           // 1  5
-      temp_drift(),                       // 1  4
-      max_temp_jump,                      // 1  9
-      int(roundf(variance())),            // 2  10
+      int(variance()*100.0),              // 4  1000
       forgotten_count                     // 1  3
-    );                                    // + 15 'x' + 1 null => 52 total
+    );                                    // + 13 'x' + 1 null => 50 total
   };
 
   void revert(uint8_t eventType) {
@@ -332,8 +326,6 @@ typedef struct Person {
     reverted = false;
     history = 1;
     max_jump = 0;
-    max_temp_jump = 0;
-    starting_temp = past_temp;
     max_position = past_position;
     count_start = count_end;
     count_end = 0;
@@ -341,7 +333,8 @@ typedef struct Person {
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
   bool publishMaybeEvent() {
-    if (!real() || confidence() < AVG_CONF_THRESHOLD) return false;
+    float conf = confidence();
+    if (!real() || conf < AVG_CONF_THRESHOLD) return false;
 
     if (history >= MIN_HISTORY && (!crossed || !reverted)) {
       if (starting_side() != side()) {
@@ -354,7 +347,8 @@ typedef struct Person {
         // door just closed and point made it across but then died on border.
         // this might be somebody leaning in to close the door
         publishPacket(MAYBE_EVENT);
-      } else if (euclidean_distance(starting_position, past_position) > MAX_DISTANCE) {
+      } else if (conf > HIGH_CONF_THRESHOLD &&
+          euclidean_distance(starting_position, past_position) > MAX_DISTANCE) {
         revert(MAYBE_REVERT);
         return false;
       } else return false;
@@ -853,10 +847,10 @@ void forget_person(uint8_t idx, Person *temp_forgotten_people, uint8_t *pairs,
 }
 
 bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_t &mp,
-                      uint8_t &mj, uint8_t &tj, uint8_t &st, uint8_t &cross, bool &revert,
+                      uint8_t &mj, uint8_t &cross, bool &revert,
                       uint16_t &conf, float &b, float &f, float &rt, uint8_t &n,
                       uint8_t &height, uint8_t &width, uint8_t &c, uint16_t &cstart,
-                      uint8_t &cend, uint8_t &v, uint8_t &fc) {
+                      uint8_t &cend, float &v, uint8_t &fc) {
   uint8_t pi = findClosestPerson(arr, point, MAX_DISTANCE);
   if (pi != UNDEF_POINT) {
     Person p = arr[pi];
@@ -894,12 +888,8 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
     uint8_t axisJump = axis_distance(p.past_position, point);
     mj = max(axisJump, p.max_jump);
 
-    uint8_t tempJump = abs(p.past_temp - ((int)roundf(raw_pixels[point])));
-    tj = max(tempJump, p.max_temp_jump);
-
     cross = p.crossed;
     revert = p.reverted;
-    st = p.starting_temp;
     rt += p.total_raw_temp;
     conf += p.total_conf;
     b += p.total_bgm;
@@ -1178,14 +1168,11 @@ void processSensor() {
             }
             p.past_position = points[i];
           }
-          uint8_t tempJump = abs(p.past_temp - ((int)roundf(raw_pixels[points[i]])));
-          p.max_temp_jump = max(tempJump, p.max_temp_jump);
-          p.past_temp = ((int)roundf(raw_pixels[points[i]]));
           p.total_raw_temp += raw_pixels[points[i]];
           p.total_conf += norm_pixels[points[i]];
           p.total_bgm += bgDiff(points[i]);
           p.total_fgm += fgDiff(points[i]);
-          p.total_variance += ((int)roundf(max(var1, var2)));
+          p.total_variance += max(var1, var2);
           p.total_neighbors += neighbors_count[points[i]];
           p.total_height += calcHeight(points[i]);
           p.total_width += calcWidth(points[i]);
@@ -1205,8 +1192,6 @@ void processSensor() {
       uint8_t sp = points[i];
       uint8_t mp = sp;
       uint8_t mj = 0;
-      uint8_t tj = 0;
-      uint8_t st = ((int)roundf(raw_pixels[sp]));
       uint8_t h = 1;
       uint8_t cross = 0;
       bool revert = false;
@@ -1214,7 +1199,7 @@ void processSensor() {
       float rt = raw_pixels[sp];
       float b = bgDiff(sp);
       float f = fgDiff(sp);
-      uint8_t v = ((int)roundf(max(var1, var2)));
+      float v = max(var1, var2);
       uint8_t n = neighbors_count[sp];
       uint8_t height = calcHeight(sp);
       uint8_t width = calcWidth(sp);
@@ -1226,7 +1211,7 @@ void processSensor() {
 
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
-        if (remember_person(temp_forgotten_people, points[i], h, sp, mp, mj, tj, st, cross,
+        if (remember_person(temp_forgotten_people, points[i], h, sp, mp, mj, cross,
               revert, conf, b, f, rt, n, height, width, c, cstart, cend, v, fc)) {
           retroMatched = true;
         }
@@ -1234,7 +1219,7 @@ void processSensor() {
 
       if (!retroMatched && cycles_since_forgotten < MAX_EMPTY_CYCLES) {
         // second let's check past forgotten points for a match
-        if (remember_person(forgotten_people, points[i], h, sp, mp, mj, tj, st, cross,
+        if (remember_person(forgotten_people, points[i], h, sp, mp, mj, cross,
               revert, conf, b, f, rt, n, height, width, c, cstart, cend, v, fc)) {
           retroMatched = true;
         }
@@ -1279,9 +1264,6 @@ void processSensor() {
           p.max_jump = mj;
           p.history = h;
           p.starting_position = sp;
-          p.starting_temp = st;
-          p.past_temp = ((int)roundf(raw_pixels[points[i]]));
-          p.max_temp_jump = tj;
           p.crossed = cross;
           p.reverted = revert;
           p.total_raw_temp = rt;
