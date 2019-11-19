@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.11"
+#define FIRMWARE_VERSION        "V0.8.12"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -333,8 +333,10 @@ typedef struct Person {
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
   bool publishMaybeEvent() {
+    if (!real()) return false;
+
     float conf = confidence();
-    if (!real() || conf < AVG_CONF_THRESHOLD) return false;
+    if (conf < AVG_CONF_THRESHOLD) return false;
 
     if (history >= MIN_HISTORY && (!crossed || !reverted)) {
       if (starting_side() != side()) {
@@ -496,10 +498,13 @@ bool checkDoorState() {
 
 void clearPointsAfterDoorClose() {
   uint8_t last_door_state = door_state;
-  if (checkDoorState() && (door_state == DOOR_CLOSED || last_door_state == DOOR_CLOSED)) {
+  if (checkDoorState()) {
     for (uint8_t i = 0; i<MAX_PEOPLE; i++) {
-      known_people[i].forget();
-      known_people[i] = UNDEF_PERSON;
+      if (door_state == DOOR_CLOSED || last_door_state == DOOR_CLOSED ||
+          (known_people[i].real() && known_people[i].confidence() < HIGH_CONF_THRESHOLD)) {
+        known_people[i].forget();
+        known_people[i] = UNDEF_PERSON;
+      }
       forgotten_people[i] = UNDEF_PERSON;
     }
     cycles_since_forgotten = MAX_EMPTY_CYCLES;
