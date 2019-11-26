@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.13"
+#define FIRMWARE_VERSION        "V0.8.14"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -22,6 +22,8 @@
 #define MIN_TRAVEL_RATIO        20
 #define NORMAL_TEMP_DIFFERENCE  3.0  // temp difference between 2 points within same frame
 #define MAX_TEMP_DIFFERENCE     5.0  // max temp difference between 2 matchable people
+#define MIN_TEMP                2.0
+#define MAX_TEMP                45.0
 
 #include <Adafruit_AMG88xx.h>
 Adafruit_AMG88xx amg;
@@ -511,9 +513,9 @@ void clearPointsAfterDoorClose() {
   }
 }
 
-float trimMean(float sum, float sq_sum, uint8_t side) {
-  float mean = sum/32.0;
-  float variance = (sq_sum - (sq(sum)/32.0))/31.0;
+float trimMean(float sum, float sq_sum, uint8_t cnt, uint8_t side) {
+  float mean = sum/((float)cnt);
+  float variance = (sq_sum - (sq(sum)/((float)cnt)))/((float)(cnt - 1));
   variance = sqrt(variance);
   if (side == 1) var1 = variance;
   else var2 = variance;
@@ -532,6 +534,7 @@ float trimMean(float sum, float sq_sum, uint8_t side) {
 
 // calculate difference from foreground
 float fgDiff(uint8_t i) {
+  if (raw_pixels[i] < MIN_TEMP || raw_pixels[i] > MAX_TEMP) return 0.0;
   float fgmt1 = abs(raw_pixels[i] - cavg1);
   float fgmt2 = abs(raw_pixels[i] - cavg2);
   return min(fgmt1, fgmt2);
@@ -539,12 +542,13 @@ float fgDiff(uint8_t i) {
 
 // calculate difference from background
 float bgDiff(uint8_t i) {
+  if (raw_pixels[i] < MIN_TEMP || raw_pixels[i] > MAX_TEMP) return 0.0;
   float std = raw_pixels[i] - bgPixel(i);
   return abs(std);
 }
 
 uint8_t calcGradient(float diff, float scale) {
-  if (diff < 0.9) return 0;
+  if (diff < 0.9 || diff > 20.0) return 0;
   diff /= scale;
   diff = min(diff, 1.0);
   return ((int)roundf(diff*100.0));
@@ -588,19 +592,26 @@ bool normalizePixels() {
   float sq_sum1 = 0.0;
   float x_sum2 = 0.0;
   float sq_sum2 = 0.0;
+  uint8_t total1 = 0;
+  uint8_t total2 = 0;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    if (raw_pixels[i] < MIN_TEMP || raw_pixels[i] > MAX_TEMP) continue;
     if (SIDE1(i)) {
       x_sum1 += raw_pixels[i];
       sq_sum1 += sq(raw_pixels[i]);
+      total1++;
     } else {
       x_sum2 += raw_pixels[i];
       sq_sum2 += sq(raw_pixels[i]);
+      total2++;
     }
   }
 
+  if (total1 <= 1 || total2 <= 1) return false;
+
   // calculate trimmed average
-  cavg1 = trimMean(x_sum1, sq_sum1, 1);
-  cavg2 = trimMean(x_sum2, sq_sum2, 2);
+  cavg1 = trimMean(x_sum1, sq_sum1, total1, 1);
+  cavg2 = trimMean(x_sum2, sq_sum2, total2, 2);
 
   #ifdef TEST_PCBA
     for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
@@ -670,6 +681,8 @@ bool normalizePixels() {
 float calculateNewBackground(uint8_t i) {
   // implicit alpha of 0.001
   float std = raw_pixels[i] - bgPixel(i);
+
+  if (raw_pixels[i] < MIN_TEMP || raw_pixels[i] > MAX_TEMP) return std;
 
   if ((door_state == DOOR_AJAR && SIDE(i) == door_side) ||
       (door_state == DOOR_OPEN && frames_since_door_open < 2 && SIDE(i) == door_side))
@@ -911,6 +924,33 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
     return true;
   }
   return false;
+}
+
+void createNewPerson(uint8_t pp, uint8_t mp, uint8_t mj, uint8_t h, uint8_t sp,
+                    uint8_t cross, bool revert, float rt, uint16_t conf, float b, float f,
+                    float v, uint8_t n, uint8_t height, uint8_t width, uint8_t c,
+                    uint16_t cstart, uint8_t cend, uint8_t fc, uint8_t j) {
+  Person p;
+  p.past_position = pp;
+  p.max_position = mp;
+  p.max_jump = mj;
+  p.history = h;
+  p.starting_position = sp;
+  p.crossed = cross;
+  p.reverted = revert;
+  p.total_raw_temp = rt;
+  p.total_conf = conf;
+  p.total_bgm = b;
+  p.total_fgm = f;
+  p.total_variance = v;
+  p.total_neighbors = n;
+  p.total_height = height;
+  p.total_width = width;
+  p.count = c;
+  p.count_start = cstart;
+  p.count_end = cend;
+  p.forgotten_count = fc;
+  known_people[j] = p;
 }
 
 void processSensor() {
@@ -1260,32 +1300,28 @@ void processSensor() {
           (frames_since_door_open < 5 && door_state == DOOR_CLOSED))
         continue;
 
+      bool placed = false;
+      float minConf = 200.0;
+      uint8_t minIndex = UNDEF_POINT;
       for (uint8_t j=0; j<MAX_PEOPLE; j++) {
         // look for first empty slot in past_points to use
         if (!known_people[j].real()) {
-          Person p;
-          p.past_position = points[i];
-          p.max_position = mp;
-          p.max_jump = mj;
-          p.history = h;
-          p.starting_position = sp;
-          p.crossed = cross;
-          p.reverted = revert;
-          p.total_raw_temp = rt;
-          p.total_conf = conf;
-          p.total_bgm = b;
-          p.total_fgm = f;
-          p.total_variance = v;
-          p.total_neighbors = n;
-          p.total_height = height;
-          p.total_width = width;
-          p.count = c;
-          p.count_start = cstart;
-          p.count_end = cend;
-          p.forgotten_count = fc;
-          known_people[j] = p;
+          createNewPerson(points[i], mp, mj, h, sp, cross, revert, rt, conf, b, f, v, n,
+                          height, width, c, cstart, cend, fc, j);
+          placed = true;
           break;
+        } else if (!known_people[j].crossed) {
+          float pConf = known_people[j].confidence();
+          if (pConf < minConf) {
+            minConf = pConf;
+            minIndex = j;
+          }
         }
+      }
+      if (!placed && minIndex != UNDEF_POINT && (((float)conf)/(float)c) > minConf) {
+        // replace lower conf slot with this new point
+        createNewPerson(points[i], mp, mj, h, sp, cross, revert, rt, conf, b, f, v, n,
+                        height, width, c, cstart, cend, fc, minIndex);
       }
     }
   }
