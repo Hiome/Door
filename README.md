@@ -27,3 +27,18 @@ git clone git@gitlab.com:hiome/Door.git
 3. Install moteino board via Arduino board manager.
 
 4. Plug in sensor and flash it!
+
+
+## compile.sh
+
+To compile code, install arduino-cli
+
+```
+brew install arduino-cli
+
+arduino-cli core update-index --additional-urls https://lowpowerlab.github.io/MoteinoCore/package_LowPowerLab_index.json
+
+arduino-cli core install arduino:avr
+```
+
+Then run `./compile.sh` from this directory. Make sure `OUTPUT_DIR` is set correctly in script.
