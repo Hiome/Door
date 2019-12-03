@@ -502,7 +502,9 @@ void clearPointsAfterDoorClose() {
   if (checkDoorState()) {
     for (uint8_t i = 0; i<MAX_PEOPLE; i++) {
       if (door_state == DOOR_CLOSED || last_door_state == DOOR_CLOSED ||
-          (known_people[i].real() && known_people[i].confidence() < HIGH_CONF_THRESHOLD)) {
+          (known_people[i].real() && (known_people[i].starting_side() == door_side ||
+            known_people[i].side() == door_side ||
+            known_people[i].confidence() < HIGH_CONF_THRESHOLD))) {
         known_people[i].forget();
         known_people[i] = UNDEF_PERSON;
       }
@@ -1060,16 +1062,17 @@ void processSensor() {
       for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
         Person p = known_people[idx];
         if (p.real() && pairs[idx] == i) {
-          float conf = p.confidence();
-          float score = conf/100.0;
+          float score = 0.0;
           float d = euclidean_distance(p.past_position, points[i]);
           uint8_t axis = AXIS(p.past_position);
           uint8_t naxis = NOT_AXIS(p.past_position);
           if (p.crossed &&
               (axis <= min(d, 2) || ((GRID_EXTENT+1) - axis) <= min(d, 2) ||
               naxis <= min(d, 2) || ((GRID_EXTENT+1) - naxis) <= min(d, 2))) {
-            score = 0.0;
+            // do nothing
           } else {
+            float conf = p.confidence();
+            score = conf/100.0;
             score = sq(score);
             float directionBonus = 0;
             uint8_t paxis = AXIS(points[i]);
