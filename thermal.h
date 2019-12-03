@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.15"
+#define FIRMWARE_VERSION        "V0.8.16"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -390,7 +390,7 @@ void recheckPoint(uint8_t x, uint8_t i) {
 
 uint8_t findClosestPerson(Person *arr, uint8_t i, float maxDistance) {
   uint8_t p = UNDEF_POINT;
-  float minTemp = 2.0;
+  float minTemp = 1.0;
   for (uint8_t x=0; x<MAX_PEOPLE; x++) {
     if (arr[x].real()) {
       float dist = euclidean_distance(arr[x].past_position, i);
@@ -415,16 +415,15 @@ uint8_t findClosestPerson(Person *arr, uint8_t i, float maxDistance) {
 
 Person findLargestPerson(uint8_t i) {
   Person a = UNDEF_PERSON;
-  float minScore = 100.0;
+  float maxScore = 1.0;
   for (uint8_t x=0; x<MAX_PEOPLE; x++) {
     Person p = known_people[x]; 
-    if (p.real() && p.history > 1 && p.height() >= 1) {
-      float dist = euclidean_distance(p.past_position, i);
-      if (dist > 4.0) continue;
-      float score = dist - (p.height() * p.width());
-      if (score < minScore) {
+    if (p.real() && p.history > 1) {
+      if (euclidean_distance(p.past_position, i) > 4.0) continue;
+      float score = p.height() * p.width();
+      if (score > maxScore) {
         a = p;
-        minScore = score;
+        maxScore = score;
       }
     }
   }
@@ -691,28 +690,35 @@ float calculateNewBackground(uint8_t i) {
     // increase alpha to 0.5
     return std * 500.0;
 
-  float fgm = calcFgm(i);
-  if (frames_since_door_open < 5 && fgm < 50)
-    return std * 500.0;
+  float v = SIDE1(i) ? var1 : var2;
+  if (fgDiff(i) < v * 1.2) {
+    if (frames_since_door_open < 5) return std * 500.0;                 // alpha = 0.5
+    if (cycles_since_person == MAX_CLEARED_CYCLES) return std * 100.0;  // alpha = 0.1
+    if (cycles_since_person) return std * 50.0;                         // alpha = 0.05
+  }
 
   if (cycles_since_person == 0) {
     for (uint8_t x=0; x<MAX_PEOPLE; x++) {
       if (known_people[x].real() && known_people[x].total_count() > 5 &&
             known_people[x].confidence() > 50 &&
             diffFromPerson(i, known_people[x]) < NORMAL_TEMP_DIFFERENCE &&
-            (known_people[x].total_distance() > MIN_DISTANCE_FRD ||
-              known_people[x].fgm() > 1.5*known_people[x].variance()) &&
             euclidean_distance(known_people[x].past_position, i) < MAX_DISTANCE) {
-        // decrease alpha to 0.00001
-        return std * 0.01;
+        float td = known_people[x].total_distance();
+        uint8_t fc = known_people[x].forgotten_count + 1;
+        if (td < 1.6 && known_people[x].count_start > 10) {
+          // point hasn't moved for at least 1 second
+          // increase alpha to 0.01
+          return std * 10.0 * fc;
+        } else if (td > MIN_DISTANCE_FRD ||
+                    known_people[x].fgm() > 1.5*known_people[x].variance()) {
+          // point has moved or is significantly higher than variance
+          // decrease alpha to 0.00001
+          return std * 0.01 * fc;
+        }
+        break;
       }
     }
-  } else if (cycles_since_person == MAX_CLEARED_CYCLES && fgm < 60) {
-    // nothing going on, increase alpha to 0.1
-    return std * 100.0;
   }
-
-  if (fgm < AVG_CONF_THRESHOLD) return std * 10.0; // alpha = 0.01
 
   return std;
 }
@@ -825,9 +831,11 @@ uint8_t findCurrentPoints(uint8_t *points) {
         uint8_t i = ordered_indexes[k];
         if (i != UNDEF_POINT &&
               euclidean_distance(i, ordered_indexes_temp[x]) < MIN_DISTANCE_FRD) {
-          ordered_indexes_temp[sorted_size] = i;
-          ordered_indexes[k] = UNDEF_POINT;
-          sorted_size++;
+          if (samePoints(i, ordered_indexes_temp[x])) {
+            ordered_indexes_temp[sorted_size] = i;
+            ordered_indexes[k] = UNDEF_POINT;
+            sorted_size++;
+          }
           added++;
           if (added == max_added) break;
         }
@@ -978,74 +986,58 @@ void processSensor() {
       if (p.real()) {
         if (p.resetIfNecessary()) known_people[idx] = p;
         uint8_t min_index = UNDEF_POINT;
-        float conf = p.confidence();
         float anei = p.neighbors();
-        float max_distance = MIN_DISTANCE + (conf/100.0 * min(anei, MIN_DISTANCE));
+        float max_distance = MIN_DISTANCE + min(anei, MIN_DISTANCE);
         float min_score = 100;
+        float conf = p.confidence();
+        uint8_t sp_axis = AXIS(p.past_position);
+
         for (uint8_t j=0; j<total_masses; j++) {
+          uint8_t np_axis = AXIS(points[j]);
+          if (abs(sp_axis - np_axis) > 2) continue;
+
           float d = euclidean_distance(p.past_position, points[j]);
-          // if switching sides with low confidence, don't pair
-          if (SIDE(points[j]) != p.side() && (conf/d < MIN_TRAVEL_RATIO ||
-                ((float)norm_pixels[points[j]])/d < MIN_TRAVEL_RATIO)) {
-            continue;
-          }
+          if (d > max_distance) continue;
 
           float tempDiff = diffFromPerson(points[j], p);
-          if (tempDiff > NORMAL_TEMP_DIFFERENCE && conf < HIGH_CONF_THRESHOLD) continue;
+          if (tempDiff > NORMAL_TEMP_DIFFERENCE && (conf < HIGH_CONF_THRESHOLD ||
+              norm_pixels[points[j]] < HIGH_CONF_THRESHOLD ||
+              (p.crossed && pointOnSmallBorder(p.past_position)) ||
+              anei - neighbors_count[points[j]] > 2))
+            continue;
 
-          if (d < max_distance) {
-            float ratioP = min(((float)norm_pixels[points[j]])/conf,
-                               conf/((float)norm_pixels[points[j]]));
-            if (p.crossed) ratioP /= 2.0; // ratio matters less once point is crossed
-            float directionBonus = 0;
-            uint8_t sp_axis = AXIS(p.past_position);
-            uint8_t np_axis = AXIS(points[j]);
-            if (np_axis == sp_axis) directionBonus = 0.05;
-            else if (SIDE1(p.starting_position)) {
-              if (p.crossed && !pointOnSmallBorder(p.starting_position)) {
-                if (np_axis < sp_axis) directionBonus = 0.1;
-              } else if (np_axis > sp_axis) {
-                directionBonus = 0.1;
-              }
-            } else { // side 2
-              if (p.crossed && !pointOnSmallBorder(p.starting_position)) {
-                if (np_axis > sp_axis) directionBonus = 0.1;
-              } else if (np_axis < sp_axis) {
-                directionBonus = 0.1;
-              }
+          float ratioP = min(((float)norm_pixels[points[j]])/conf,
+                             conf/((float)norm_pixels[points[j]]));
+          if (p.crossed) ratioP /= 2.0; // ratio matters less once point is crossed
+          float directionBonus = 0;
+          bool crossedInMiddle = p.crossed && !pointOnSmallBorder(p.starting_position);
+          if (np_axis == sp_axis) directionBonus = 0.05;
+          else if (SIDE1(p.starting_position)) {
+            if (crossedInMiddle) {
+              if (np_axis < sp_axis) directionBonus = 0.1;
+            } else if (np_axis > sp_axis) {
+              directionBonus = 0.1;
             }
+          } else { // side 2
+            if (crossedInMiddle) {
+              if (np_axis > sp_axis) directionBonus = 0.1;
+            } else if (np_axis < sp_axis) {
+              directionBonus = 0.1;
+            }
+          }
 
-            if (norm_pixels[points[j]] < AVG_CONF_THRESHOLD) {
-              directionBonus -= (((float)(AVG_CONF_THRESHOLD-norm_pixels[points[j]]))/100.0);
-            }
+          if (!crossedInMiddle) {
+            directionBonus += (0.05*neighbors_count[points[j]]);
+          }
 
-            if (!p.crossed || pointOnSmallBorder(p.starting_position)) {
-              directionBonus += (0.1*neighbors_count[points[j]]);
-            }
-
-            float score = sq(d/max_distance) + sq(tempDiff/MAX_TEMP_DIFFERENCE) - ratioP -
-                            directionBonus;
-            if (min_score - score > 0.05) {
-              min_score = score;
-              min_index = j;
-            } else if (min_index != UNDEF_POINT && score - min_score < 0.05) {
-              // score is the same, pick the point that lets this one move farthest
-              bool useJ = false;
-              uint8_t axis1 = AXIS(points[j]);
-              uint8_t axis2 = AXIS(points[min_index]);
-              if (axis1 == axis2) {
-                // points on same axis, choose the one with higher confidence
-                useJ = norm_pixels[points[j]] > norm_pixels[points[min_index]];
-              } else if (p.crossed) {
-                useJ = SIDE1(p.starting_position) ? (axis1 < axis2) : (axis1 > axis2);
-              } else {
-                useJ = SIDE1(p.starting_position) ? (axis1 > axis2) : (axis1 < axis2);
-              }
-              if (useJ) {
-                min_score = score;
-                min_index = j;
-              }
-            }
+          float score = sq(d/max_distance) + sq(tempDiff/MAX_TEMP_DIFFERENCE) -
+                          sq(ratioP) - directionBonus;
+          if (min_score - score > 0.05 || (score - min_score < 0.05 &&
+                tempDiff < diffFromPerson(points[min_index], p))) {
+            // either score is less than min score, or if it's similar,
+            // choose the point with more similar raw temp
+            min_score = score;
+            min_index = j;
           }
         }
 
@@ -1269,8 +1261,13 @@ void processSensor() {
           Person x = findLargestPerson(sp);
           if (x.real()) {
             // there's another person in the frame, assume this is a split of that person
-            if (SIDE(sp) != x.starting_side()) {
-              if (x.starting_side() == 2) sp += GRID_EXTENT;
+            if (!x.crossed) {
+              if (SIDE(sp) != x.starting_side()) {
+                if (x.starting_side() == 2) sp += GRID_EXTENT;
+                else sp -= GRID_EXTENT;
+              }
+            } else if (SIDE(sp) == x.starting_side()) {
+              if (x.starting_side() == 1) sp += GRID_EXTENT;
               else sp -= GRID_EXTENT;
             }
           } else {
@@ -1384,8 +1381,8 @@ void processSensor() {
         if (norm_pixels[idx] < CONFIDENCE_THRESHOLD) {
           SERIAL_PRINT(F("-----"));
         } else {
-//          if (norm_pixels[idx] < 100) SERIAL_PRINT(F(" "));
-          SERIAL_PRINT(raw_pixels[idx]);
+          if (norm_pixels[idx] < 100) SERIAL_PRINT(F(" "));
+          SERIAL_PRINT(norm_pixels[idx]);
         }
 //        SERIAL_PRINT(raw_pixels[idx]);
         SERIAL_PRINT(F(" "));
