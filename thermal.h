@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.17"
+#define FIRMWARE_VERSION        "V0.8.18"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -703,7 +703,8 @@ float calculateNewBackground(uint8_t i) {
     for (uint8_t x=0; x<MAX_PEOPLE; x++) {
       if (known_people[x].real() && known_people[x].total_count() > 5 &&
             known_people[x].confidence() > 50 &&
-            diffFromPerson(i, known_people[x]) < NORMAL_TEMP_DIFFERENCE &&
+            abs(raw_pixels[known_people[x].past_position] - raw_pixels[i]) <
+              NORMAL_TEMP_DIFFERENCE &&
             euclidean_distance(known_people[x].past_position, i) < MAX_DISTANCE) {
         float td = known_people[x].total_distance();
         uint8_t fc = known_people[x].forgotten_count + 1;
@@ -999,7 +1000,7 @@ void processSensor() {
           // can't shift more than 3º if low confidence or crossed to edge of grid
           // or losing more than 2 neighbors
           float tempDiff = diffFromPerson(points[j], p);
-          if (tempDiff > NORMAL_TEMP_DIFFERENCE && (conf < HIGH_CONF_THRESHOLD ||
+          if (tempDiff > MAX_TEMP_DIFFERENCE && (conf < HIGH_CONF_THRESHOLD ||
               norm_pixels[points[j]] < HIGH_CONF_THRESHOLD ||
               (p.crossed && pointOnSmallBorder(p.past_position)) ||
               anei - neighbors_count[points[j]] > 2))
