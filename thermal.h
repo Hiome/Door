@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.16"
+#define FIRMWARE_VERSION        "V0.8.17"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -12,6 +12,7 @@
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
 #define MAX_PEOPLE              3    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
+#define MAX_DOOR_CHANGE_FRAMES  5    // max number of cycles we count after door changes
 #define MAX_CLEARED_CYCLES      10   // max number of cycles before we assume frame is empty
 #define CONFIDENCE_THRESHOLD    5    // consider a point if we're 5% confident
 #define AVG_CONF_THRESHOLD      30   // consider a set of points if we're 30% confident
@@ -19,11 +20,10 @@
 #define BACKGROUND_GRADIENT     2.0
 #define FOREGROUND_GRADIENT     2.0
 #define NUM_STD_DEV             2.0  // max num of std dev to include in trimmed average
-#define MIN_TRAVEL_RATIO        20
 #define NORMAL_TEMP_DIFFERENCE  3.0  // temp difference between 2 points within same frame
 #define MAX_TEMP_DIFFERENCE     5.0  // max temp difference between 2 matchable people
-#define MIN_TEMP                2.0
-#define MAX_TEMP                45.0
+#define MIN_TEMP                2.0  // ignore all points colder than 2º C
+#define MAX_TEMP                45.0 // ignore all points hotter than 45ºC
 
 #include <Adafruit_AMG88xx.h>
 Adafruit_AMG88xx amg;
@@ -694,9 +694,9 @@ float calculateNewBackground(uint8_t i) {
 
   float v = SIDE1(i) ? var1 : var2;
   if (fgDiff(i) < v * 1.2) {
-    if (frames_since_door_open < 5) return std * 500.0;                 // alpha = 0.5
-    if (cycles_since_person == MAX_CLEARED_CYCLES) return std * 100.0;  // alpha = 0.1
-    if (cycles_since_person) return std * 50.0;                         // alpha = 0.05
+    if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) return std * 500.0; // alpha = 0.5
+    if (cycles_since_person == MAX_CLEARED_CYCLES) return std * 100.0;       // alpha = 0.1
+    if (cycles_since_person) return std * 50.0;                              // alpha = 0.05
   }
 
   if (cycles_since_person == 0) {
@@ -878,13 +878,6 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
       return false;
     }
 
-    // if switching sides with low confidence or moving too far, don't pair
-    float d = euclidean_distance(p.past_position, point);
-    if (SIDE(point) != p.side() && (p.confidence()/d < MIN_TRAVEL_RATIO ||
-          ((float)norm_pixels[sp])/d < MIN_TRAVEL_RATIO)) {
-      return false;
-    }
-
     if (p.count > 1) p.resetTotals();
 
     // point is ahead of starting point at least
@@ -989,18 +982,22 @@ void processSensor() {
         if (p.resetIfNecessary()) known_people[idx] = p;
         uint8_t min_index = UNDEF_POINT;
         float anei = p.neighbors();
-        float max_distance = MIN_DISTANCE + min(anei, MIN_DISTANCE);
+        float max_distance = MAX_DISTANCE + min(anei, 2.0);
         float min_score = 100;
         float conf = p.confidence();
         uint8_t sp_axis = AXIS(p.past_position);
 
         for (uint8_t j=0; j<total_masses; j++) {
+          // can't jump more than 3 rows at once
           uint8_t np_axis = AXIS(points[j]);
-          if (abs(sp_axis - np_axis) > 2) continue;
+          if (abs(sp_axis - np_axis) > 3) continue;
 
+          // can't move more than max_distance at once
           float d = euclidean_distance(p.past_position, points[j]);
           if (d > max_distance) continue;
 
+          // can't shift more than 3º if low confidence or crossed to edge of grid
+          // or losing more than 2 neighbors
           float tempDiff = diffFromPerson(points[j], p);
           if (tempDiff > NORMAL_TEMP_DIFFERENCE && (conf < HIGH_CONF_THRESHOLD ||
               norm_pixels[points[j]] < HIGH_CONF_THRESHOLD ||
@@ -1284,7 +1281,7 @@ void processSensor() {
 
       // ignore new points on side 1 immediately after door opens/closes
       if ((frames_since_door_open < 2 && SIDE(sp) == door_side) ||
-          (frames_since_door_open < 5 && door_state == DOOR_CLOSED))
+          (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && door_state == DOOR_CLOSED))
         continue;
 
       bool placed = false;
@@ -1338,7 +1335,7 @@ void processSensor() {
 
   updateBgAverage();
 
-  if (frames_since_door_open < 5) {
+  if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) {
     frames_since_door_open++;
   }
   if (cycles_since_person < MAX_CLEARED_CYCLES) {
