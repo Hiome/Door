@@ -42,7 +42,7 @@ SPIFlash flash(8, 0xEF30); //EF30 for windbond 4mbit flash
 
 uint8_t packetCount = 1;
 int8_t publish(char* msg, char* width, int8_t retries) {
-  char sendBuf[55];
+  char sendBuf[58];
   uint8_t len = sprintf(sendBuf, "%s;%s%d", msg, width, packetCount);
   bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries, RETRY_TIME);
 

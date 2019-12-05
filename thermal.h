@@ -180,6 +180,7 @@ typedef struct Person {
   uint8_t   history           :4;   // 1-10
   uint8_t   crossed           :4;   // 0-9
   bool      reverted          :1;   // 0-1
+  uint8_t   max_temp_drift;
   float     total_raw_temp;
   float     total_variance;
   float     total_bgm;
@@ -233,9 +234,9 @@ typedef struct Person {
   uint8_t   starting_side() { return SIDE(starting_position); };
   uint8_t   side() { return SIDE(past_position); };
 
-  #define METALENGTH  50
+  #define METALENGTH  53
   void generateMeta(char *meta) {
-    sprintf(meta, "%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%d",
+    sprintf(meta, "%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%d",
       int(confidence()),                  // 3  100
       int(bgm()*100.0),                   // 4  1020
       int(fgm()*100.0),                   // 4  1020
@@ -249,8 +250,9 @@ typedef struct Person {
       int(width()*10.0),                  // 2  70
       max_jump,                           // 1  5
       int(variance()*100.0),              // 4  1000
+      max_temp_drift,                     // 2  99
       forgotten_count                     // 1  3
-    );                                    // + 13 'x' + 1 null => 50 total
+    );                                    // + 14 'x' + 1 null => 53 total
   };
 
   void revert(uint8_t eventType) {
@@ -328,6 +330,7 @@ typedef struct Person {
     reverted = false;
     history = 1;
     max_jump = 0;
+    max_temp_drift = 0;
     max_position = past_position;
     count_start = count_end;
     count_end = 0;
@@ -689,14 +692,13 @@ float calculateNewBackground(uint8_t i) {
       (door_state == DOOR_OPEN && frames_since_door_open < 2 && SIDE(i) == door_side))
     // ignore points on door side when door is ajar
     // or door just opened, any points immediately on door side must be noise
-    // increase alpha to 0.5
-    return std * 500.0;
+    // increase alpha to 0.25
+    return std * 250.0;
 
   float v = SIDE1(i) ? var1 : var2;
   if (fgDiff(i) < v * 1.2) {
-    if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) return std * 500.0; // alpha = 0.5
-    if (cycles_since_person == MAX_CLEARED_CYCLES) return std * 100.0;       // alpha = 0.1
-    if (cycles_since_person) return std * 50.0;                              // alpha = 0.05
+    if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) return std * 250.0; // alpha = 0.25
+    if (cycles_since_person == MAX_CLEARED_CYCLES) return std * 10.0;        // alpha = 0.01
   }
 
   if (cycles_since_person == 0) {
@@ -864,7 +866,7 @@ void forget_person(uint8_t idx, Person *temp_forgotten_people, uint8_t *pairs,
 }
 
 bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_t &mp,
-                      uint8_t &mj, uint8_t &cross, bool &revert,
+                      uint8_t &mj, uint8_t &md, uint8_t &cross, bool &revert,
                       uint16_t &conf, float &b, float &f, float &rt, uint8_t &n,
                       uint8_t &height, uint8_t &width, uint8_t &c, uint16_t &cstart,
                       uint8_t &cend, float &v, uint8_t &fc) {
@@ -874,7 +876,7 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
 
     if ((SIDE1(p.starting_position) && AXIS(p.starting_position) >= AXIS(mp)) ||
         (SIDE2(p.starting_position) && AXIS(p.starting_position) <= AXIS(mp)) ||
-        axis_distance(p.starting_position, point) < 2) {
+        (pointOnSmallBorder(p.starting_position) && pointOnSmallBorder(point))) {
       // this point is moved behind previous starting point, just start over
       return false;
     }
@@ -897,6 +899,9 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
     uint8_t axisJump = axis_distance(p.past_position, point);
     mj = max(axisJump, p.max_jump);
 
+    uint8_t tempDrift = diffFromPerson(point, p);
+    md = max(p.max_temp_drift, tempDrift);
+
     cross = p.crossed;
     revert = p.reverted;
     rt += p.total_raw_temp;
@@ -917,7 +922,7 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
   return false;
 }
 
-void createNewPerson(uint8_t pp, uint8_t mp, uint8_t mj, uint8_t h, uint8_t sp,
+void createNewPerson(uint8_t pp, uint8_t mp, uint8_t mj, uint8_t md, uint8_t h, uint8_t sp,
                     uint8_t cross, bool revert, float rt, uint16_t conf, float b, float f,
                     float v, uint8_t n, uint8_t height, uint8_t width, uint8_t c,
                     uint16_t cstart, uint8_t cend, uint8_t fc, uint8_t j) {
@@ -925,6 +930,7 @@ void createNewPerson(uint8_t pp, uint8_t mp, uint8_t mj, uint8_t h, uint8_t sp,
   p.past_position = pp;
   p.max_position = mp;
   p.max_jump = mj;
+  p.max_temp_drift = md;
   p.history = h;
   p.starting_position = sp;
   p.crossed = cross;
@@ -1002,8 +1008,8 @@ void processSensor() {
           float tempDiff = diffFromPerson(points[j], p);
           if (tempDiff > MAX_TEMP_DIFFERENCE && (conf < HIGH_CONF_THRESHOLD ||
               norm_pixels[points[j]] < HIGH_CONF_THRESHOLD ||
-              (p.crossed && pointOnSmallBorder(p.past_position)) ||
-              anei - neighbors_count[points[j]] > 2))
+              anei - neighbors_count[points[j]] > 2 ||
+              (p.crossed && pointOnSmallBorder(p.past_position))))
             continue;
 
           float ratioP = min(((float)norm_pixels[points[j]])/conf,
@@ -1193,6 +1199,8 @@ void processSensor() {
             }
             p.past_position = points[i];
           }
+          uint8_t td = (int)roundf(diffFromPerson(points[i], p) * 10.0);
+          p.max_temp_drift = max(p.max_temp_drift, td);
           p.total_raw_temp += raw_pixels[points[i]];
           p.total_conf += norm_pixels[points[i]];
           p.total_bgm += bgDiff(points[i]);
@@ -1217,6 +1225,7 @@ void processSensor() {
       uint8_t sp = points[i];
       uint8_t mp = sp;
       uint8_t mj = 0;
+      uint8_t md = 0;
       uint8_t h = 1;
       uint8_t cross = 0;
       bool revert = false;
@@ -1236,7 +1245,7 @@ void processSensor() {
 
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
-        if (remember_person(temp_forgotten_people, points[i], h, sp, mp, mj, cross,
+        if (remember_person(temp_forgotten_people, points[i], h, sp, mp, mj, md, cross,
               revert, conf, b, f, rt, n, height, width, c, cstart, cend, v, fc)) {
           retroMatched = true;
         }
@@ -1244,7 +1253,7 @@ void processSensor() {
 
       if (!retroMatched && cycles_since_forgotten < MAX_EMPTY_CYCLES) {
         // second let's check past forgotten points for a match
-        if (remember_person(forgotten_people, points[i], h, sp, mp, mj, cross,
+        if (remember_person(forgotten_people, points[i], h, sp, mp, mj, md, cross,
               revert, conf, b, f, rt, n, height, width, c, cstart, cend, v, fc)) {
           retroMatched = true;
         }
@@ -1291,7 +1300,7 @@ void processSensor() {
       for (uint8_t j=0; j<MAX_PEOPLE; j++) {
         // look for first empty slot in past_points to use
         if (!known_people[j].real()) {
-          createNewPerson(points[i], mp, mj, h, sp, cross, revert, rt, conf, b, f, v, n,
+          createNewPerson(points[i], mp, mj, md, h, sp, cross, revert, rt, conf, b, f, v, n,
                           height, width, c, cstart, cend, fc, j);
           placed = true;
           break;
@@ -1305,7 +1314,7 @@ void processSensor() {
       }
       if (!placed && minIndex != UNDEF_POINT && (((float)conf)/(float)c) > minConf) {
         // replace lower conf slot with this new point
-        createNewPerson(points[i], mp, mj, h, sp, cross, revert, rt, conf, b, f, v, n,
+        createNewPerson(points[i], mp, mj, md, h, sp, cross, revert, rt, conf, b, f, v, n,
                         height, width, c, cstart, cend, fc, minIndex);
       }
     }
