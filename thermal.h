@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.18"
+#define FIRMWARE_VERSION        "V0.8.19"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -899,7 +899,7 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
     uint8_t axisJump = axis_distance(p.past_position, point);
     mj = max(axisJump, p.max_jump);
 
-    uint8_t tempDrift = diffFromPerson(point, p);
+    uint8_t tempDrift = (int)roundf(diffFromPerson(point, p) * 10.0);
     md = max(p.max_temp_drift, tempDrift);
 
     cross = p.crossed;
