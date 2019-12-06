@@ -552,7 +552,7 @@ float bgDiff(uint8_t i) {
 }
 
 uint8_t calcGradient(float diff, float scale) {
-  if (diff < 0.9 || diff > 20.0) return 0;
+  if (diff < 0.9 || diff > 10.0) return 0;
   diff /= scale;
   diff = min(diff, 1.0);
   return ((int)roundf(diff*100.0));
@@ -766,7 +766,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
     bool added = false;
     for (uint8_t j=0; j<z; j++) {
       if (norm_pixels[ordered_indexes[j]] - norm_pixels[i] < 15) {
-        if (neighbors_count[i] != neighbors_count[ordered_indexes[j]]) {
+        if (abs(neighbors_count[i] - neighbors_count[ordered_indexes[j]]) > 1) {
           // prefer the point that's more in middle of blob
           added = neighbors_count[i] > neighbors_count[ordered_indexes[j]];
         } else {
@@ -785,11 +785,13 @@ uint8_t findCurrentPoints(uint8_t *points) {
           if (edge2 > 4) edge2 = GRID_EXTENT+1 - edge2;
 
           if (edge1 == edge2 && edge1 == 4 && SIDE(i) != SIDE(ordered_indexes[j])) {
-            // we're debating between 2 points on either side of border. Normally
-            // we'd just prefer the one on side1, but this can cause a messy flip-flopping
-            // between sides, so let's prefer the side that the point was already on
+            // we're debating between 2 points on either side of border.
+            // first try to find which side this person was previously on to avoid
+            // flip-flopping. If none found, prefer the side that's opposite the door side
             uint8_t x = findClosestPerson(known_people, i, MIN_DISTANCE);
-            if (x != UNDEF_POINT && SIDE(i) == known_people[x].side()) edge1++;
+            if (x == UNDEF_POINT || known_people[x].history < 2) {
+              if (SIDE(i) != door_side) edge1++;
+            } else if (SIDE(i) == known_people[x].side()) edge1++;
           }
 
           added = edge1 > edge2;
@@ -1265,8 +1267,8 @@ void processSensor() {
         uint8_t b = pointsBelow(sp);
         if (norm_pixels[sp] > HIGH_CONF_THRESHOLD && doorJustOpened()) {
           if (SIDE1(sp)) {
-            if (door_side == 1 && b > a) sp += GRID_EXTENT;
-          } else if (door_side == 2 && a > b) sp -= GRID_EXTENT;
+            if (door_side == 1 && b > min(a, 1)) sp += GRID_EXTENT;
+          } else if (door_side == 2 && a > min(b, 1)) sp -= GRID_EXTENT;
         } else {
           Person x = findLargestPerson(sp);
           if (x.real()) {
