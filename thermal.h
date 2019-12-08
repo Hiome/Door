@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.19"
+#define FIRMWARE_VERSION        "V0.8.20"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -990,8 +990,6 @@ void processSensor() {
       if (p.real()) {
         if (p.resetIfNecessary()) known_people[idx] = p;
         uint8_t min_index = UNDEF_POINT;
-        float anei = p.neighbors();
-        float max_distance = MAX_DISTANCE + min(anei, 2.0);
         float min_score = 100;
         float conf = p.confidence();
         uint8_t sp_axis = AXIS(p.past_position);
@@ -1003,15 +1001,13 @@ void processSensor() {
 
           // can't move more than max_distance at once
           float d = euclidean_distance(p.past_position, points[j]);
-          if (d > max_distance) continue;
+          if (d > 5.0 && conf < HIGH_CONF_THRESHOLD) continue;
 
           // can't shift more than 3º if low confidence or crossed to edge of grid
           // or losing more than 2 neighbors
           float tempDiff = diffFromPerson(points[j], p);
-          if (tempDiff > MAX_TEMP_DIFFERENCE && (conf < HIGH_CONF_THRESHOLD ||
-              norm_pixels[points[j]] < HIGH_CONF_THRESHOLD ||
-              anei - neighbors_count[points[j]] > 2 ||
-              (p.crossed && pointOnSmallBorder(p.past_position))))
+          if (tempDiff > MAX_TEMP_DIFFERENCE && 
+              (p.crossed && pointOnSmallBorder(p.past_position)))
             continue;
 
           float ratioP = min(((float)norm_pixels[points[j]])/conf,
@@ -1038,7 +1034,7 @@ void processSensor() {
             directionBonus += (0.05*neighbors_count[points[j]]);
           }
 
-          float score = sq(d/max_distance) + sq(tempDiff/MAX_TEMP_DIFFERENCE) -
+          float score = sq(d/5.0) + sq(tempDiff/MAX_TEMP_DIFFERENCE) -
                           sq(ratioP) - directionBonus;
           if (min_score - score > 0.05 || (score - min_score < 0.05 &&
                 tempDiff < diffFromPerson(points[min_index], p))) {
