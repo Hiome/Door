@@ -26,6 +26,13 @@
 RFM69_ATC radio;
 SPIFlash flash(8, 0xEF30); //EF30 for windbond 4mbit flash
 
+uint32_t heartbeats = 0;
+void beatHeart() {
+  heartbeats++;
+  // 108000 = 10 (frames/sec) * 60 (sec/min) * 60 (min/hr) * 3 (hrs)
+  if (heartbeats > 108000) publish("h", "0", 0);
+}
+
 #ifdef ENABLE_SERIAL
   #define SERIAL_START      ( Serial.begin(SERIAL_BAUD) )
   #define SERIAL_FLUSH      ( Serial.flush() )
@@ -53,6 +60,8 @@ int8_t publish(char* msg, char* width, int8_t retries) {
     SERIAL_PRINTLN(F("\n\n"));
     SERIAL_FLUSH;
   #endif
+
+  if (success) heartbeats = 0;
 
   if (success || retries > 0) {
     if (packetCount < 9) {

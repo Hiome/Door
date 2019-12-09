@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.21"
+#define FIRMWARE_VERSION        "V0.8.22"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -143,10 +143,7 @@ uint8_t frames_since_door_open = 0;
 uint8_t door_side = 1;
 
 #define FRD_EVENT         0
-#define MAYBE_EVENT       1
-#define DOOR_CLOSE_EVENT  2
-#define REVERT_FRD        3
-#define MAYBE_REVERT      4
+#define DOOR_CLOSE_EVENT  1
 
 uint8_t readDoorState() {
   #ifdef RECESSED
@@ -254,19 +251,19 @@ typedef struct Person {
     );                                    // + 14 'x' + 1 null => 53 total
   };
 
-  void revert(uint8_t eventType) {
+  void revert() {
     char rBuf[3];
     char meta[METALENGTH];
     generateMeta(meta);
-    sprintf(rBuf, "%s%d", (eventType == REVERT_FRD ? "r" : "e"), crossed);
-    publish(rBuf, meta, eventType == REVERT_FRD ? RETRY_COUNT : 0);
+    sprintf(rBuf, "r%d", crossed);
+    publish(rBuf, meta, RETRY_COUNT);
   };
 
   bool checkForDoorClose() {
     // This could possibly fail if person's hand is on door knob opening door and sensor
     // detects that as a person. We'll see hand go from 1->2, and then get dropped as door
     // opens, and this if block will prevent it from reverting properly.
-    if (starting_side() == door_side && confidence() > HIGH_CONF_THRESHOLD) {
+    if (confidence() > HIGH_CONF_THRESHOLD) {
       if (frames_since_door_open == 0) {
         return door_state != DOOR_OPEN;
       } else if (door_state == DOOR_OPEN) {
@@ -279,14 +276,22 @@ typedef struct Person {
 
   bool checkForRevert() {
     if (!real() || !crossed) return false;
-  
-    if ((reverted && side() == starting_side()) ||
-        (!reverted && side() != starting_side()) ||
-        (checkForDoorClose() && !pointOnBorder(past_position))) {
+
+    if (checkForDoorClose()) {
+      if ((side() != door_side || !pointOnBorder(past_position)) &&
+          ((reverted && starting_side() != door_side) ||
+          (!reverted && starting_side() == door_side))) {
+        // door just closed and point is on side 2 or right in the middle,
+        // revert if it was previously reverted from side 2 or was a non-reverted fake entry
+        revert();
+        reverted = !reverted;
+        return true;
+      }
+    } else if ((reverted && side() == starting_side()) ||
+              (!reverted && side() != starting_side())) {
       // we had previously reverted this point, but it came back and made it through,
-      // or point never reverted but is back on the starting side,
-      // or door just closed and point was in the middle of frame where door closed
-      revert(REVERT_FRD);
+      // or point never reverted but is back on the OG starting side
+      revert();
       reverted = !reverted;
       return true;
     }
@@ -305,9 +310,6 @@ typedef struct Person {
         // if user turns around now, algorithm considers it an exit
         int s = past_position - GRID_EXTENT;
         starting_position = max(s, 0);
-      } else if (eventType == MAYBE_EVENT) {
-        publish("m1", meta, 5);
-        return;
       } else if (eventType == DOOR_CLOSE_EVENT && door_side == 2) {
         publish("1", meta, RETRY_COUNT);
         return;
@@ -317,9 +319,6 @@ typedef struct Person {
         crossed = publish(door_state == DOOR_OPEN ? "2" : "a2", meta, RETRY_COUNT);
         int s = past_position + GRID_EXTENT;
         starting_position = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
-      } else if (eventType == MAYBE_EVENT) {
-        publish("m2", meta, 5);
-        return;
       } else if (eventType == DOOR_CLOSE_EVENT && door_side == 1) {
         publish("2", meta, RETRY_COUNT);
         return;
@@ -337,10 +336,7 @@ typedef struct Person {
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
   bool publishMaybeEvent() {
-    if (!real()) return false;
-
-    float conf = confidence();
-    if (conf < CONFIDENCE_THRESHOLD) return false;
+    if (!real() || confidence() < CONFIDENCE_THRESHOLD) return false;
 
     if (history >= MIN_HISTORY && (!crossed || !reverted)) {
       if (starting_side() != side()) {
@@ -348,18 +344,8 @@ typedef struct Person {
           publishPacket(DOOR_CLOSE_EVENT);
         else
           publishPacket(FRD_EVENT);
-      } else if (starting_side() != SIDE(max_position) && !pointOnBorder(past_position) &&
-                  checkForDoorClose()) {
-        // door just closed and point made it across but then died on border.
-        // this might be somebody leaning in to close the door
-        publishPacket(MAYBE_EVENT);
-      } else if (conf > HIGH_CONF_THRESHOLD && total_distance() > MAX_DISTANCE) {
-        revert(MAYBE_REVERT);
-        return false;
-      } else return false;
-      return true;
-    } else if (crossed || reverted) {
-      revert(MAYBE_REVERT);
+        return true;
+      }
     }
 
     return false;
@@ -483,19 +469,17 @@ bool checkDoorState() {
   uint8_t last_door_state = door_state;
   door_state = readDoorState();
 
-  if (last_door_state != door_state) {
-    frames_since_door_open = 0;
-//    SERIAL_PRINT(F("d "));
-//    SERIAL_PRINTLN(door_state);
-  }
-
-  if (door_state != last_published_door_state) {
-    publish(
-      (door_state == DOOR_CLOSED ? "d0" : (door_state == DOOR_OPEN ? "d1" : "d2")), "0", 0);
+  if (door_state != last_published_door_state && publish(
+    (door_state == DOOR_CLOSED ? "d0" : (door_state == DOOR_OPEN ? "d1" : "d2")), "0", 0)) {
     last_published_door_state = door_state;
   }
 
-  return last_door_state != door_state;
+  if (last_door_state != door_state) {
+    frames_since_door_open = 0;
+    return true;
+  }
+
+  return false;
 }
 
 void clearPointsAfterDoorClose() {
@@ -987,10 +971,6 @@ void processSensor() {
         uint8_t sp_axis = AXIS(p.past_position);
 
         for (uint8_t j=0; j<total_masses; j++) {
-          // can't jump more than 3 rows at once
-          uint8_t np_axis = AXIS(points[j]);
-          if (abs(sp_axis - np_axis) > 3) continue;
-
           // can't move more than max_distance at once
           float d = euclidean_distance(p.past_position, points[j]);
           if (d > 5.0 && conf < HIGH_CONF_THRESHOLD) continue;
@@ -1007,6 +987,7 @@ void processSensor() {
           if (p.crossed) ratioP /= 2.0; // ratio matters less once point is crossed
           float directionBonus = 0;
           bool crossedInMiddle = p.crossed && !pointOnSmallBorder(p.starting_position);
+          uint8_t np_axis = AXIS(points[j]);
           if (np_axis == sp_axis) directionBonus = 0.05;
           else if (SIDE1(p.starting_position)) {
             if (crossedInMiddle) {
@@ -1314,7 +1295,7 @@ void processSensor() {
       forgotten_people[i] = temp_forgotten_people[i];
     }
     cycles_since_forgotten = 0;
-//    SERIAL_PRINTLN(F("s"));
+    SERIAL_PRINTLN(F("s"));
   } else if (cycles_since_forgotten < MAX_EMPTY_CYCLES) {
     cycles_since_forgotten++;
     if (cycles_since_forgotten == MAX_EMPTY_CYCLES) {
@@ -1322,7 +1303,7 @@ void processSensor() {
       for (uint8_t i=0; i<MAX_PEOPLE; i++) {
         forgotten_people[i] = UNDEF_PERSON;
       }
-//      SERIAL_PRINTLN(F("f"));
+      SERIAL_PRINTLN(F("f"));
     }
   }
 
@@ -1331,6 +1312,8 @@ void processSensor() {
   publishEvents();
 
   updateBgAverage();
+
+  beatHeart();
 
   if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) {
     frames_since_door_open++;
@@ -1342,9 +1325,9 @@ void processSensor() {
   // wrap up with debugging output
 
   #ifdef PRINT_RAW_DATA
-//    if (total_masses == 0 && past_total_masses > 0) {
-//      SERIAL_PRINTLN(F("c"));
-//    }
+    if (total_masses == 0 && past_total_masses > 0) {
+      SERIAL_PRINTLN(F("c"));
+    }
     if (total_masses > 0) {
       for (uint8_t i = 0; i<MAX_PEOPLE; i++) {
         Person p = known_people[i];
