@@ -40,10 +40,9 @@ uint8_t norm_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 int8_t neighbors_count[AMG88xx_PIXEL_ARRAY_SIZE];
 float global_bgm = 0;
 float global_fgm = 0;
+float global_variance = 0;
 float cavg1 = 0.0;
 float cavg2 = 0.0;
-float var1 = 0.0;
-float var2 = 0.0;
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -168,7 +167,7 @@ uint8_t readDoorState() {
 }
 
 bool doorJustOpened() {
-  if (door_state == DOOR_OPEN) return frames_since_door_open == 0;
+  if (door_state == DOOR_OPEN) return frames_since_door_open <= 1;
   else return readDoorState() == DOOR_OPEN;
 }
 
@@ -354,8 +353,7 @@ typedef struct Person {
         // door just closed and point made it across but then died on border.
         // this might be somebody leaning in to close the door
         publishPacket(MAYBE_EVENT);
-      } else if (conf > HIGH_CONF_THRESHOLD &&
-          euclidean_distance(starting_position, past_position) > MAX_DISTANCE) {
+      } else if (conf > HIGH_CONF_THRESHOLD && total_distance() > MAX_DISTANCE) {
         revert(MAYBE_REVERT);
         return false;
       } else return false;
@@ -391,7 +389,7 @@ void recheckPoint(uint8_t x, uint8_t i) {
   if (samePoints(x, i)) neighbors_count[i]++;
 }
 
-uint8_t findClosestPerson(Person *arr, uint8_t i, float maxDistance) {
+uint8_t findClosestPerson(Person *arr, uint8_t i, float maxDistance, float maxTemp) {
   uint8_t p = UNDEF_POINT;
   float minTemp = 1.0;
   for (uint8_t x=0; x<MAX_PEOPLE; x++) {
@@ -400,7 +398,7 @@ uint8_t findClosestPerson(Person *arr, uint8_t i, float maxDistance) {
       if (dist > maxDistance) continue;
 
       float tempDiff = diffFromPerson(i, arr[x]);
-      if (tempDiff > NORMAL_TEMP_DIFFERENCE) continue;
+      if (tempDiff > maxTemp) continue;
 
       float tempRatio = tempDiff/NORMAL_TEMP_DIFFERENCE;
       tempRatio = max(tempRatio, 0.1);
@@ -474,7 +472,7 @@ void publishEvents() {
     Person p = known_people[i];
     if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
         p.confidence() > CONFIDENCE_THRESHOLD && p.history > MIN_HISTORY &&
-        pointOnBorder(p.past_position) && p.total_distance() > MIN_DISTANCE) {
+        pointOnBorder(p.past_position)) {
       p.publishPacket(FRD_EVENT);
       known_people[i] = p; // update known_people array
     }
@@ -487,8 +485,8 @@ bool checkDoorState() {
 
   if (last_door_state != door_state) {
     frames_since_door_open = 0;
-    SERIAL_PRINT(F("d "));
-    SERIAL_PRINTLN(door_state);
+//    SERIAL_PRINT(F("d "));
+//    SERIAL_PRINTLN(door_state);
   }
 
   if (door_state != last_published_door_state) {
@@ -521,8 +519,7 @@ float trimMean(float sum, float sq_sum, uint8_t cnt, uint8_t side) {
   float mean = sum/((float)cnt);
   float variance = (sq_sum - (sq(sum)/((float)cnt)))/((float)(cnt - 1));
   variance = sqrt(variance);
-  if (side == 1) var1 = variance;
-  else var2 = variance;
+  global_variance = max(global_variance, variance);
   float lowerBound = mean - (NUM_STD_DEV * variance);
   float upperBound = mean + (NUM_STD_DEV * variance);
   float cavg = 0.0;
@@ -554,8 +551,8 @@ float bgDiff(uint8_t i) {
 uint8_t calcGradient(float diff, float scale) {
   if (diff < 0.9 || diff > 10.0) return 0;
   diff /= scale;
-  diff = min(diff, 1.0);
-  return ((int)roundf(diff*100.0));
+  if (diff > 0.995) return 100;
+  return int(diff*100.0);
 }
 
 // calculate foreground gradient percent
@@ -614,6 +611,7 @@ bool normalizePixels() {
   if (total1 <= 1 || total2 <= 1) return false;
 
   // calculate trimmed average
+  global_variance = 0.0;
   cavg1 = trimMean(x_sum1, sq_sum1, total1, 1);
   cavg2 = trimMean(x_sum2, sq_sum2, total2, 2);
 
@@ -688,37 +686,29 @@ float calculateNewBackground(uint8_t i) {
 
   if (raw_pixels[i] < MIN_TEMP || raw_pixels[i] > MAX_TEMP) return std;
 
-  if ((door_state == DOOR_AJAR && SIDE(i) == door_side) ||
-      (door_state == DOOR_OPEN && frames_since_door_open < 2 && SIDE(i) == door_side))
-    // ignore points on door side when door is ajar
-    // or door just opened, any points immediately on door side must be noise
-    // increase alpha to 0.25
-    return std * 250.0;
-
-  float v = SIDE1(i) ? var1 : var2;
-  if (fgDiff(i) < v * 1.2) {
-    if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) return std * 250.0; // alpha = 0.25
-    if (cycles_since_person == MAX_CLEARED_CYCLES) return std * 10.0;        // alpha = 0.01
+  if (fgDiff(i) < global_variance) {
+    if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && norm_pixels[i] < 50)
+      return std * 50.0; // alpha = 0.05
+    if (cycles_since_person == MAX_CLEARED_CYCLES)
+      return std * 10.0; // alpha = 0.01
   }
 
   if (cycles_since_person == 0) {
     for (uint8_t x=0; x<MAX_PEOPLE; x++) {
       if (known_people[x].real() && known_people[x].total_count() > 5 &&
+            samePoints(known_people[x].past_position, i) &&
             known_people[x].confidence() > 50 &&
-            abs(raw_pixels[known_people[x].past_position] - raw_pixels[i]) <
-              NORMAL_TEMP_DIFFERENCE &&
             euclidean_distance(known_people[x].past_position, i) < MAX_DISTANCE) {
         float td = known_people[x].total_distance();
-        uint8_t fc = known_people[x].forgotten_count + 1;
-        if (td < 1.6 && known_people[x].count_start > 10) {
+        if (td < MIN_DISTANCE_FRD && known_people[x].count_start > 10) {
           // point hasn't moved for at least 1 second
           // increase alpha to 0.01
-          return std * 10.0 * fc;
+          return std * 10.0;
         } else if (td > MIN_DISTANCE_FRD ||
                     known_people[x].fgm() > 1.5*known_people[x].variance()) {
           // point has moved or is significantly higher than variance
           // decrease alpha to 0.00001
-          return std * 0.01 * fc;
+          return std * 0.01;
         }
         break;
       }
@@ -787,10 +777,11 @@ uint8_t findCurrentPoints(uint8_t *points) {
           if (edge1 == edge2 && edge1 == 4 && SIDE(i) != SIDE(ordered_indexes[j])) {
             // we're debating between 2 points on either side of border.
             // first try to find which side this person was previously on to avoid
-            // flip-flopping. If none found, prefer the side that's opposite the door side
-            uint8_t x = findClosestPerson(known_people, i, MIN_DISTANCE);
+            // flip-flopping. If none found, prefer the side that's on door side
+            uint8_t x = findClosestPerson(known_people, i, MIN_DISTANCE,
+                          NORMAL_TEMP_DIFFERENCE);
             if (x == UNDEF_POINT || known_people[x].history < 2) {
-              if (SIDE(i) != door_side) edge1++;
+              if (SIDE(i) == door_side) edge1++;
             } else if (SIDE(i) == known_people[x].side()) edge1++;
           }
 
@@ -872,7 +863,7 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
                       uint16_t &conf, float &b, float &f, float &rt, uint8_t &n,
                       uint8_t &height, uint8_t &width, uint8_t &c, uint16_t &cstart,
                       uint8_t &cend, float &v, uint8_t &fc) {
-  uint8_t pi = findClosestPerson(arr, point, MAX_DISTANCE);
+  uint8_t pi = findClosestPerson(arr, point, MAX_DISTANCE, MAX_TEMP_DIFFERENCE);
   if (pi != UNDEF_POINT) {
     Person p = arr[pi];
 
@@ -1203,7 +1194,7 @@ void processSensor() {
           p.total_conf += norm_pixels[points[i]];
           p.total_bgm += bgDiff(points[i]);
           p.total_fgm += fgDiff(points[i]);
-          p.total_variance += max(var1, var2);
+          p.total_variance += global_variance;
           p.total_neighbors += neighbors_count[points[i]];
           p.total_height += calcHeight(points[i]);
           p.total_width += calcWidth(points[i]);
@@ -1231,7 +1222,7 @@ void processSensor() {
       float rt = raw_pixels[sp];
       float b = bgDiff(sp);
       float f = fgDiff(sp);
-      float v = max(var1, var2);
+      float v = global_variance;
       uint8_t n = neighbors_count[sp];
       uint8_t height = calcHeight(sp);
       uint8_t width = calcWidth(sp);
@@ -1259,12 +1250,10 @@ void processSensor() {
 
       if (!retroMatched && !pointOnBorder(sp)) {
         // if point is right in middle, drag it to the side it appears to be coming from
-        uint8_t a = pointsAbove(sp);
-        uint8_t b = pointsBelow(sp);
         if (norm_pixels[sp] > HIGH_CONF_THRESHOLD && doorJustOpened()) {
           if (SIDE1(sp)) {
-            if (door_side == 1 && b > min(a, 1)) sp += GRID_EXTENT;
-          } else if (door_side == 2 && a > min(b, 1)) sp -= GRID_EXTENT;
+            if (door_side == 1 && pointsBelow(sp) > 1) sp += GRID_EXTENT;
+          } else if (door_side == 2 && pointsAbove(sp) > 1) sp -= GRID_EXTENT;
         } else {
           Person x = findLargestPerson(sp);
           if (x.real()) {
@@ -1278,11 +1267,6 @@ void processSensor() {
               if (x.starting_side() == 1) sp += GRID_EXTENT;
               else sp -= GRID_EXTENT;
             }
-          } else {
-            // nobody else in frame, choose the side that has more of the blob
-            if (SIDE1(sp)) {
-              if (b >= max(2*a, 2)) sp += GRID_EXTENT;
-            } else if (a >= max(2*b, 2)) sp -= GRID_EXTENT;
           }
         }
       }
@@ -1325,7 +1309,7 @@ void processSensor() {
       forgotten_people[i] = temp_forgotten_people[i];
     }
     cycles_since_forgotten = 0;
-    SERIAL_PRINTLN(F("s"));
+//    SERIAL_PRINTLN(F("s"));
   } else if (cycles_since_forgotten < MAX_EMPTY_CYCLES) {
     cycles_since_forgotten++;
     if (cycles_since_forgotten == MAX_EMPTY_CYCLES) {
@@ -1333,7 +1317,7 @@ void processSensor() {
       for (uint8_t i=0; i<MAX_PEOPLE; i++) {
         forgotten_people[i] = UNDEF_PERSON;
       }
-      SERIAL_PRINTLN(F("f"));
+//      SERIAL_PRINTLN(F("f"));
     }
   }
 
@@ -1353,9 +1337,9 @@ void processSensor() {
   // wrap up with debugging output
 
   #ifdef PRINT_RAW_DATA
-    if (total_masses == 0 && past_total_masses > 0) {
-      SERIAL_PRINTLN(F("c"));
-    }
+//    if (total_masses == 0 && past_total_masses > 0) {
+//      SERIAL_PRINTLN(F("c"));
+//    }
     if (total_masses > 0) {
       for (uint8_t i = 0; i<MAX_PEOPLE; i++) {
         Person p = known_people[i];
@@ -1374,8 +1358,7 @@ void processSensor() {
 
       SERIAL_PRINTLN(global_bgm);
       SERIAL_PRINTLN(global_fgm);
-      SERIAL_PRINTLN(var1);
-      SERIAL_PRINTLN(var2);
+      SERIAL_PRINTLN(global_variance);
 //      float avg_avg = 0;
 //      for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
 //        avg_avg += bgPixel(idx);
