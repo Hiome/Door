@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.20"
+#define FIRMWARE_VERSION        "V0.8.21"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -755,7 +755,8 @@ uint8_t findCurrentPoints(uint8_t *points) {
     uint8_t i = ordered_indexes_temp[z];
     bool added = false;
     for (uint8_t j=0; j<z; j++) {
-      if (norm_pixels[ordered_indexes[j]] - norm_pixels[i] < 15) {
+      int8_t td = norm_pixels[ordered_indexes[j]] - norm_pixels[i];
+      if (td < 15) {
         if (abs(neighbors_count[i] - neighbors_count[ordered_indexes[j]]) > 1) {
           // prefer the point that's more in middle of blob
           added = neighbors_count[i] > neighbors_count[ordered_indexes[j]];
@@ -781,7 +782,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
             uint8_t x = findClosestPerson(known_people, i, MIN_DISTANCE,
                           NORMAL_TEMP_DIFFERENCE);
             if (x == UNDEF_POINT || known_people[x].history < 2) {
-              if (SIDE(i) == door_side) edge1++;
+              if (td < 5 && SIDE(i) == door_side) edge1++;
             } else if (SIDE(i) == known_people[x].side()) edge1++;
           }
 
@@ -1250,10 +1251,14 @@ void processSensor() {
 
       if (!retroMatched && !pointOnBorder(sp)) {
         // if point is right in middle, drag it to the side it appears to be coming from
-        if (norm_pixels[sp] > HIGH_CONF_THRESHOLD && doorJustOpened()) {
-          if (SIDE1(sp)) {
-            if (door_side == 1 && pointsBelow(sp) > 1) sp += GRID_EXTENT;
-          } else if (door_side == 2 && pointsAbove(sp) > 1) sp -= GRID_EXTENT;
+        if (doorJustOpened()) {
+          if (norm_pixels[sp] > HIGH_CONF_THRESHOLD) {
+            uint8_t na = max(norm_pixels[i - GRID_EXTENT], HIGH_CONF_THRESHOLD);
+            uint8_t nb = max(norm_pixels[i + GRID_EXTENT], HIGH_CONF_THRESHOLD);
+            if (SIDE1(sp)) {
+              if (door_side == 1 && nb > na) sp += GRID_EXTENT;
+            } else if (door_side == 2 && na > nb) sp -= GRID_EXTENT;
+          }
         } else {
           Person x = findLargestPerson(sp);
           if (x.real()) {
@@ -1370,7 +1375,7 @@ void processSensor() {
       for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
         SERIAL_PRINT(F(" "));
         if (norm_pixels[idx] < CONFIDENCE_THRESHOLD) {
-          SERIAL_PRINT(F("-----"));
+          SERIAL_PRINT(F("---"));
         } else {
           if (norm_pixels[idx] < 100) SERIAL_PRINT(F(" "));
           SERIAL_PRINT(norm_pixels[idx]);
