@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.22"
+#define FIRMWARE_VERSION        "V0.8.23"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -457,8 +457,8 @@ void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     Person p = known_people[i];
     if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
-        p.confidence() > CONFIDENCE_THRESHOLD && p.history > MIN_HISTORY &&
-        pointOnBorder(p.past_position)) {
+        p.history > MIN_HISTORY && pointOnBorder(p.past_position) &&
+        p.confidence() > CONFIDENCE_THRESHOLD) {
       p.publishPacket(FRD_EVENT);
       known_people[i] = p; // update known_people array
     }
@@ -533,7 +533,7 @@ float bgDiff(uint8_t i) {
 }
 
 uint8_t calcGradient(float diff, float scale) {
-  if (diff < 0.9 || diff > 10.0) return 0;
+  if (diff < 0.8 || diff > 10.0) return 0;
   diff /= scale;
   if (diff > 0.995) return 100;
   return int(diff*100.0);
@@ -682,18 +682,12 @@ float calculateNewBackground(uint8_t i) {
       if (known_people[x].real() && known_people[x].total_count() > 5 &&
             samePoints(known_people[x].past_position, i) &&
             known_people[x].confidence() > 50 &&
-            euclidean_distance(known_people[x].past_position, i) < MAX_DISTANCE) {
-        float td = known_people[x].total_distance();
-        if (td < MIN_DISTANCE_FRD && known_people[x].count_start > 10) {
-          // point hasn't moved for at least 1 second
-          // increase alpha to 0.01
-          return std * 10.0;
-        } else if (td > MIN_DISTANCE_FRD ||
-                    known_people[x].fgm() > 1.5*known_people[x].variance()) {
-          // point has moved or is significantly higher than variance
-          // decrease alpha to 0.00001
-          return std * 0.01;
-        }
+            euclidean_distance(known_people[x].past_position, i) < MAX_DISTANCE &&
+            (known_people[x].total_distance() > MIN_DISTANCE_FRD ||
+                    known_people[x].fgm() > 1.5*known_people[x].variance())) {
+        // point has moved or is significantly higher than variance
+        // decrease alpha to 0.00001
+        return std * 0.01;
         break;
       }
     }
@@ -973,10 +967,9 @@ void processSensor() {
         for (uint8_t j=0; j<total_masses; j++) {
           // can't move more than max_distance at once
           float d = euclidean_distance(p.past_position, points[j]);
-          if (d > 5.0 && conf < HIGH_CONF_THRESHOLD) continue;
+          if (d > 5.0) continue;
 
-          // can't shift more than 3º if low confidence or crossed to edge of grid
-          // or losing more than 2 neighbors
+          // can't shift more than 3º if crossed to edge of grid
           float tempDiff = diffFromPerson(points[j], p);
           if (tempDiff > MAX_TEMP_DIFFERENCE && 
               (p.crossed && pointOnSmallBorder(p.past_position)))
