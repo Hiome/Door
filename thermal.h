@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.23"
+#define FIRMWARE_VERSION        "V0.8.24"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -483,16 +483,10 @@ bool checkDoorState() {
 }
 
 void clearPointsAfterDoorClose() {
-  uint8_t last_door_state = door_state;
   if (checkDoorState()) {
     for (uint8_t i = 0; i<MAX_PEOPLE; i++) {
-      if (door_state == DOOR_CLOSED || last_door_state == DOOR_CLOSED ||
-          (known_people[i].real() && (known_people[i].starting_side() == door_side ||
-            known_people[i].side() == door_side ||
-            known_people[i].confidence() < HIGH_CONF_THRESHOLD))) {
-        known_people[i].forget();
-        known_people[i] = UNDEF_PERSON;
-      }
+      known_people[i].forget();
+      known_people[i] = UNDEF_PERSON;
       forgotten_people[i] = UNDEF_PERSON;
     }
     cycles_since_forgotten = MAX_EMPTY_CYCLES;
@@ -533,7 +527,7 @@ float bgDiff(uint8_t i) {
 }
 
 uint8_t calcGradient(float diff, float scale) {
-  if (diff < 0.8 || diff > 10.0) return 0;
+  if (diff < 0.9 || diff > 10.0) return 0;
   diff /= scale;
   if (diff > 0.995) return 100;
   return int(diff*100.0);
@@ -967,12 +961,26 @@ void processSensor() {
         for (uint8_t j=0; j<total_masses; j++) {
           // can't move more than max_distance at once
           float d = euclidean_distance(p.past_position, points[j]);
-          if (d > 5.0) continue;
+          if (d >= 5.0) continue;
+
+          if (d > 3.0) {
+            float td = p.total_distance();
+            uint8_t tc = p.total_count();
+            td = max(td, 1);
+            if (td/(float)tc < 0.2) {
+              continue;
+            }
+          }
 
           // can't shift more than 3º if crossed to edge of grid
           float tempDiff = diffFromPerson(points[j], p);
-          if (tempDiff > MAX_TEMP_DIFFERENCE && 
+          if (tempDiff > MAX_TEMP_DIFFERENCE &&
               (p.crossed && pointOnSmallBorder(p.past_position)))
+            continue;
+
+          if ((d > 3.0 || norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD ||
+              abs(norm_pixels[p.past_position] - norm_pixels[points[j]]) > 15) &&
+              diffFromPerson(p.past_position, p) < tempDiff)
             continue;
 
           float ratioP = min(((float)norm_pixels[points[j]])/conf,
@@ -1237,12 +1245,15 @@ void processSensor() {
           Person x = findLargestPerson(sp);
           if (x.real()) {
             // there's another person in the frame, assume this is a split of that person
-            if (!x.crossed) {
+            if (!x.crossed || (x.count_start > 5 && !x.count_end)) {
+              // either first person hasn't crossed yet or they've been on other side for
+              // > 0.5 seconds. Either way, make sure new point is on the same side
               if (SIDE(sp) != x.starting_side()) {
                 if (x.starting_side() == 2) sp += GRID_EXTENT;
                 else sp -= GRID_EXTENT;
               }
             } else if (SIDE(sp) == x.starting_side()) {
+              // point just crossed, put new point on opposite side so it counts on its own
               if (x.starting_side() == 1) sp += GRID_EXTENT;
               else sp -= GRID_EXTENT;
             }
