@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.24"
+#define FIRMWARE_VERSION        "V0.8.25"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -119,6 +119,13 @@ float euclidean_distance(uint8_t p1, uint8_t p2) {
 uint8_t axis_distance(uint8_t p1, uint8_t p2) {
   int8_t axisJump = AXIS(p1) - AXIS(p2);
   return abs(axisJump);
+}
+
+uint8_t max_axis_jump(uint8_t p1, uint8_t p2) {
+  int8_t notAxisJump = NOT_AXIS(p1) - NOT_AXIS(p2);
+  notAxisJump = abs(notAxisJump);
+  uint8_t axisJump = axis_distance(p1, p2);
+  return max(axisJump, notAxisJump);
 }
 
 uint8_t possible_neighbors(uint8_t x) {
@@ -862,7 +869,7 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
       h = min(p.history, MIN_HISTORY);
     }
 
-    uint8_t axisJump = axis_distance(p.past_position, point);
+    uint8_t axisJump = max_axis_jump(p.past_position, point);
     mj = max(axisJump, p.max_jump);
 
     uint8_t tempDrift = (int)roundf(diffFromPerson(point, p) * 10.0);
@@ -959,18 +966,7 @@ void processSensor() {
         uint8_t sp_axis = AXIS(p.past_position);
 
         for (uint8_t j=0; j<total_masses; j++) {
-          // can't move more than max_distance at once
-          float d = euclidean_distance(p.past_position, points[j]);
-          if (d >= 5.0) continue;
-
-          if (d > 3.0) {
-            float td = p.total_distance();
-            uint8_t tc = p.total_count();
-            td = max(td, 1);
-            if (td/(float)tc < 0.2) {
-              continue;
-            }
-          }
+          if (max_axis_jump(points[j], p.past_position) > 5) continue;
 
           // can't shift more than 3º if crossed to edge of grid
           float tempDiff = diffFromPerson(points[j], p);
@@ -978,7 +974,8 @@ void processSensor() {
               (p.crossed && pointOnSmallBorder(p.past_position)))
             continue;
 
-          if ((d > 3.0 || norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD ||
+          // can't move if the old point is closer to raw temp than the new point
+          if ((norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD ||
               abs(norm_pixels[p.past_position] - norm_pixels[points[j]]) > 15) &&
               diffFromPerson(p.past_position, p) < tempDiff)
             continue;
@@ -1008,6 +1005,7 @@ void processSensor() {
             directionBonus += (0.05*neighbors_count[points[j]]);
           }
 
+          float d = euclidean_distance(p.past_position, points[j]);
           float score = sq(d/5.0) + sq(tempDiff/MAX_TEMP_DIFFERENCE) -
                           sq(ratioP) - directionBonus;
           if (min_score - score > 0.05 || (score - min_score < 0.05 &&
@@ -1120,7 +1118,7 @@ void processSensor() {
         if (p.real() && pairs[idx] == i) {
           // closest point matched, update trackers
           if (p.past_position != points[i]) {
-            uint8_t axisJump = axis_distance(p.past_position, points[i]);
+            uint8_t axisJump = max_axis_jump(p.past_position, points[i]);
             p.max_jump = max(axisJump, p.max_jump);
 
             if ((SIDE1(p.starting_position) && AXIS(points[i]) <= AXIS(p.max_position)) ||
