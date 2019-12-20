@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.25"
+#define FIRMWARE_VERSION        "V0.8.26"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -854,6 +854,14 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
       return false;
     }
 
+    // can't move if the old point is closer to raw temp than the new point
+    float tempDiff = diffFromPerson(point, p);
+    if ((norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD ||
+        abs(norm_pixels[p.past_position] - norm_pixels[point]) > 15) &&
+        diffFromPerson(p.past_position, p) < tempDiff) {
+      return false;
+    }
+
     if (p.count > 1) p.resetTotals();
 
     // point is ahead of starting point at least
@@ -872,7 +880,7 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
     uint8_t axisJump = max_axis_jump(p.past_position, point);
     mj = max(axisJump, p.max_jump);
 
-    uint8_t tempDrift = (int)roundf(diffFromPerson(point, p) * 10.0);
+    uint8_t tempDrift = (int)roundf(tempDiff * 10.0);
     md = max(p.max_temp_drift, tempDrift);
 
     cross = p.crossed;
@@ -976,9 +984,12 @@ void processSensor() {
 
           // can't move if the old point is closer to raw temp than the new point
           if ((norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD ||
-              abs(norm_pixels[p.past_position] - norm_pixels[points[j]]) > 15) &&
-              diffFromPerson(p.past_position, p) < tempDiff)
-            continue;
+              abs(norm_pixels[p.past_position] - norm_pixels[points[j]]) > 15)) {
+            float tempDiffOld = diffFromPerson(p.past_position, p);
+            if (tempDiffOld < tempDiff && (tempDiffOld + 2.0 < tempDiff ||
+                  pointOnSmallBorder(points[j])))
+              continue;
+          }
 
           float ratioP = min(((float)norm_pixels[points[j]])/conf,
                              conf/((float)norm_pixels[points[j]]));
