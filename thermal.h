@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.27"
+#define FIRMWARE_VERSION        "V0.8.28"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -168,7 +168,6 @@ bool doorJustOpened() {
 typedef struct Person {
   uint8_t   past_position;          // 0-63 + UNDEF_POINT
   uint8_t   starting_position :6;   // 0-63
-  uint8_t   max_position      :6;   // 0-63
   uint8_t   max_jump          :3;   // 1-7
   uint8_t   history           :4;   // 1-10
   uint8_t   crossed           :4;   // 0-9
@@ -326,8 +325,7 @@ typedef struct Person {
     history = 1;
     max_jump = 0;
     max_temp_drift = 0;
-    max_position = past_position;
-    count_start = count_end;
+    count_start = 0;
     count_end = 0;
   };
 
@@ -823,7 +821,7 @@ void forget_person(uint8_t idx, Person *temp_forgotten_people, uint8_t *pairs,
   known_people[idx] = UNDEF_PERSON;
 }
 
-bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_t &mp,
+bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp,
                       uint8_t &mj, uint8_t &md, uint8_t &cross, bool &revert,
                       uint16_t &conf, float &b, float &f, float &rt, uint8_t &n,
                       uint8_t &height, uint8_t &width, uint8_t &c, uint16_t &cstart,
@@ -832,11 +830,18 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
   if (pi != UNDEF_POINT) {
     Person p = arr[pi];
 
-    if ((SIDE1(p.starting_position) && AXIS(p.starting_position) >= AXIS(mp)) ||
-        (SIDE2(p.starting_position) && AXIS(p.starting_position) <= AXIS(mp)) ||
-        (pointOnSmallBorder(p.starting_position) && pointOnSmallBorder(point))) {
-      // this point is moved behind previous starting point, just start over
+    uint8_t ppaxis = AXIS(p.past_position);
+    if ((SIDE1(p.starting_position) && ppaxis-1 > AXIS(point)) ||
+        (SIDE2(p.starting_position) && ppaxis+1 < AXIS(point))) {
+      // this point is moved behind previous position, just start over
       return false;
+    }
+
+    if (p.history < MIN_HISTORY && p.side() != p.starting_side()) {
+      uint8_t normalized_axis = ppaxis > 4 ? GRID_EXTENT+1 - ppaxis : ppaxis;
+      if (p.history <= (MIN_HISTORY - normalized_axis))
+        // impossible for this person to ever do anything useful with its life, kill it
+        return false;
     }
 
     // can't move if the old point is closer to raw temp than the new point
@@ -851,16 +856,7 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
 
     // point is ahead of starting point at least
     sp = p.starting_position;
-
-    if ((SIDE1(sp) && AXIS(p.max_position) > AXIS(mp)) ||
-        (SIDE2(sp) && AXIS(p.max_position) < AXIS(mp))) {
-      // point moved backwards from past position
-      mp = p.max_position;
-      h = 1;
-    } else {
-      // point is moving forward
-      h = min(p.history, MIN_HISTORY);
-    }
+    h = min(p.history, MIN_HISTORY);
 
     uint8_t axisJump = max_axis_jump(p.past_position, point);
     mj = max(axisJump, p.max_jump);
@@ -888,13 +884,12 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp, uint8_
   return false;
 }
 
-void createNewPerson(uint8_t pp, uint8_t mp, uint8_t mj, uint8_t md, uint8_t h, uint8_t sp,
+void createNewPerson(uint8_t pp, uint8_t mj, uint8_t md, uint8_t h, uint8_t sp,
                     uint8_t cross, bool revert, float rt, uint16_t conf, float b, float f,
                     float v, uint8_t n, uint8_t height, uint8_t width, uint8_t c,
                     uint16_t cstart, uint8_t cend, uint8_t fc, uint8_t j) {
   Person p;
   p.past_position = pp;
-  p.max_position = mp;
   p.max_jump = mj;
   p.max_temp_drift = md;
   p.history = h;
@@ -957,6 +952,14 @@ void processSensor() {
         float min_score = 100;
         float conf = p.confidence();
         uint8_t sp_axis = AXIS(p.past_position);
+
+        if (p.history < MIN_HISTORY && p.side() != p.starting_side()) {
+          uint8_t normalized_axis = sp_axis > 4 ? GRID_EXTENT+1 - sp_axis : sp_axis;
+          if (p.history <= (MIN_HISTORY - normalized_axis))
+            // impossible for this person to ever do anything useful with its life, kill it
+            FORGET_POINT;
+            continue;
+        }
 
         for (uint8_t j=0; j<total_masses; j++) {
           if (max_axis_jump(points[j], p.past_position) > 4) continue;
@@ -1121,16 +1124,16 @@ void processSensor() {
             uint8_t axisJump = max_axis_jump(p.past_position, points[i]);
             p.max_jump = max(axisJump, p.max_jump);
 
-            if ((SIDE1(p.starting_position) && AXIS(points[i]) <= AXIS(p.max_position)) ||
-                (SIDE2(p.starting_position) && AXIS(points[i]) >= AXIS(p.max_position))) {
-              // don't increase history if point is not moving forward
+            if ((SIDE1(p.starting_position) && AXIS(points[i]) < AXIS(p.past_position)) ||
+                (SIDE2(p.starting_position) && AXIS(points[i]) > AXIS(p.past_position))) {
+              // point moved backwards
               if (p.count > 1) p.resetTotals();
               if ((SIDE1(p.starting_position) &&
                     AXIS(points[i]) <= AXIS(p.starting_position)) ||
                   (SIDE2(p.starting_position) &&
                     AXIS(points[i]) >= AXIS(p.starting_position))) {
                 // reset history if point is further back than where it started
-                if (!p.crossed || pointOnEdge(points[i])) {
+                if (!p.crossed || pointOnSmallBorder(points[i])) {
                   // reset everything, unless point is crossed and could still move back
                   p.past_position = points[i]; // needs to be set before checkForRevert
                   p.checkForRevert();
@@ -1145,19 +1148,20 @@ void processSensor() {
                   p.total_height = 0;
                   p.total_width = 0;
                   p.count = 0;
+                  p.count_start = 0;
                 }
                 // reset start position, unless point is in a revert crisis
                 if (!p.reverted) {
-                  p.history = 1;
                   p.starting_position = points[i];
-                  p.max_position = points[i];
-                  p.max_jump = 0;
                 }
-              } else if (p.reverted) {
-                // pull back max position if person is waffling in middle
-                p.max_position = points[i];
+                p.history = 1;
+                p.max_jump = 0;
+                p.max_temp_drift = 0;
+              } else if (p.history > 1) {
+                // point moved backwards a little bit, decrement history
+                p.history--;
               }
-            } else {
+            } else if (AXIS(points[i]) != AXIS(p.past_position)) {
               // "always forward, forward always" - Luke Cage
               p.history++;
               if (SIDE(points[i]) != p.side() || p.history > 9) {
@@ -1165,7 +1169,6 @@ void processSensor() {
                 // it to spend another cycle on this side before we count the event
                 p.history = min(p.history, MIN_HISTORY);
               }
-              p.max_position = points[i];
             }
             p.past_position = points[i];
           }
@@ -1186,8 +1189,6 @@ void processSensor() {
           } else {
             p.count_end++;
           }
-          // decrease history (down to 2) for every second spent meandering around
-          if (p.history > 2 && p.total_count() % 10 == 0) p.history--;
           cycles_since_person = 0;
           known_people[idx] = p;
           break;
@@ -1196,7 +1197,6 @@ void processSensor() {
     } else if (taken[i] == 0 && norm_pixels[points[i]] > CONFIDENCE_THRESHOLD) {
       // new point appeared (no past point found), start tracking it
       uint8_t sp = points[i];
-      uint8_t mp = sp;
       uint8_t mj = 0;
       uint8_t md = 0;
       uint8_t h = 1;
@@ -1218,7 +1218,7 @@ void processSensor() {
 
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
-        if (remember_person(temp_forgotten_people, points[i], h, sp, mp, mj, md, cross,
+        if (remember_person(temp_forgotten_people, points[i], h, sp, mj, md, cross,
               revert, conf, b, f, rt, n, height, width, c, cstart, cend, v, fc)) {
           retroMatched = true;
         }
@@ -1226,7 +1226,7 @@ void processSensor() {
 
       if (!retroMatched && cycles_since_forgotten < MAX_EMPTY_CYCLES) {
         // second let's check past forgotten points for a match
-        if (remember_person(forgotten_people, points[i], h, sp, mp, mj, md, cross,
+        if (remember_person(forgotten_people, points[i], h, sp, mj, md, cross,
               revert, conf, b, f, rt, n, height, width, c, cstart, cend, v, fc)) {
           retroMatched = true;
         }
@@ -1273,7 +1273,7 @@ void processSensor() {
       for (uint8_t j=0; j<MAX_PEOPLE; j++) {
         // look for first empty slot in past_points to use
         if (!known_people[j].real()) {
-          createNewPerson(points[i], mp, mj, md, h, sp, cross, revert, rt, conf, b, f, v, n,
+          createNewPerson(points[i], mj, md, h, sp, cross, revert, rt, conf, b, f, v, n,
                           height, width, c, cstart, cend, fc, j);
           placed = true;
           break;
@@ -1287,7 +1287,7 @@ void processSensor() {
       }
       if (!placed && minIndex != UNDEF_POINT && (((float)conf)/(float)c) > minConf) {
         // replace lower conf slot with this new point
-        createNewPerson(points[i], mp, mj, md, h, sp, cross, revert, rt, conf, b, f, v, n,
+        createNewPerson(points[i], mj, md, h, sp, cross, revert, rt, conf, b, f, v, n,
                         height, width, c, cstart, cend, fc, minIndex);
       }
     }
