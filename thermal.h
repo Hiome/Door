@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.26"
+#define FIRMWARE_VERSION        "V0.8.27"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -20,8 +20,8 @@
 #define BACKGROUND_GRADIENT     2.0
 #define FOREGROUND_GRADIENT     2.0
 #define NUM_STD_DEV             2.0  // max num of std dev to include in trimmed average
-#define NORMAL_TEMP_DIFFERENCE  3.0  // temp difference between 2 points within same frame
-#define MAX_TEMP_DIFFERENCE     5.0  // max temp difference between 2 matchable people
+#define NORMAL_TEMP_DIFFERENCE  2.0  // temp difference between 2 points within same frame
+#define MAX_TEMP_DIFFERENCE     4.0  // max temp difference between 2 matchable people
 #define MIN_TEMP                2.0  // ignore all points colder than 2º C
 #define MAX_TEMP                45.0 // ignore all points hotter than 45ºC
 
@@ -126,16 +126,6 @@ uint8_t max_axis_jump(uint8_t p1, uint8_t p2) {
   notAxisJump = abs(notAxisJump);
   uint8_t axisJump = axis_distance(p1, p2);
   return max(axisJump, notAxisJump);
-}
-
-uint8_t possible_neighbors(uint8_t x) {
-  bool lrEdge = pointOnLREdge(x);
-  bool tbEdge = pointOnEdge(x);
-  if (lrEdge || tbEdge) {
-    if (lrEdge && tbEdge) return 3;
-    return 5;
-  }
-  return 8;
 }
 
 uint8_t cycles_since_person = MAX_CLEARED_CYCLES;
@@ -393,7 +383,7 @@ uint8_t findClosestPerson(Person *arr, uint8_t i, float maxDistance, float maxTe
       float tempDiff = diffFromPerson(i, arr[x]);
       if (tempDiff > maxTemp) continue;
 
-      float tempRatio = tempDiff/NORMAL_TEMP_DIFFERENCE;
+      float tempRatio = tempDiff/maxTemp;
       tempRatio = max(tempRatio, 0.1);
       float distRatio = dist/maxDistance;
       distRatio = max(distRatio, 0.1);
@@ -801,9 +791,6 @@ uint8_t findCurrentPoints(uint8_t *points) {
 
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
       // scan all points added after current_point, since they must be part of same blob
-      uint8_t added = 0;
-      uint8_t max_added = possible_neighbors(ordered_indexes_temp[x]);
-
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
         // scan all known points after current_point to find neighbors to point x
         uint8_t i = ordered_indexes[k];
@@ -814,8 +801,6 @@ uint8_t findCurrentPoints(uint8_t *points) {
             ordered_indexes[k] = UNDEF_POINT;
             sorted_size++;
           }
-          added++;
-          if (added == max_added) break;
         }
       }
     }
@@ -974,20 +959,24 @@ void processSensor() {
         uint8_t sp_axis = AXIS(p.past_position);
 
         for (uint8_t j=0; j<total_masses; j++) {
-          if (max_axis_jump(points[j], p.past_position) > 5) continue;
+          if (max_axis_jump(points[j], p.past_position) > 4) continue;
 
-          // can't shift more than 3º if crossed to edge of grid
+          // can't shift more than 5º at once
           float tempDiff = diffFromPerson(points[j], p);
-          if (tempDiff > MAX_TEMP_DIFFERENCE &&
-              (p.crossed && pointOnSmallBorder(p.past_position)))
+          if (tempDiff > MAX_TEMP_DIFFERENCE) continue;
+
+          // can't shift more than 2º if bigger than 30% conf gap or both points are on edge
+          bool confThresholdMet = abs(conf - norm_pixels[points[j]]) > AVG_CONF_THRESHOLD;
+          if (tempDiff > NORMAL_TEMP_DIFFERENCE && (confThresholdMet ||
+                (pointOnSmallBorder(p.past_position) && pointOnSmallBorder(points[j]))))
             continue;
 
           // can't move if the old point is closer to raw temp than the new point
-          if ((norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD ||
-              abs(norm_pixels[p.past_position] - norm_pixels[points[j]]) > 15)) {
+          if (norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD ||
+              abs(norm_pixels[p.past_position] - norm_pixels[points[j]]) > 15) {
             float tempDiffOld = diffFromPerson(p.past_position, p);
-            if (tempDiffOld < tempDiff && (tempDiffOld + 2.0 < tempDiff ||
-                  pointOnSmallBorder(points[j])))
+            if (tempDiffOld < tempDiff && (confThresholdMet ||
+                  tempDiffOld + NORMAL_TEMP_DIFFERENCE < tempDiff))
               continue;
           }
 
@@ -1158,7 +1147,7 @@ void processSensor() {
                   p.count = 0;
                 }
                 // reset start position, unless point is in a revert crisis
-                if (!p.count || !p.reverted) {
+                if (!p.reverted) {
                   p.history = 1;
                   p.starting_position = points[i];
                   p.max_position = points[i];
@@ -1194,8 +1183,11 @@ void processSensor() {
           if (SIDE(points[i]) == p.starting_side()) {
             p.count_start++;
             p.count_end = 0;
-          } else
+          } else {
             p.count_end++;
+          }
+          // decrease history (down to 2) for every second spent meandering around
+          if (p.history > 2 && p.total_count() % 10 == 0) p.history--;
           cycles_since_person = 0;
           known_people[idx] = p;
           break;
@@ -1397,7 +1389,7 @@ void initialize() {
   amg.begin(AMG_ADDR);
 
   // setup reed switches
-   DDRD =  DDRD & B11100111;  // set pins 3 and 4 as inputs
+  DDRD  = DDRD  & B11100111;  // set pins 3 and 4 as inputs
   PORTD = PORTD | B00011000;  // pull pins 3 and 4 high
 
   LOWPOWER_DELAY(SLEEP_1S);
