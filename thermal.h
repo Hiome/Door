@@ -172,7 +172,7 @@ typedef struct Person {
   uint8_t   history           :4;   // 1-10
   uint8_t   crossed           :4;   // 0-9
   bool      reverted          :1;   // 0-1
-  uint8_t   max_temp_drift;
+  uint8_t   max_temp_drift    :4;   // 0-7
   float     total_raw_temp;
   float     total_variance;
   float     total_bgm;
@@ -259,7 +259,7 @@ typedef struct Person {
     // This could possibly fail if person's hand is on door knob opening door and sensor
     // detects that as a person. We'll see hand go from 1->2, and then get dropped as door
     // opens, and this if block will prevent it from reverting properly.
-    if (confidence() > HIGH_CONF_THRESHOLD) {
+    if (int(confidence()) > HIGH_CONF_THRESHOLD) {
       if (frames_since_door_open == 0) {
         return door_state != DOOR_OPEN;
       } else if (door_state == DOOR_OPEN) {
@@ -325,13 +325,13 @@ typedef struct Person {
     history = 1;
     max_jump = 0;
     max_temp_drift = 0;
-    count_start = 0;
+    count_start = 1;
     count_end = 0;
   };
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
   bool publishMaybeEvent() {
-    if (!real() || confidence() < CONFIDENCE_THRESHOLD) return false;
+    if (!real() || int(confidence()) < CONFIDENCE_THRESHOLD) return false;
 
     if (history >= MIN_HISTORY && (!crossed || !reverted)) {
       if (starting_side() != side()) {
@@ -349,7 +349,7 @@ typedef struct Person {
   void forget() {
     checkForRevert() || publishMaybeEvent();
   };
-};
+} Person;
 
 Person UNDEF_PERSON = {UNDEF_POINT};
 
@@ -399,7 +399,7 @@ Person findLargestPerson(uint8_t i) {
   Person a = UNDEF_PERSON;
   float maxScore = 1.0;
   for (uint8_t x=0; x<MAX_PEOPLE; x++) {
-    Person p = known_people[x]; 
+    Person p = known_people[x];
     if (p.real() && p.history > 1) {
       if (euclidean_distance(p.past_position, i) > 4.0) continue;
       float score = p.height() * p.width();
@@ -453,7 +453,7 @@ void publishEvents() {
     Person p = known_people[i];
     if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
         p.history > MIN_HISTORY && pointOnBorder(p.past_position) &&
-        p.confidence() > CONFIDENCE_THRESHOLD) {
+        int(p.confidence()) > CONFIDENCE_THRESHOLD) {
       p.publishPacket(FRD_EVENT);
       known_people[i] = p; // update known_people array
     }
@@ -670,7 +670,7 @@ float calculateNewBackground(uint8_t i) {
     for (uint8_t x=0; x<MAX_PEOPLE; x++) {
       if (known_people[x].real() && known_people[x].total_count() > 5 &&
             samePoints(known_people[x].past_position, i) &&
-            known_people[x].confidence() > 50 &&
+            int(known_people[x].confidence()) > 50 &&
             euclidean_distance(known_people[x].past_position, i) < MAX_DISTANCE &&
             (known_people[x].total_distance() > MIN_DISTANCE_FRD ||
                     known_people[x].fgm() > 1.5*known_people[x].variance())) {
@@ -810,7 +810,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
 void forget_person(uint8_t idx, Person *temp_forgotten_people, uint8_t *pairs,
                     uint8_t &temp_forgotten_num) {
   Person p = known_people[idx];
-  if (p.forgotten_count < 3 && p.confidence() > AVG_CONF_THRESHOLD &&
+  if (p.forgotten_count < 3 && int(p.confidence()) > AVG_CONF_THRESHOLD &&
         (p.checkForRevert() || axis_distance(p.starting_position, p.past_position) > 1)) {
     p.publishMaybeEvent();
     p.forgotten_count++;
@@ -969,7 +969,8 @@ void processSensor() {
           if (tempDiff > MAX_TEMP_DIFFERENCE) continue;
 
           // can't shift more than 2º if bigger than 30% conf gap or both points are on edge
-          bool confThresholdMet = abs(conf - norm_pixels[points[j]]) > AVG_CONF_THRESHOLD;
+          int8_t confDiff = int(conf) - norm_pixels[points[j]];
+          bool confThresholdMet = abs(confDiff) > AVG_CONF_THRESHOLD;
           if (tempDiff > NORMAL_TEMP_DIFFERENCE && (confThresholdMet ||
                 (pointOnSmallBorder(p.past_position) && pointOnSmallBorder(points[j]))))
             continue;
