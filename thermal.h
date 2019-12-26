@@ -172,7 +172,7 @@ typedef struct Person {
   uint8_t   history           :4;   // 1-10
   uint8_t   crossed           :4;   // 0-9
   bool      reverted          :1;   // 0-1
-  uint8_t   max_temp_drift    :4;   // 0-7
+  uint8_t   max_temp_drift    :3;   // 0-7
   float     total_raw_temp;
   float     total_variance;
   float     total_bgm;
@@ -181,7 +181,7 @@ typedef struct Person {
   uint8_t   total_height;           // 0-80
   uint8_t   total_width;            // 0-80
   uint16_t  total_conf        :10;  // 0-1000
-  uint8_t   count             :4;   // 1-7
+  uint8_t   count             :3;   // 1-7
   uint16_t  count_start;
   uint8_t   count_end;
   uint8_t   forgotten_count   :2;   // 0-3
