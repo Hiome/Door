@@ -165,26 +165,32 @@ bool doorJustOpened() {
   else return readDoorState() == DOOR_OPEN;
 }
 
-typedef struct Person {
-  uint8_t   past_position;          // 0-63 + UNDEF_POINT
-  uint8_t   starting_position :6;   // 0-63
-  uint8_t   max_jump          :3;   // 1-7
+typedef struct {
+  uint8_t   past_position;        //:7 0-63 + UNDEF_POINT
+  uint8_t   starting_position;    //:6 0-63
+
+  uint8_t   total_neighbors;      //:7 0-80
+  uint8_t   total_height;         //:7 0-80
+  uint8_t   total_width;          //:7 0-80
+
+  uint16_t  total_conf        :10;  // 0-1000
+  uint8_t   forgotten_count   :2;   // 0-3
+  uint8_t   count             :4;   // 1-7
+
   uint8_t   history           :4;   // 1-10
+  uint8_t   max_temp_drift    :4;   // 0-7
+
   uint8_t   crossed           :4;   // 0-9
+  uint8_t   max_jump          :3;   // 0-7
   bool      reverted          :1;   // 0-1
-  uint8_t   max_temp_drift    :3;   // 0-7
+
   float     total_raw_temp;
   float     total_variance;
   float     total_bgm;
   float     total_fgm;
-  uint8_t   total_neighbors;        // 0-80
-  uint8_t   total_height;           // 0-80
-  uint8_t   total_width;            // 0-80
-  uint16_t  total_conf        :10;  // 0-1000
-  uint8_t   count             :3;   // 1-7
-  uint16_t  count_start;
+
   uint8_t   count_end;
-  uint8_t   forgotten_count   :2;   // 0-3
+  uint16_t  count_start;
 
   bool resetIfNecessary() {
     if (count > MIN_HISTORY) {
@@ -351,8 +357,7 @@ typedef struct Person {
   };
 } Person;
 
-Person UNDEF_PERSON = {UNDEF_POINT};
-
+Person UNDEF_PERSON;
 Person known_people[MAX_PEOPLE];
 Person forgotten_people[MAX_PEOPLE];
 
@@ -1387,6 +1392,8 @@ void processSensor() {
 }
 
 void initialize() {
+  UNDEF_PERSON.past_position = UNDEF_POINT;
+
   amg.begin(AMG_ADDR);
 
   // setup reed switches
