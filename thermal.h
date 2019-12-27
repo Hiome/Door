@@ -168,7 +168,8 @@ bool doorJustOpened() {
 typedef struct {
   uint8_t   past_position;        //:7 0-63 + UNDEF_POINT
   uint8_t   starting_position;    //:6 0-63
-
+  uint8_t   history;              //:4 1-10
+  uint8_t   max_temp_drift;       //:6 0-60
   uint8_t   total_neighbors;      //:7 0-80
   uint8_t   total_height;         //:7 0-80
   uint8_t   total_width;          //:7 0-80
@@ -176,9 +177,6 @@ typedef struct {
   uint16_t  total_conf        :10;  // 0-1000
   uint8_t   forgotten_count   :2;   // 0-3
   uint8_t   count             :4;   // 1-7
-
-  uint8_t   history           :4;   // 1-10
-  uint8_t   max_temp_drift    :4;   // 0-7
 
   uint8_t   crossed           :4;   // 0-9
   uint8_t   max_jump          :3;   // 0-7
@@ -895,10 +893,10 @@ void createNewPerson(uint8_t pp, uint8_t mj, uint8_t md, uint8_t h, uint8_t sp,
                     uint16_t cstart, uint8_t cend, uint8_t fc, uint8_t j) {
   Person p;
   p.past_position = pp;
+  p.starting_position = sp;
   p.max_jump = mj;
   p.max_temp_drift = md;
   p.history = h;
-  p.starting_position = sp;
   p.crossed = cross;
   p.reverted = revert;
   p.total_raw_temp = rt;
@@ -935,105 +933,100 @@ void processSensor() {
   Person temp_forgotten_people[MAX_PEOPLE];
   uint8_t temp_forgotten_num = 0;
 
-  uint8_t past_total_masses = 0;
-
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     taken[i] = 0;
     pairs[i] = UNDEF_POINT;
     temp_forgotten_people[i] = UNDEF_PERSON;
-
-    if (known_people[i].real()) past_total_masses++;
   }
 
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT (forget_person(idx, temp_forgotten_people, pairs, temp_forgotten_num))
 
-  if (past_total_masses > 0) {
-    for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
-      Person p = known_people[idx];
-      if (p.real()) {
-        if (p.resetIfNecessary()) known_people[idx] = p;
-        uint8_t min_index = UNDEF_POINT;
-        float min_score = 100;
-        float conf = p.confidence();
-        uint8_t sp_axis = AXIS(p.past_position);
+  for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
+    Person p = known_people[idx];
 
-        if (p.history < MIN_HISTORY && p.side() != p.starting_side()) {
-          uint8_t normalized_axis = sp_axis > 4 ? GRID_EXTENT+1 - sp_axis : sp_axis;
-          if (p.history <= (MIN_HISTORY - normalized_axis))
-            // impossible for this person to ever do anything useful with its life, kill it
-            FORGET_POINT;
-            continue;
+    if (!p.real()) continue;
+    if (p.resetIfNecessary()) known_people[idx] = p;
+
+    uint8_t min_index = UNDEF_POINT;
+    float min_score = 100;
+    float conf = p.confidence();
+    uint8_t sp_axis = AXIS(p.past_position);
+
+    if (p.history < MIN_HISTORY && p.side() != p.starting_side()) {
+      uint8_t normalized_axis = sp_axis > 4 ? GRID_EXTENT+1 - sp_axis : sp_axis;
+      if (p.history <= (MIN_HISTORY - normalized_axis))
+        // impossible for this person to ever do anything useful with its life, kill it
+        FORGET_POINT;
+        continue;
+    }
+
+    for (uint8_t j=0; j<total_masses; j++) {
+      if (max_axis_jump(points[j], p.past_position) > 4) continue;
+
+      // can't shift more than 5º at once
+      float tempDiff = diffFromPerson(points[j], p);
+      if (tempDiff > MAX_TEMP_DIFFERENCE) continue;
+
+      // can't shift more than 2º if bigger than 30% conf gap or both points are on edge
+      int8_t confDiff = int(conf) - norm_pixels[points[j]];
+      bool confThresholdMet = abs(confDiff) > AVG_CONF_THRESHOLD;
+      if (tempDiff > NORMAL_TEMP_DIFFERENCE && (confThresholdMet ||
+            (pointOnSmallBorder(p.past_position) && pointOnSmallBorder(points[j]))))
+        continue;
+
+      // can't move if the old point is closer to raw temp than the new point
+      if (norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD ||
+          abs(norm_pixels[p.past_position] - norm_pixels[points[j]]) > 15) {
+        float tempDiffOld = diffFromPerson(p.past_position, p);
+        if (tempDiffOld < tempDiff && (confThresholdMet ||
+              tempDiffOld + NORMAL_TEMP_DIFFERENCE < tempDiff))
+          continue;
+      }
+
+      float ratioP = min(((float)norm_pixels[points[j]])/conf,
+                         conf/((float)norm_pixels[points[j]]));
+      if (p.crossed) ratioP /= 2.0; // ratio matters less once point is crossed
+      float directionBonus = 0;
+      bool crossedInMiddle = p.crossed && !pointOnSmallBorder(p.starting_position);
+      uint8_t np_axis = AXIS(points[j]);
+      if (np_axis == sp_axis) directionBonus = 0.05;
+      else if (SIDE1(p.starting_position)) {
+        if (crossedInMiddle) {
+          if (np_axis < sp_axis) directionBonus = 0.1;
+        } else if (np_axis > sp_axis) {
+          directionBonus = 0.1;
         }
-
-        for (uint8_t j=0; j<total_masses; j++) {
-          if (max_axis_jump(points[j], p.past_position) > 4) continue;
-
-          // can't shift more than 5º at once
-          float tempDiff = diffFromPerson(points[j], p);
-          if (tempDiff > MAX_TEMP_DIFFERENCE) continue;
-
-          // can't shift more than 2º if bigger than 30% conf gap or both points are on edge
-          int8_t confDiff = int(conf) - norm_pixels[points[j]];
-          bool confThresholdMet = abs(confDiff) > AVG_CONF_THRESHOLD;
-          if (tempDiff > NORMAL_TEMP_DIFFERENCE && (confThresholdMet ||
-                (pointOnSmallBorder(p.past_position) && pointOnSmallBorder(points[j]))))
-            continue;
-
-          // can't move if the old point is closer to raw temp than the new point
-          if (norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD ||
-              abs(norm_pixels[p.past_position] - norm_pixels[points[j]]) > 15) {
-            float tempDiffOld = diffFromPerson(p.past_position, p);
-            if (tempDiffOld < tempDiff && (confThresholdMet ||
-                  tempDiffOld + NORMAL_TEMP_DIFFERENCE < tempDiff))
-              continue;
-          }
-
-          float ratioP = min(((float)norm_pixels[points[j]])/conf,
-                             conf/((float)norm_pixels[points[j]]));
-          if (p.crossed) ratioP /= 2.0; // ratio matters less once point is crossed
-          float directionBonus = 0;
-          bool crossedInMiddle = p.crossed && !pointOnSmallBorder(p.starting_position);
-          uint8_t np_axis = AXIS(points[j]);
-          if (np_axis == sp_axis) directionBonus = 0.05;
-          else if (SIDE1(p.starting_position)) {
-            if (crossedInMiddle) {
-              if (np_axis < sp_axis) directionBonus = 0.1;
-            } else if (np_axis > sp_axis) {
-              directionBonus = 0.1;
-            }
-          } else { // side 2
-            if (crossedInMiddle) {
-              if (np_axis > sp_axis) directionBonus = 0.1;
-            } else if (np_axis < sp_axis) {
-              directionBonus = 0.1;
-            }
-          }
-
-          if (!crossedInMiddle) {
-            directionBonus += (0.05*neighbors_count[points[j]]);
-          }
-
-          float d = euclidean_distance(p.past_position, points[j]);
-          float score = sq(d/5.0) + sq(tempDiff/MAX_TEMP_DIFFERENCE) -
-                          sq(ratioP) - directionBonus;
-          if (min_score - score > 0.05 || (score - min_score < 0.05 &&
-                tempDiff < diffFromPerson(points[min_index], p))) {
-            // either score is less than min score, or if it's similar,
-            // choose the point with more similar raw temp
-            min_score = score;
-            min_index = j;
-          }
-        }
-
-        if (min_index == UNDEF_POINT) {
-          // still not found...
-          FORGET_POINT;
-        } else {
-          taken[min_index]++;
-          pairs[idx] = min_index;
+      } else { // side 2
+        if (crossedInMiddle) {
+          if (np_axis > sp_axis) directionBonus = 0.1;
+        } else if (np_axis < sp_axis) {
+          directionBonus = 0.1;
         }
       }
+
+      if (!crossedInMiddle) {
+        directionBonus += (0.05*neighbors_count[points[j]]);
+      }
+
+      float d = euclidean_distance(p.past_position, points[j]);
+      float score = sq(d/5.0) + sq(tempDiff/MAX_TEMP_DIFFERENCE) -
+                      sq(ratioP) - directionBonus;
+      if (min_score - score > 0.05 || (score - min_score < 0.05 &&
+            tempDiff < diffFromPerson(points[min_index], p))) {
+        // either score is less than min score, or if it's similar,
+        // choose the point with more similar raw temp
+        min_score = score;
+        min_index = j;
+      }
+    }
+
+    if (min_index == UNDEF_POINT) {
+      // still not found...
+      FORGET_POINT;
+    } else {
+      taken[min_index]++;
+      pairs[idx] = min_index;
     }
   }
 
@@ -1178,8 +1171,10 @@ void processSensor() {
             }
             p.past_position = points[i];
           }
-          uint8_t td = (int)roundf(diffFromPerson(points[i], p) * 10.0);
-          p.max_temp_drift = max(p.max_temp_drift, td);
+          if (p.count) {
+            uint8_t td = (int)roundf(diffFromPerson(points[i], p) * 10.0);
+            p.max_temp_drift = max(p.max_temp_drift, td);
+          }
           p.total_raw_temp += raw_pixels[points[i]];
           p.total_conf += norm_pixels[points[i]];
           p.total_bgm += bgDiff(points[i]);
@@ -1189,7 +1184,7 @@ void processSensor() {
           p.total_height += calcHeight(points[i]);
           p.total_width += calcWidth(points[i]);
           p.count++;
-          if (SIDE(points[i]) == p.starting_side()) {
+          if (p.side() == p.starting_side()) {
             p.count_start++;
             p.count_end = 0;
           } else {
@@ -1336,9 +1331,6 @@ void processSensor() {
   // wrap up with debugging output
 
   #ifdef PRINT_RAW_DATA
-    if (total_masses == 0 && past_total_masses > 0) {
-      SERIAL_PRINTLN(F("c"));
-    }
     if (total_masses > 0) {
       for (uint8_t i = 0; i<MAX_PEOPLE; i++) {
         Person p = known_people[i];
