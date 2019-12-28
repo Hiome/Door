@@ -37,7 +37,7 @@ Adafruit_AMG88xx amg;
 float raw_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 uint16_t avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 uint8_t norm_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
-int8_t neighbors_count[AMG88xx_PIXEL_ARRAY_SIZE];
+uint8_t neighbors_count[AMG88xx_PIXEL_ARRAY_SIZE];
 float global_bgm = 0;
 float global_fgm = 0;
 float global_variance = 0;
