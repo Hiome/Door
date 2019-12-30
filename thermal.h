@@ -690,7 +690,8 @@ float calculateNewBackground(uint8_t i) {
 
 void updateBgAverage() {
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    avg_pixels[i] += ((int)roundf(calculateNewBackground(i)));
+    int32_t temp = ((int)avg_pixels[i]) + ((int)roundf(calculateNewBackground(i)));
+    avg_pixels[i] = temp;
   }
 }
 
@@ -840,7 +841,8 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp,
       return false;
     }
 
-    if (p.history < MIN_HISTORY && p.side() != p.starting_side()) {
+    if (p.history < MIN_HISTORY && p.side() != p.starting_side() &&
+          pointOnSmallBorder(p.past_position)) {
       uint8_t normalized_axis = ppaxis > 4 ? GRID_EXTENT+1 - ppaxis : ppaxis;
       if (p.history <= (MIN_HISTORY - normalized_axis))
         // impossible for this person to ever do anything useful with its life, kill it
@@ -953,7 +955,8 @@ void processSensor() {
     float conf = p.confidence();
     uint8_t sp_axis = AXIS(p.past_position);
 
-    if (p.history < MIN_HISTORY && p.side() != p.starting_side()) {
+    if (p.history < MIN_HISTORY && p.side() != p.starting_side() &&
+          pointOnSmallBorder(p.past_position)) {
       uint8_t normalized_axis = sp_axis > 4 ? GRID_EXTENT+1 - sp_axis : sp_axis;
       if (p.history <= (MIN_HISTORY - normalized_axis))
         // impossible for this person to ever do anything useful with its life, kill it
@@ -1042,9 +1045,10 @@ void processSensor() {
           float d = euclidean_distance(p.past_position, points[i]);
           uint8_t axis = AXIS(p.past_position);
           uint8_t naxis = NOT_AXIS(p.past_position);
+          uint8_t maxis = min(int(d), 2);
           if (p.crossed &&
-              (axis <= min(d, 2) || ((GRID_EXTENT+1) - axis) <= min(d, 2) ||
-              naxis <= min(d, 2) || ((GRID_EXTENT+1) - naxis) <= min(d, 2))) {
+              (axis <= maxis || ((GRID_EXTENT+1) - axis) <= maxis ||
+              naxis <= maxis || ((GRID_EXTENT+1) - naxis) <= maxis)) {
             // do nothing
           } else {
             float conf = p.confidence();
@@ -1073,9 +1077,9 @@ void processSensor() {
             float tempDiff = diffFromPerson(points[i], p);
             directionBonus -= sq(tempDiff/MAX_TEMP_DIFFERENCE);
             if (p.max_jump > 1)
-              directionBonus -= sq((p.max_jump - 1)/MAX_DISTANCE);
+              directionBonus -= sq(float(p.max_jump - 1)/MAX_DISTANCE);
             float td = axis_distance(p.starting_position, p.past_position);
-            if (td <= 1.5) {
+            if (td <= MIN_DISTANCE_FRD) {
               if (p.total_count() == 1 || p.crossed) td = 1.0;
               else td = 1.0/((float)(p.total_count() - 1));
             }
@@ -1132,7 +1136,7 @@ void processSensor() {
                   (SIDE2(p.starting_position) &&
                     AXIS(points[i]) >= AXIS(p.starting_position))) {
                 // reset history if point is further back than where it started
-                if (!p.crossed || pointOnSmallBorder(points[i])) {
+                if (!p.crossed || pointOnEdge(points[i])) {
                   // reset everything, unless point is crossed and could still move back
                   p.past_position = points[i]; // needs to be set before checkForRevert
                   p.checkForRevert();
@@ -1237,8 +1241,8 @@ void processSensor() {
         // if point is right in middle, drag it to the side it appears to be coming from
         if (doorJustOpened()) {
           if (norm_pixels[sp] > HIGH_CONF_THRESHOLD) {
-            uint8_t na = max(norm_pixels[i - GRID_EXTENT], HIGH_CONF_THRESHOLD);
-            uint8_t nb = max(norm_pixels[i + GRID_EXTENT], HIGH_CONF_THRESHOLD);
+            uint8_t na = max(norm_pixels[sp - GRID_EXTENT], HIGH_CONF_THRESHOLD);
+            uint8_t nb = max(norm_pixels[sp + GRID_EXTENT], HIGH_CONF_THRESHOLD);
             if (SIDE1(sp)) {
               if (door_side == 1 && nb > na) sp += GRID_EXTENT;
             } else if (door_side == 2 && na > nb) sp -= GRID_EXTENT;
@@ -1268,7 +1272,6 @@ void processSensor() {
           (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && door_state == DOOR_CLOSED))
         continue;
 
-      bool placed = false;
       float minConf = 200.0;
       uint8_t minIndex = UNDEF_POINT;
       for (uint8_t j=0; j<MAX_PEOPLE; j++) {
@@ -1276,9 +1279,9 @@ void processSensor() {
         if (!known_people[j].real()) {
           createNewPerson(points[i], mj, md, h, sp, cross, revert, rt, conf, b, f, v, n,
                           height, width, c, cstart, cend, fc, j);
-          placed = true;
+          minIndex = UNDEF_POINT;
           break;
-        } else if (!known_people[j].crossed) {
+        } else {
           float pConf = known_people[j].confidence();
           if (pConf < minConf) {
             minConf = pConf;
@@ -1286,7 +1289,7 @@ void processSensor() {
           }
         }
       }
-      if (!placed && minIndex != UNDEF_POINT && (((float)conf)/(float)c) > minConf) {
+      if (minIndex != UNDEF_POINT && (((float)conf)/(float)c) > minConf) {
         // replace lower conf slot with this new point
         createNewPerson(points[i], mj, md, h, sp, cross, revert, rt, conf, b, f, v, n,
                         height, width, c, cstart, cend, fc, minIndex);
@@ -1423,7 +1426,8 @@ void initialize() {
     for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
       float std = raw_pixels[i] - bgPixel(i);
       // alpha of 0.3
-      avg_pixels[i] += ((int)roundf(300.0 * std));
+      int32_t temp = ((int)avg_pixels[i]) + ((int)roundf(300.0 * std));
+      avg_pixels[i] = temp;
     }
   }
 }
