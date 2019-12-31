@@ -121,10 +121,14 @@ uint8_t axis_distance(uint8_t p1, uint8_t p2) {
   return abs(axisJump);
 }
 
+uint8_t not_axis_distance(uint8_t p1, uint8_t p2) {
+  int8_t axisJump = NOT_AXIS(p1) - NOT_AXIS(p2);
+  return abs(axisJump);
+}
+
 uint8_t max_axis_jump(uint8_t p1, uint8_t p2) {
-  int8_t notAxisJump = NOT_AXIS(p1) - NOT_AXIS(p2);
-  notAxisJump = abs(notAxisJump);
   uint8_t axisJump = axis_distance(p1, p2);
+  uint8_t notAxisJump = not_axis_distance(p1, p2);
   return max(axisJump, notAxisJump);
 }
 
@@ -339,10 +343,12 @@ typedef struct {
 
     if (history >= MIN_HISTORY && (!crossed || !reverted)) {
       if (starting_side() != side()) {
-        if (checkForDoorClose()) // publish full event (not a2) even if door is closed
+        if (door_state != DOOR_OPEN && checkForDoorClose()) {
+          // publish full event (not a2) even if door is closed
           publishPacket(DOOR_CLOSE_EVENT);
-        else
+        } else {
           publishPacket(FRD_EVENT);
+        }
         return true;
       }
     }
@@ -795,14 +801,13 @@ uint8_t findCurrentPoints(uint8_t *points) {
       // scan all points added after current_point, since they must be part of same blob
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
         // scan all known points after current_point to find neighbors to point x
-        uint8_t i = ordered_indexes[k];
-        if (i != UNDEF_POINT &&
-              euclidean_distance(i, ordered_indexes_temp[x]) < MIN_DISTANCE_FRD) {
-          if (samePoints(i, ordered_indexes_temp[x])) {
-            ordered_indexes_temp[sorted_size] = i;
-            ordered_indexes[k] = UNDEF_POINT;
-            sorted_size++;
-          }
+        if (ordered_indexes[k] != UNDEF_POINT &&
+              samePoints(ordered_indexes[k], ordered_indexes_temp[x]) &&
+              euclidean_distance(ordered_indexes[k], ordered_indexes_temp[x]) <
+                  MIN_DISTANCE_FRD) {
+          ordered_indexes_temp[sorted_size] = ordered_indexes[k];
+          ordered_indexes[k] = UNDEF_POINT;
+          sorted_size++;
         }
       }
     }
@@ -844,9 +849,10 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp,
     if (p.history < MIN_HISTORY && p.side() != p.starting_side() &&
           pointOnSmallBorder(p.past_position)) {
       uint8_t normalized_axis = ppaxis > 4 ? GRID_EXTENT+1 - ppaxis : ppaxis;
-      if (p.history <= (MIN_HISTORY - normalized_axis))
+      if (p.history <= (MIN_HISTORY - normalized_axis)) {
         // impossible for this person to ever do anything useful with its life, kill it
         return false;
+      }
     }
 
     // can't move if the old point is closer to raw temp than the new point
@@ -958,10 +964,11 @@ void processSensor() {
     if (p.history < MIN_HISTORY && p.side() != p.starting_side() &&
           pointOnSmallBorder(p.past_position)) {
       uint8_t normalized_axis = sp_axis > 4 ? GRID_EXTENT+1 - sp_axis : sp_axis;
-      if (p.history <= (MIN_HISTORY - normalized_axis))
+      if (p.history <= (MIN_HISTORY - normalized_axis)) {
         // impossible for this person to ever do anything useful with its life, kill it
         FORGET_POINT;
         continue;
+      }
     }
 
     for (uint8_t j=0; j<total_masses; j++) {
@@ -975,16 +982,18 @@ void processSensor() {
       int8_t confDiff = int(conf) - norm_pixels[points[j]];
       bool confThresholdMet = abs(confDiff) > AVG_CONF_THRESHOLD;
       if (tempDiff > NORMAL_TEMP_DIFFERENCE && (confThresholdMet ||
-            (pointOnSmallBorder(p.past_position) && pointOnSmallBorder(points[j]))))
+            (pointOnSmallBorder(p.past_position) && pointOnSmallBorder(points[j])))) {
         continue;
+      }
 
       // can't move if the old point is closer to raw temp than the new point
       if (norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD ||
           abs(norm_pixels[p.past_position] - norm_pixels[points[j]]) > 15) {
         float tempDiffOld = diffFromPerson(p.past_position, p);
         if (tempDiffOld < tempDiff && (confThresholdMet ||
-              tempDiffOld + NORMAL_TEMP_DIFFERENCE < tempDiff))
+              tempDiffOld + NORMAL_TEMP_DIFFERENCE < tempDiff)) {
           continue;
+        }
       }
 
       float ratioP = min(((float)norm_pixels[points[j]])/conf,
@@ -1076,8 +1085,9 @@ void processSensor() {
             directionBonus += (0.1*p.neighbors());
             float tempDiff = diffFromPerson(points[i], p);
             directionBonus -= sq(tempDiff/MAX_TEMP_DIFFERENCE);
-            if (p.max_jump > 1)
+            if (p.max_jump > 1) {
               directionBonus -= sq(float(p.max_jump - 1)/MAX_DISTANCE);
+            }
             float td = axis_distance(p.starting_position, p.past_position);
             if (td <= MIN_DISTANCE_FRD) {
               if (p.total_count() == 1 || p.crossed) td = 1.0;
@@ -1269,8 +1279,9 @@ void processSensor() {
 
       // ignore new points on side 1 immediately after door opens/closes
       if ((frames_since_door_open < 2 && SIDE(sp) == door_side) ||
-          (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && door_state == DOOR_CLOSED))
+          (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && door_state == DOOR_CLOSED)) {
         continue;
+      }
 
       float minConf = 200.0;
       uint8_t minIndex = UNDEF_POINT;
