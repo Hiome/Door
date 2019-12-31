@@ -2,6 +2,8 @@
 
 OUTPUT_DIR="/Users/neil/Code/core-firmware"
 
+count=0
+
 compileHex() {
   for i in {2..35}
   do
@@ -13,6 +15,7 @@ compileHex() {
     echo "Moving ${i}.hex to $OUTPUT_DIR/$2/$i.hex"
     mv "${i}.hex" "$OUTPUT_DIR/$2/$i.hex"
     echo ""
+    ((count++))
   done
 }
 
@@ -20,4 +23,4 @@ compileHex "#define THERMAL" "door/r2_alpha"
 compileHex "#define THERMAL\n#define R3" "door/r3_alpha"
 compileHex "#define THERMAL\n#define R3\n#define RECESSED" "door/r3_recessed"
 
-echo "All done!"
+echo "Finished compiling $count files on `date`"
