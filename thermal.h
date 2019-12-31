@@ -1137,7 +1137,8 @@ void processSensor() {
             uint8_t axisJump = max_axis_jump(p.past_position, points[i]);
             p.max_jump = max(axisJump, p.max_jump);
 
-            if ((SIDE1(p.starting_position) && AXIS(points[i]) < AXIS(p.past_position)) ||
+            if (AXIS(points[i]) == AXIS(p.starting_position) ||
+                (SIDE1(p.starting_position) && AXIS(points[i]) < AXIS(p.past_position)) ||
                 (SIDE2(p.starting_position) && AXIS(points[i]) > AXIS(p.past_position))) {
               // point moved backwards
               if (p.count > 1) p.resetTotals();
