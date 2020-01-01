@@ -88,6 +88,10 @@ uint8_t SIDE(uint8_t p) {
   return SIDE1(p) ? 1 : 2;
 }
 
+uint8_t normalizeAxis(uint8_t p) {
+  return p > 4 ? GRID_EXTENT+1 - p : p;
+}
+
 // check if point is on the top or bottom edges
 // xxxxxxxx
 // xxxxxxxx
@@ -499,7 +503,7 @@ void clearPointsAfterDoorClose() {
 
 float trimMean(float sum, float sq_sum, uint8_t cnt, uint8_t side) {
   float mean = sum/((float)cnt);
-  float variance = (sq_sum - (sq(sum)/((float)cnt)))/((float)(cnt - 1));
+  float variance = (sq_sum - (sq(sum)/((float)cnt)))/((float)cnt);
   variance = sqrt(variance);
   global_variance = max(global_variance, variance);
   float lowerBound = mean - (NUM_STD_DEV * variance);
@@ -531,7 +535,7 @@ float bgDiff(uint8_t i) {
 }
 
 uint8_t calcGradient(float diff, float scale) {
-  if (diff < 0.9 || diff > 10.0) return 0;
+  if (diff < 0.4 || diff > 10.0) return 0;
   diff /= scale;
   if (diff > 0.995) return 100;
   return int(diff*100.0);
@@ -552,6 +556,7 @@ void calculateFgm() {
   global_fgm = FOREGROUND_GRADIENT;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     float fgmt = fgDiff(i);
+    if (fgmt < global_fgm || fgmt > 10.0) continue;
     if (global_bgm > 1.0)
       fgmt *= (calcBgm(i)/100.0);
     global_fgm = max(fgmt, global_fgm);
@@ -563,6 +568,7 @@ void calculateBgm() {
   global_bgm = BACKGROUND_GRADIENT;
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     float bgmt = bgDiff(i);
+    if (bgmt < global_bgm || bgmt > 10.0) continue;
     bgmt *= (calcFgm(i)/100.0);
     global_bgm = max(bgmt, global_bgm);
   }
@@ -590,7 +596,7 @@ bool normalizePixels() {
     }
   }
 
-  if (total1 <= 1 || total2 <= 1) return false;
+  if (!total1 || !total2) return false;
 
   // calculate trimmed average
   global_variance = 0.0;
@@ -749,8 +755,8 @@ uint8_t findCurrentPoints(uint8_t *points) {
           }
 
           // calculate row # from opposite edge
-          if (edge1 > 4) edge1 = GRID_EXTENT+1 - edge1;
-          if (edge2 > 4) edge2 = GRID_EXTENT+1 - edge2;
+          edge1 = normalizeAxis(edge1);
+          edge2 = normalizeAxis(edge2);
 
           if (edge1 == edge2 && edge1 == 4 && SIDE(i) != SIDE(ordered_indexes[j])) {
             // we're debating between 2 points on either side of border.
@@ -788,6 +794,8 @@ uint8_t findCurrentPoints(uint8_t *points) {
   for (uint8_t y=0; y<active_pixel_count; y++) {
     uint8_t current_point = ordered_indexes[y];
     if (current_point == UNDEF_POINT) continue;
+
+    if (fgDiff(current_point) < 0.8 || bgDiff(current_point) < 0.8) break;
 
     points[total_masses] = current_point;
     total_masses++;
@@ -835,7 +843,7 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp,
                       uint16_t &conf, float &b, float &f, float &rt, uint8_t &n,
                       uint8_t &height, uint8_t &width, uint8_t &c, uint16_t &cstart,
                       uint8_t &cend, float &v, uint8_t &fc) {
-  uint8_t pi = findClosestPerson(arr, point, MAX_DISTANCE, MAX_TEMP_DIFFERENCE);
+  uint8_t pi = findClosestPerson(arr, point, 5.0, MAX_TEMP_DIFFERENCE);
   if (pi != UNDEF_POINT) {
     Person p = arr[pi];
 
@@ -847,12 +855,10 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp,
     }
 
     if (p.history < MIN_HISTORY && p.side() != p.starting_side() &&
-          pointOnSmallBorder(p.past_position)) {
-      uint8_t normalized_axis = ppaxis > 4 ? GRID_EXTENT+1 - ppaxis : ppaxis;
-      if (p.history <= (MIN_HISTORY - normalized_axis)) {
-        // impossible for this person to ever do anything useful with its life, kill it
-        return false;
-      }
+          pointOnSmallBorder(p.past_position) &&
+          p.history <= (MIN_HISTORY - normalizeAxis(ppaxis))) {
+      // impossible for this person to ever do anything useful with its life, kill it
+      return false;
     }
 
     // can't move if the old point is closer to raw temp than the new point
@@ -863,17 +869,24 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp,
       return false;
     }
 
+    int8_t confDiff = int(p.confidence()) - norm_pixels[point];
+    bool confThresholdMet = abs(confDiff) > AVG_CONF_THRESHOLD;
+    if (tempDiff > NORMAL_TEMP_DIFFERENCE && confThresholdMet) {
+      return false;
+    }
+
+    uint8_t axisJump = max_axis_jump(p.past_position, point);
+    if (axisJump > 2 && confThresholdMet) return false;
+
     if (p.count > 1) p.resetTotals();
 
     // point is ahead of starting point at least
     sp = p.starting_position;
     h = min(p.history, MIN_HISTORY);
 
-    uint8_t axisJump = max_axis_jump(p.past_position, point);
-    mj = max(axisJump, p.max_jump);
-
     uint8_t tempDrift = (int)roundf(tempDiff * 10.0);
     md = max(p.max_temp_drift, tempDrift);
+    mj = max(axisJump, p.max_jump);
 
     cross = p.crossed;
     revert = p.reverted;
@@ -962,25 +975,28 @@ void processSensor() {
     uint8_t sp_axis = AXIS(p.past_position);
 
     if (p.history < MIN_HISTORY && p.side() != p.starting_side() &&
-          pointOnSmallBorder(p.past_position)) {
-      uint8_t normalized_axis = sp_axis > 4 ? GRID_EXTENT+1 - sp_axis : sp_axis;
-      if (p.history <= (MIN_HISTORY - normalized_axis)) {
-        // impossible for this person to ever do anything useful with its life, kill it
-        FORGET_POINT;
-        continue;
-      }
+          pointOnSmallBorder(p.past_position) &&
+          p.history <= (MIN_HISTORY - normalizeAxis(sp_axis))) {
+      // impossible for this person to ever do anything useful with its life, kill it
+      FORGET_POINT;
+      continue;
     }
 
     for (uint8_t j=0; j<total_masses; j++) {
-      if (max_axis_jump(points[j], p.past_position) > 4) continue;
+      uint8_t max_jump = max_axis_jump(points[j], p.past_position);
+      if (max_jump > 4) continue;
 
       // can't shift more than 5º at once
       float tempDiff = diffFromPerson(points[j], p);
       if (tempDiff > MAX_TEMP_DIFFERENCE) continue;
 
-      // can't shift more than 2º if bigger than 30% conf gap or both points are on edge
       int8_t confDiff = int(conf) - norm_pixels[points[j]];
       bool confThresholdMet = abs(confDiff) > AVG_CONF_THRESHOLD;
+
+      // can't jump more than 2 rows if more than 30% conf gap
+      if (max_jump > 2 && confThresholdMet) continue;
+
+      // can't shift more than 2º if bigger than 30% conf gap or both points are on edge
       if (tempDiff > NORMAL_TEMP_DIFFERENCE && (confThresholdMet ||
             (pointOnSmallBorder(p.past_position) && pointOnSmallBorder(points[j])))) {
         continue;
@@ -1055,9 +1071,7 @@ void processSensor() {
           uint8_t axis = AXIS(p.past_position);
           uint8_t naxis = NOT_AXIS(p.past_position);
           uint8_t maxis = min(int(d), 2);
-          if (p.crossed &&
-              (axis <= maxis || ((GRID_EXTENT+1) - axis) <= maxis ||
-              naxis <= maxis || ((GRID_EXTENT+1) - naxis) <= maxis)) {
+          if (p.crossed && (normalizeAxis(axis) <= maxis || normalizeAxis(naxis) <= maxis)) {
             // do nothing
           } else {
             float conf = p.confidence();
