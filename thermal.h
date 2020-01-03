@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.30"
+#define FIRMWARE_VERSION        "V0.8.31"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -89,7 +89,7 @@ uint8_t SIDE(uint8_t p) {
 }
 
 uint8_t normalizeAxis(uint8_t p) {
-  return p > 4 ? GRID_EXTENT+1 - p : p;
+  return (p > 4 ? (GRID_EXTENT+1 - p) : p);
 }
 
 // check if point is on the top or bottom edges
@@ -408,23 +408,6 @@ uint8_t findClosestPerson(Person *arr, uint8_t i, float maxDistance, float maxTe
   return p;
 }
 
-Person findLargestPerson(uint8_t i) {
-  Person a = UNDEF_PERSON;
-  float maxScore = 1.0;
-  for (uint8_t x=0; x<MAX_PEOPLE; x++) {
-    Person p = known_people[x];
-    if (p.real() && p.history > 1) {
-      if (euclidean_distance(p.past_position, i) > 4.0) continue;
-      float score = p.height() * p.width();
-      if (score > maxScore) {
-        a = p;
-        maxScore = score;
-      }
-    }
-  }
-  return a;
-}
-
 uint8_t pointsAbove(uint8_t i) {
   uint8_t height = 0;
   for (int8_t x = i - GRID_EXTENT; x >= 0; x -= GRID_EXTENT) {
@@ -535,7 +518,7 @@ float bgDiff(uint8_t i) {
 }
 
 uint8_t calcGradient(float diff, float scale) {
-  if (diff < 0.4 || diff > 10.0) return 0;
+  if (diff < 0.5 || diff > 10.0) return 0;
   diff /= scale;
   if (diff > 0.995) return 100;
   return int(diff*100.0);
@@ -795,7 +778,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
     uint8_t current_point = ordered_indexes[y];
     if (current_point == UNDEF_POINT) continue;
 
-    if (fgDiff(current_point) < 0.8 || bgDiff(current_point) < 0.8) break;
+    if (fgDiff(current_point) < 0.8 || bgDiff(current_point) < 0.8) continue;
 
     points[total_masses] = current_point;
     total_masses++;
@@ -1264,31 +1247,12 @@ void processSensor() {
 
       if (!retroMatched && !pointOnBorder(sp)) {
         // if point is right in middle, drag it to the side it appears to be coming from
-        if (doorJustOpened()) {
-          if (norm_pixels[sp] > HIGH_CONF_THRESHOLD) {
-            uint8_t na = max(norm_pixels[sp - GRID_EXTENT], HIGH_CONF_THRESHOLD);
-            uint8_t nb = max(norm_pixels[sp + GRID_EXTENT], HIGH_CONF_THRESHOLD);
-            if (SIDE1(sp)) {
-              if (door_side == 1 && nb > na) sp += GRID_EXTENT;
-            } else if (door_side == 2 && na > nb) sp -= GRID_EXTENT;
+        if (SIDE1(sp)) {
+          if (norm_pixels[sp + GRID_EXTENT] > norm_pixels[sp - GRID_EXTENT]) {
+            sp += GRID_EXTENT;
           }
-        } else {
-          Person x = findLargestPerson(sp);
-          if (x.real()) {
-            // there's another person in the frame, assume this is a split of that person
-            if (!x.crossed || (x.count_start > 5 && !x.count_end)) {
-              // either first person hasn't crossed yet or they've been on other side for
-              // > 0.5 seconds. Either way, make sure new point is on the same side
-              if (SIDE(sp) != x.starting_side()) {
-                if (x.starting_side() == 2) sp += GRID_EXTENT;
-                else sp -= GRID_EXTENT;
-              }
-            } else if (SIDE(sp) == x.starting_side()) {
-              // point just crossed, put new point on opposite side so it counts on its own
-              if (x.starting_side() == 1) sp += GRID_EXTENT;
-              else sp -= GRID_EXTENT;
-            }
-          }
+        } else if (norm_pixels[sp - GRID_EXTENT] > norm_pixels[sp + GRID_EXTENT]) {
+          sp -= GRID_EXTENT;
         }
       }
 
