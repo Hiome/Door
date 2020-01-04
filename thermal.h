@@ -244,8 +244,8 @@ typedef struct {
       int(confidence()),                  // 3  100
       int(bgm()*100.0),                   // 4  1020
       int(fgm()*100.0),                   // 4  1020
-      starting_position,                  // 2  23
-      past_position,                      // 2  37
+      starting_position,                  // 2  64
+      past_position,                      // 2  64
       history,                            // 1  8
       count_start,                        // 5  65536
       count_end,                          // 3  240
@@ -314,6 +314,7 @@ typedef struct {
     if (SIDE1(past_position)) {
       if (eventType == FRD_EVENT) {
         crossed = publish(door_state == DOOR_OPEN ? "1" : "a1", meta, RETRY_COUNT);
+        if (!crossed) return;
         // artificially shift starting point ahead 1 row so that
         // if user turns around now, algorithm considers it an exit
         int8_t s = past_position - GRID_EXTENT;
@@ -325,6 +326,7 @@ typedef struct {
     } else {
       if (eventType == FRD_EVENT) {
         crossed = publish(door_state == DOOR_OPEN ? "2" : "a2", meta, RETRY_COUNT);
+        if (!crossed) return;
         int8_t s = past_position + GRID_EXTENT;
         starting_position = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
       } else if (eventType == DOOR_CLOSE_EVENT && door_side == 1) {
@@ -448,8 +450,7 @@ void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     Person p = known_people[i];
     if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
-        p.history > MIN_HISTORY && pointOnBorder(p.past_position) &&
-        int(p.confidence()) > CONFIDENCE_THRESHOLD) {
+        p.history > MIN_HISTORY && int(p.confidence()) > CONFIDENCE_THRESHOLD) {
       p.publishPacket(FRD_EVENT);
       known_people[i] = p; // update known_people array
     }

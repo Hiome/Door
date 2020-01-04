@@ -51,6 +51,8 @@ uint8_t packetCount = 1;
 uint8_t publish(const char* msg, const char* meta, uint8_t retries) {
   char sendBuf[58];
   int8_t len = sprintf(sendBuf, "%s;%s%u", msg, meta, packetCount);
+  if (len <= 0) return 0;
+
   bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries, RETRY_TIME);
 
   #ifdef ENABLE_SERIAL
