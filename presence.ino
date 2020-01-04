@@ -48,9 +48,9 @@ void beatHeart() {
 #define LOWPOWER_DELAY(d) ( LowPower.powerDown(d, ADC_OFF, BOD_ON) )
 
 uint8_t packetCount = 1;
-int8_t publish(const char* msg, const char* width, int8_t retries) {
+uint8_t publish(const char* msg, const char* meta, uint8_t retries) {
   char sendBuf[58];
-  uint8_t len = sprintf(sendBuf, "%s;%s%d", msg, width, packetCount);
+  int8_t len = sprintf(sendBuf, "%s;%s%u", msg, meta, packetCount);
   bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries, RETRY_TIME);
 
   #ifdef ENABLE_SERIAL
@@ -63,7 +63,7 @@ int8_t publish(const char* msg, const char* width, int8_t retries) {
 
   if (success) heartbeats = 0;
 
-  if (success || retries > 0) {
+  if (success || retries) {
     if (packetCount < 9) {
       return packetCount++;
     } else {

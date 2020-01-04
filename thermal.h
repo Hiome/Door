@@ -240,7 +240,7 @@ typedef struct {
 
   #define METALENGTH  53
   void generateMeta(char *meta) {
-    sprintf(meta, "%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%dx%d",
+    sprintf(meta, "%dx%dx%dx%ux%ux%ux%ux%ux%dx%dx%dx%ux%dx%ux%u",
       int(confidence()),                  // 3  100
       int(bgm()*100.0),                   // 4  1020
       int(fgm()*100.0),                   // 4  1020
@@ -263,7 +263,7 @@ typedef struct {
     char rBuf[3];
     char meta[METALENGTH];
     generateMeta(meta);
-    sprintf(rBuf, "r%d", crossed);
+    sprintf(rBuf, "r%u", crossed);
     publish(rBuf, meta, RETRY_COUNT);
   };
 
@@ -316,7 +316,7 @@ typedef struct {
         crossed = publish(door_state == DOOR_OPEN ? "1" : "a1", meta, RETRY_COUNT);
         // artificially shift starting point ahead 1 row so that
         // if user turns around now, algorithm considers it an exit
-        int s = past_position - GRID_EXTENT;
+        int8_t s = past_position - GRID_EXTENT;
         starting_position = max(s, 0);
       } else if (eventType == DOOR_CLOSE_EVENT && door_side == 2) {
         publish("1", meta, RETRY_COUNT);
@@ -325,7 +325,7 @@ typedef struct {
     } else {
       if (eventType == FRD_EVENT) {
         crossed = publish(door_state == DOOR_OPEN ? "2" : "a2", meta, RETRY_COUNT);
-        int s = past_position + GRID_EXTENT;
+        int8_t s = past_position + GRID_EXTENT;
         starting_position = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
       } else if (eventType == DOOR_CLOSE_EVENT && door_side == 1) {
         publish("2", meta, RETRY_COUNT);
