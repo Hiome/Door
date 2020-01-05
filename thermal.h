@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.31"
+#define FIRMWARE_VERSION        "V0.8.32"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -214,10 +214,10 @@ typedef struct {
     total_fgm = fgm();
     total_raw_temp = raw_temp();
     total_variance = variance();
-    total_conf = int(confidence());
-    total_neighbors = int(neighbors());
-    total_height = int(height());
-    total_width = int(width());
+    total_conf = (uint16_t)confidence();
+    total_neighbors = (uint8_t)neighbors();
+    total_height = (uint8_t)height();
+    total_width = (uint8_t)width();
     count = 1;
   };
 
@@ -686,7 +686,7 @@ float calculateNewBackground(uint8_t i) {
 
 void updateBgAverage() {
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    int32_t temp = ((int)avg_pixels[i]) + ((int)roundf(calculateNewBackground(i)));
+    int32_t temp = ((int32_t)avg_pixels[i]) + ((int)roundf(calculateNewBackground(i)));
     avg_pixels[i] = temp;
   }
 }
@@ -868,7 +868,7 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp,
     sp = p.starting_position;
     h = min(p.history, MIN_HISTORY);
 
-    uint8_t tempDrift = (int)roundf(tempDiff * 10.0);
+    uint8_t tempDrift = (uint8_t)roundf(tempDiff * 10.0);
     md = max(p.max_temp_drift, tempDrift);
     mj = max(axisJump, p.max_jump);
 
@@ -1185,7 +1185,7 @@ void processSensor() {
             p.past_position = points[i];
           }
           if (p.count) {
-            uint8_t td = (int)roundf(diffFromPerson(points[i], p) * 10.0);
+            uint8_t td = (uint8_t)roundf(diffFromPerson(points[i], p) * 10.0);
             p.max_temp_drift = max(p.max_temp_drift, td);
           }
           p.total_raw_temp += raw_pixels[points[i]];
@@ -1405,7 +1405,7 @@ void initialize() {
   amg.readPixels(raw_pixels);
 
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    avg_pixels[i] = ((int)roundf(raw_pixels[i] * 1000.0));
+    avg_pixels[i] = ((uint16_t)roundf(raw_pixels[i] * 1000.0));
   }
 
   for (uint8_t k=0; k < 10; k++) {
@@ -1417,7 +1417,7 @@ void initialize() {
     for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
       float std = raw_pixels[i] - bgPixel(i);
       // alpha of 0.3
-      int32_t temp = ((int)avg_pixels[i]) + ((int)roundf(300.0 * std));
+      int32_t temp = ((int32_t)avg_pixels[i]) + ((int)roundf(300.0 * std));
       avg_pixels[i] = temp;
     }
   }
