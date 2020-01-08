@@ -15,7 +15,7 @@
 #define ENCRYPTKEY    "smarterisbetters" // exactly the same 16 characters/bytes on all nodes!
 #define ATC_RSSI      -75
 #define SERIAL_BAUD   115200
-#define RETRY_TIME    50
+#define RETRY_TIME    60
 #define RETRY_COUNT   20
 
 #include <RFM69_ATC.h>

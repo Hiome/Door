@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V0.8.32"
+#define FIRMWARE_VERSION        "V20.1.7"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -22,8 +22,8 @@
 #define NUM_STD_DEV             2.0  // max num of std dev to include in trimmed average
 #define NORMAL_TEMP_DIFFERENCE  2.0  // temp difference between 2 points within same frame
 #define MAX_TEMP_DIFFERENCE     4.0  // max temp difference between 2 matchable people
-#define MIN_TEMP                2.0  // ignore all points colder than 2º C
-#define MAX_TEMP                45.0 // ignore all points hotter than 45ºC
+#define MIN_TEMP                2    // ignore all points colder than 2º C
+#define MAX_TEMP                45   // ignore all points hotter than 45ºC
 
 #include <Adafruit_AMG88xx.h>
 Adafruit_AMG88xx amg;
@@ -240,20 +240,20 @@ typedef struct {
 
   #define METALENGTH  53
   void generateMeta(char *meta) {
-    sprintf(meta, "%dx%dx%dx%ux%ux%ux%ux%ux%dx%dx%dx%ux%dx%ux%u",
-      int(confidence()),                  // 3  100
-      int(bgm()*100.0),                   // 4  1020
-      int(fgm()*100.0),                   // 4  1020
+    sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
+      (uint8_t)(confidence()),            // 3  100
+      (uint16_t)(bgm()*100.0),            // 4  1020
+      (uint16_t)(fgm()*100.0),            // 4  1020
       starting_position,                  // 2  64
       past_position,                      // 2  64
       history,                            // 1  8
       count_start,                        // 5  65536
       count_end,                          // 3  240
-      int(neighbors()*10.0),              // 2  80
-      int(height()*10.0),                 // 2  70
-      int(width()*10.0),                  // 2  70
+      (uint8_t)(neighbors()*10.0),        // 2  80
+      (uint8_t)(height()*10.0),           // 2  70
+      (uint8_t)(width()*10.0),            // 2  70
       max_jump,                           // 1  5
-      int(variance()*100.0),              // 4  1000
+      (uint16_t)(variance()*100.0),       // 4  1000
       max_temp_drift,                     // 2  99
       forgotten_count                     // 1  3
     );                                    // + 14 'x' + 1 null => 53 total
@@ -271,7 +271,7 @@ typedef struct {
     // This could possibly fail if person's hand is on door knob opening door and sensor
     // detects that as a person. We'll see hand go from 1->2, and then get dropped as door
     // opens, and this if block will prevent it from reverting properly.
-    if (int(confidence()) > HIGH_CONF_THRESHOLD) {
+    if (((uint8_t)confidence()) > HIGH_CONF_THRESHOLD) {
       if (frames_since_door_open == 0) {
         return door_state != DOOR_OPEN;
       } else if (door_state == DOOR_OPEN) {
@@ -327,7 +327,7 @@ typedef struct {
       if (eventType == FRD_EVENT) {
         crossed = publish(door_state == DOOR_OPEN ? "2" : "a2", meta, RETRY_COUNT);
         if (!crossed) return;
-        int8_t s = past_position + GRID_EXTENT;
+        uint8_t s = past_position + GRID_EXTENT;
         starting_position = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
       } else if (eventType == DOOR_CLOSE_EVENT && door_side == 1) {
         publish("2", meta, RETRY_COUNT);
@@ -345,7 +345,7 @@ typedef struct {
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
   bool publishMaybeEvent() {
-    if (!real() || int(confidence()) < CONFIDENCE_THRESHOLD) return false;
+    if (!real() || ((uint8_t)confidence()) < CONFIDENCE_THRESHOLD) return false;
 
     if (history >= MIN_HISTORY && (!crossed || !reverted)) {
       if (starting_side() != side()) {
@@ -450,7 +450,7 @@ void publishEvents() {
   for (uint8_t i=0; i<MAX_PEOPLE; i++) {
     Person p = known_people[i];
     if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
-        p.history > MIN_HISTORY && int(p.confidence()) > CONFIDENCE_THRESHOLD) {
+        p.history > MIN_HISTORY && ((uint8_t)p.confidence()) > CONFIDENCE_THRESHOLD) {
       p.publishPacket(FRD_EVENT);
       known_people[i] = p; // update known_people array
     }
@@ -522,7 +522,7 @@ uint8_t calcGradient(float diff, float scale) {
   if (diff < 0.5 || diff > 10.0) return 0;
   diff /= scale;
   if (diff > 0.995) return 100;
-  return int(diff*100.0);
+  return (uint8_t)(diff*100.0);
 }
 
 // calculate foreground gradient percent
@@ -653,10 +653,11 @@ bool normalizePixels() {
 }
 
 float calculateNewBackground(uint8_t i) {
+  // ignore extreme raw pixels
+  if (raw_pixels[i] < MIN_TEMP || raw_pixels[i] > MAX_TEMP) return 0;
+
   // implicit alpha of 0.001
   float std = raw_pixels[i] - bgPixel(i);
-
-  if (raw_pixels[i] < MIN_TEMP || raw_pixels[i] > MAX_TEMP) return std;
 
   if (fgDiff(i) < global_variance) {
     if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && norm_pixels[i] < 50)
@@ -669,14 +670,13 @@ float calculateNewBackground(uint8_t i) {
     for (uint8_t x=0; x<MAX_PEOPLE; x++) {
       if (known_people[x].real() && known_people[x].total_count() > 5 &&
             samePoints(known_people[x].past_position, i) &&
-            int(known_people[x].confidence()) > 50 &&
+            ((uint8_t)known_people[x].confidence()) > 50 &&
             euclidean_distance(known_people[x].past_position, i) < MAX_DISTANCE &&
             (known_people[x].total_distance() > MIN_DISTANCE_FRD ||
                     known_people[x].fgm() > 1.5*known_people[x].variance())) {
         // point has moved or is significantly higher than variance
-        // decrease alpha to 0.00001
-        return std * 0.01;
-        break;
+        // decrease alpha to 0.0001
+        return std * 0.1;
       }
     }
   }
@@ -686,7 +686,8 @@ float calculateNewBackground(uint8_t i) {
 
 void updateBgAverage() {
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    int32_t temp = ((int32_t)avg_pixels[i]) + ((int)roundf(calculateNewBackground(i)));
+    int32_t temp = avg_pixels[i] + ((int32_t)round(calculateNewBackground(i)));
+    if (temp < ((uint16_t)MIN_TEMP*1000) || temp > ((uint16_t)MAX_TEMP*1000)) continue;
     avg_pixels[i] = temp;
   }
 }
@@ -724,7 +725,8 @@ uint8_t findCurrentPoints(uint8_t *points) {
     for (uint8_t j=0; j<z; j++) {
       int8_t td = norm_pixels[ordered_indexes[j]] - norm_pixels[i];
       if (td < 15) {
-        if (abs(neighbors_count[i] - neighbors_count[ordered_indexes[j]]) > 1) {
+        int8_t nc = neighbors_count[i] - neighbors_count[ordered_indexes[j]];
+        if (abs(nc) > 1) {
           // prefer the point that's more in middle of blob
           added = neighbors_count[i] > neighbors_count[ordered_indexes[j]];
         } else {
@@ -811,7 +813,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
 void forget_person(uint8_t idx, Person *temp_forgotten_people, uint8_t *pairs,
                     uint8_t &temp_forgotten_num) {
   Person p = known_people[idx];
-  if (p.forgotten_count < 3 && int(p.confidence()) > AVG_CONF_THRESHOLD &&
+  if (p.forgotten_count < 3 && ((uint8_t)p.confidence()) > AVG_CONF_THRESHOLD &&
         (p.checkForRevert() || axis_distance(p.starting_position, p.past_position) > 1)) {
     p.publishMaybeEvent();
     p.forgotten_count++;
@@ -847,13 +849,13 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp,
 
     // can't move if the old point is closer to raw temp than the new point
     float tempDiff = diffFromPerson(point, p);
-    if ((norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD ||
-        abs(norm_pixels[p.past_position] - norm_pixels[point]) > 15) &&
+    int8_t npDiff = norm_pixels[p.past_position] - norm_pixels[point];
+    if ((norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD || abs(npDiff) > 15) &&
         diffFromPerson(p.past_position, p) < tempDiff) {
       return false;
     }
 
-    int8_t confDiff = int(p.confidence()) - norm_pixels[point];
+    int8_t confDiff = ((uint8_t)p.confidence()) - norm_pixels[point];
     bool confThresholdMet = abs(confDiff) > AVG_CONF_THRESHOLD;
     if (tempDiff > NORMAL_TEMP_DIFFERENCE && confThresholdMet) {
       return false;
@@ -868,7 +870,7 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp,
     sp = p.starting_position;
     h = min(p.history, MIN_HISTORY);
 
-    uint8_t tempDrift = (uint8_t)roundf(tempDiff * 10.0);
+    uint8_t tempDrift = (uint8_t)(tempDiff * 10.0);
     md = max(p.max_temp_drift, tempDrift);
     mj = max(axisJump, p.max_jump);
 
@@ -974,7 +976,7 @@ void processSensor() {
       float tempDiff = diffFromPerson(points[j], p);
       if (tempDiff > MAX_TEMP_DIFFERENCE) continue;
 
-      int8_t confDiff = int(conf) - norm_pixels[points[j]];
+      int8_t confDiff = ((uint8_t)conf) - norm_pixels[points[j]];
       bool confThresholdMet = abs(confDiff) > AVG_CONF_THRESHOLD;
 
       // can't jump more than 2 rows if more than 30% conf gap
@@ -987,8 +989,8 @@ void processSensor() {
       }
 
       // can't move if the old point is closer to raw temp than the new point
-      if (norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD ||
-          abs(norm_pixels[p.past_position] - norm_pixels[points[j]]) > 15) {
+      int8_t npDiff = norm_pixels[p.past_position] - norm_pixels[points[j]];
+      if (norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD || abs(npDiff) > 15) {
         float tempDiffOld = diffFromPerson(p.past_position, p);
         if (tempDiffOld < tempDiff && (confThresholdMet ||
               tempDiffOld + NORMAL_TEMP_DIFFERENCE < tempDiff)) {
@@ -1054,7 +1056,7 @@ void processSensor() {
           float d = euclidean_distance(p.past_position, points[i]);
           uint8_t axis = AXIS(p.past_position);
           uint8_t naxis = NOT_AXIS(p.past_position);
-          uint8_t maxis = min(int(d), 2);
+          uint8_t maxis = min(((uint8_t)d), 2);
           if (p.crossed && (normalizeAxis(axis) <= maxis || normalizeAxis(naxis) <= maxis)) {
             // do nothing
           } else {
@@ -1108,8 +1110,7 @@ void processSensor() {
             } else { // score is identical
               // if 2 competing points have the same score, pick the closer one
               float d2 = euclidean_distance(known_people[max_idx].past_position, points[i]);
-              if (d+0.05 < d2 ||
-                  (d-d2 < 0.05 && p.history > known_people[max_idx].history)) {
+              if (d+0.05 < d2 || (d-d2 < 0.05 && p.history>known_people[max_idx].history)) {
                 max_score = score;
                 max_idx = idx;
               }
@@ -1185,7 +1186,7 @@ void processSensor() {
             p.past_position = points[i];
           }
           if (p.count) {
-            uint8_t td = (uint8_t)roundf(diffFromPerson(points[i], p) * 10.0);
+            uint8_t td = (uint8_t)(diffFromPerson(points[i], p) * 10.0);
             p.max_temp_drift = max(p.max_temp_drift, td);
           }
           p.total_raw_temp += raw_pixels[points[i]];
@@ -1405,7 +1406,10 @@ void initialize() {
   amg.readPixels(raw_pixels);
 
   for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    avg_pixels[i] = ((uint16_t)roundf(raw_pixels[i] * 1000.0));
+    float rp = raw_pixels[i];
+    rp = max(rp, MIN_TEMP);
+    rp = min(rp, MAX_TEMP);
+    avg_pixels[i] = ((uint16_t)(rp * 1000.0));
   }
 
   for (uint8_t k=0; k < 10; k++) {
@@ -1415,9 +1419,11 @@ void initialize() {
     }
 
     for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+      if (raw_pixels[i] < MIN_TEMP || raw_pixels[i] > MAX_TEMP) continue;
       float std = raw_pixels[i] - bgPixel(i);
       // alpha of 0.3
-      int32_t temp = ((int32_t)avg_pixels[i]) + ((int)roundf(300.0 * std));
+      int32_t temp = avg_pixels[i] + ((int32_t)(300.0 * std));
+      if (temp < ((uint16_t)MIN_TEMP*1000) || temp > ((uint16_t)MAX_TEMP*1000)) continue;
       avg_pixels[i] = temp;
     }
   }
