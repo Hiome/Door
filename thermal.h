@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V20.1.7"
+#define FIRMWARE_VERSION        "V20.1.11"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
 #define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
@@ -20,8 +20,8 @@
 #define BACKGROUND_GRADIENT     2.0
 #define FOREGROUND_GRADIENT     2.0
 #define NUM_STD_DEV             2.0  // max num of std dev to include in trimmed average
-#define NORMAL_TEMP_DIFFERENCE  2.0  // temp difference between 2 points within same frame
-#define MAX_TEMP_DIFFERENCE     4.0  // max temp difference between 2 matchable people
+#define NORMAL_TEMP_DIFFERENCE  3.0  // temp difference between 2 points within same frame
+#define MAX_TEMP_DIFFERENCE     6.0  // max temp difference between 2 matchable people
 #define MIN_TEMP                2    // ignore all points colder than 2º C
 #define MAX_TEMP                45   // ignore all points hotter than 45ºC
 
@@ -787,9 +787,19 @@ uint8_t findCurrentPoints(uint8_t *points) {
 
     if (fgDiff(current_point) < 0.8 || bgDiff(current_point) < 0.8) continue;
 
-    points[total_masses] = current_point;
-    total_masses++;
-    if (total_masses == MAX_PEOPLE) break;
+    bool addable = true;
+    for (uint8_t x=0; x<total_masses; x++) {
+      if (euclidean_distance(points[x], current_point) < MIN_DISTANCE_FRD) {
+        addable = false;
+        break;
+      }
+    }
+
+    if (addable) {
+      points[total_masses] = current_point;
+      total_masses++;
+      if (total_masses == MAX_PEOPLE) break;
+    }
 
     ordered_indexes_temp[sorted_size] = current_point;
     sorted_size++;
