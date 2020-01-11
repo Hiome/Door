@@ -348,6 +348,10 @@ typedef struct {
     if (!real() || ((uint8_t)confidence()) < CONFIDENCE_THRESHOLD) return false;
 
     if (history >= MIN_HISTORY && (!crossed || !reverted)) {
+      if (history==MIN_HISTORY && (neighbors() < 0.5 || (height() < 0.5 && width() < 0.5))) {
+        // tiny blob with low history... this is probably noise. Don't pollute the radio
+        return false;
+      }
       if (starting_side() != side()) {
         if (door_state != DOOR_OPEN && checkForDoorClose()) {
           // publish full event (not a2) even if door is closed
@@ -669,11 +673,11 @@ float calculateNewBackground(uint8_t i) {
   if (cycles_since_person == 0) {
     for (uint8_t x=0; x<MAX_PEOPLE; x++) {
       if (known_people[x].real() && known_people[x].total_count() > 5 &&
+            known_people[x].total_count() < 8000 &&
             samePoints(known_people[x].past_position, i) &&
             ((uint8_t)known_people[x].confidence()) > 50 &&
             euclidean_distance(known_people[x].past_position, i) < MAX_DISTANCE &&
-            (known_people[x].total_distance() > MIN_DISTANCE_FRD ||
-                    known_people[x].fgm() > 1.5*known_people[x].variance())) {
+            known_people[x].total_distance() > MIN_DISTANCE_FRD) {
         // point has moved or is significantly higher than variance
         // decrease alpha to 0.0001
         return std * 0.1;
@@ -847,16 +851,10 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp,
       return false;
     }
 
-    // can't move if the old point is closer to raw temp than the new point
-    float tempDiff = diffFromPerson(point, p);
-    int8_t npDiff = norm_pixels[p.past_position] - norm_pixels[point];
-    if ((norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD || abs(npDiff) > 15) &&
-        diffFromPerson(p.past_position, p) < tempDiff) {
-      return false;
-    }
-
+    // can't move if temp diff is too high
     int8_t confDiff = ((uint8_t)p.confidence()) - norm_pixels[point];
     bool confThresholdMet = abs(confDiff) > AVG_CONF_THRESHOLD;
+    float tempDiff = diffFromPerson(point, p);
     if (tempDiff > NORMAL_TEMP_DIFFERENCE && confThresholdMet) {
       return false;
     }
@@ -970,32 +968,22 @@ void processSensor() {
 
     for (uint8_t j=0; j<total_masses; j++) {
       uint8_t max_jump = max_axis_jump(points[j], p.past_position);
-      if (max_jump > 4) continue;
-
-      // can't shift more than 5º at once
-      float tempDiff = diffFromPerson(points[j], p);
-      if (tempDiff > MAX_TEMP_DIFFERENCE) continue;
+      if (max_jump > 5) continue;
 
       int8_t confDiff = ((uint8_t)conf) - norm_pixels[points[j]];
       bool confThresholdMet = abs(confDiff) > AVG_CONF_THRESHOLD;
 
       // can't jump more than 2 rows if more than 30% conf gap
-      if (max_jump > 2 && confThresholdMet) continue;
+      if (max_jump > 3 && confThresholdMet) continue;
+
+      // can't shift more than 5º at once
+      float tempDiff = diffFromPerson(points[j], p);
+      if (tempDiff > MAX_TEMP_DIFFERENCE) continue;
 
       // can't shift more than 2º if bigger than 30% conf gap or both points are on edge
       if (tempDiff > NORMAL_TEMP_DIFFERENCE && (confThresholdMet ||
             (pointOnSmallBorder(p.past_position) && pointOnSmallBorder(points[j])))) {
         continue;
-      }
-
-      // can't move if the old point is closer to raw temp than the new point
-      int8_t npDiff = norm_pixels[p.past_position] - norm_pixels[points[j]];
-      if (norm_pixels[p.past_position] < CONFIDENCE_THRESHOLD || abs(npDiff) > 15) {
-        float tempDiffOld = diffFromPerson(p.past_position, p);
-        if (tempDiffOld < tempDiff && (confThresholdMet ||
-              tempDiffOld + NORMAL_TEMP_DIFFERENCE < tempDiff)) {
-          continue;
-        }
       }
 
       float ratioP = min(((float)norm_pixels[points[j]])/conf,
@@ -1258,9 +1246,8 @@ void processSensor() {
         }
       }
 
-      // ignore new points on side 1 immediately after door opens/closes
-      if ((frames_since_door_open < 2 && SIDE(sp) == door_side) ||
-          (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && door_state == DOOR_CLOSED)) {
+      // ignore new points if door is not open or immediately after door opens
+      if (door_state != DOOR_OPEN || (frames_since_door_open < 2 && SIDE(sp)==door_side)) {
         continue;
       }
 
