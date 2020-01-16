@@ -3,14 +3,13 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V20.1.11"
+#define FIRMWARE_VERSION        "V20.1.7"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 #define GRID_EXTENT             8    // size of grid (8x8)
-#define MIN_DISTANCE_FRD        1.5  // absolute min distance between 2 points (neighbors)
 #define MIN_DISTANCE            2.5  // min distance for 2 peaks to be separate people
 #define MAX_DISTANCE            3.0  // max distance that a point is allowed to move
 #define MIN_HISTORY             3    // min number of times a point needs to be seen
-#define MAX_PEOPLE              3    // most people we support in a single frame
+#define MAX_PEOPLE              5    // most people we support in a single frame
 #define MAX_EMPTY_CYCLES        2    // max empty cycles to remember forgotten points
 #define MAX_DOOR_CHANGE_FRAMES  5    // max number of cycles we count after door changes
 #define MAX_CLEARED_CYCLES      10   // max number of cycles before we assume frame is empty
@@ -20,8 +19,8 @@
 #define BACKGROUND_GRADIENT     2.0
 #define FOREGROUND_GRADIENT     2.0
 #define NUM_STD_DEV             2.0  // max num of std dev to include in trimmed average
-#define NORMAL_TEMP_DIFFERENCE  3.0  // temp difference between 2 points within same frame
-#define MAX_TEMP_DIFFERENCE     6.0  // max temp difference between 2 matchable people
+#define NORMAL_TEMP_DIFFERENCE  4.0  // temp difference between 2 points within same frame
+#define MAX_TEMP_DIFFERENCE     8.0  // max temp difference between 2 matchable people
 #define MIN_TEMP                2    // ignore all points colder than 2º C
 #define MAX_TEMP                45   // ignore all points hotter than 45ºC
 
@@ -37,12 +36,14 @@ Adafruit_AMG88xx amg;
 float raw_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 uint16_t avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 uint8_t norm_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
-uint8_t neighbors_count[AMG88xx_PIXEL_ARRAY_SIZE];
 float global_bgm = 0;
 float global_fgm = 0;
 float global_variance = 0;
 float cavg1 = 0.0;
 float cavg2 = 0.0;
+
+uint8_t side1Point = 0;
+uint8_t side2Point = 0;
 
 // store in-memory so we don't have to do math every time
 const uint8_t xcoordinates[64] PROGMEM = {
@@ -191,18 +192,16 @@ typedef struct {
   bool      reverted          :1;   // 0-1
 
   float     total_raw_temp;
-  float     total_variance;
-  float     total_bgm;
-  float     total_fgm;
 
-  uint8_t   count_end;
-  uint16_t  count_start;
+  uint16_t  total_count;
+  uint16_t  total_variance;
+  uint16_t  total_bgm;
+  uint16_t  total_fgm;
 
   bool resetIfNecessary() {
     if (count > MIN_HISTORY) {
       resetTotals();
-      if (count_start > 60000) count_start = 10000;
-      if (count_end > 240) count_end = 100;
+      if (total_count > 60000) total_count = 10000;
       return true;
     }
     return false;
@@ -210,10 +209,10 @@ typedef struct {
 
   void resetTotals() {
     history = min(history, MIN_HISTORY);
-    total_bgm = bgm();
-    total_fgm = fgm();
+    total_bgm = (uint16_t)bgm();
+    total_fgm = (uint16_t)fgm();
     total_raw_temp = raw_temp();
-    total_variance = variance();
+    total_variance = (uint16_t)variance();
     total_conf = (uint16_t)confidence();
     total_neighbors = (uint8_t)neighbors();
     total_height = (uint8_t)height();
@@ -222,12 +221,11 @@ typedef struct {
   };
 
   bool      real() { return past_position != UNDEF_POINT; };
-  uint16_t  total_count() { return count_start + count_end; };
   float     confidence() { return ((float)total_conf)/((float)count); };
-  float     bgm() { return total_bgm/((float)count); };
-  float     fgm() { return total_fgm/((float)count); };
+  float     bgm() { return ((float)total_bgm)/((float)count); };
+  float     fgm() { return ((float)total_fgm)/((float)count); };
   float     raw_temp()  { return total_raw_temp/((float)count); };
-  float     variance()  { return total_variance/((float)count); };
+  float     variance()  { return ((float)total_variance)/((float)count); };
   float     neighbors() { return (float)total_neighbors/(float)count; };
   float     height() { return (float)total_height/(float)count; };
   float     width()  { return (float)total_width/(float)count; };
@@ -238,25 +236,24 @@ typedef struct {
   uint8_t   starting_side() { return SIDE(starting_position); };
   uint8_t   side() { return SIDE(past_position); };
 
-  #define METALENGTH  53
+  #define METALENGTH  49
   void generateMeta(char *meta) {
-    sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
+    sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
       (uint8_t)(confidence()),            // 3  100
-      (uint16_t)(bgm()*100.0),            // 4  1020
-      (uint16_t)(fgm()*100.0),            // 4  1020
+      (uint16_t)(bgm()),                  // 4  1020
+      (uint16_t)(fgm()),                  // 4  1020
       starting_position,                  // 2  64
       past_position,                      // 2  64
       history,                            // 1  8
-      count_start,                        // 5  65536
-      count_end,                          // 3  240
+      total_count,                        // 5  60000
       (uint8_t)(neighbors()*10.0),        // 2  80
       (uint8_t)(height()*10.0),           // 2  70
       (uint8_t)(width()*10.0),            // 2  70
       max_jump,                           // 1  5
-      (uint16_t)(variance()*100.0),       // 4  1000
+      (uint16_t)(variance()),             // 4  1000
       max_temp_drift,                     // 2  99
       forgotten_count                     // 1  3
-    );                                    // + 14 'x' + 1 null => 53 total
+    );                                    // + 13 'x' + 1 null => 49 total
   };
 
   void revert() {
@@ -339,8 +336,7 @@ typedef struct {
     history = 1;
     max_jump = 0;
     max_temp_drift = 0;
-    count_start = 1;
-    count_end = 0;
+    total_count = 1;
   };
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
@@ -385,8 +381,30 @@ bool samePoints(uint8_t a, uint8_t b) {
           abs(raw_pixels[(a)] - raw_pixels[(b)]) < NORMAL_TEMP_DIFFERENCE;
 }
 
-void recheckPoint(uint8_t x, uint8_t i) {
-  if (samePoints(x, i)) neighbors_count[i]++;
+uint8_t neighborsCount(uint8_t i) {
+  if (norm_pixels[i] < CONFIDENCE_THRESHOLD) return 0;
+  uint8_t nc = 0;
+  if (i >= GRID_EXTENT) { // not top row
+    // top
+    if (samePoints(i - GRID_EXTENT, i)) nc++;
+    // top left
+    if (NOT_AXIS(i) > 1 && samePoints(i-(GRID_EXTENT+1), i)) nc++;
+    // top right
+    if (NOT_AXIS(i) < GRID_EXTENT && samePoints(i-(GRID_EXTENT-1), i)) nc++;
+  }
+  if (i < GRID_EXTENT*7) { // not bottom row
+    // bottom
+    if (samePoints(i + GRID_EXTENT, i)) nc++;
+    // bottom left
+    if (NOT_AXIS(i) > 1 && samePoints(i+(GRID_EXTENT-1), i)) nc++;
+    // bottom right
+    if (NOT_AXIS(i) < GRID_EXTENT && samePoints(i+(GRID_EXTENT+1), i)) nc++;
+  }
+  // left
+  if (NOT_AXIS(i) > 1 && samePoints(i-1, i)) nc++;
+  // right
+  if (NOT_AXIS(i) < GRID_EXTENT && samePoints(i+1, i)) nc++;
+  return nc;
 }
 
 uint8_t findClosestPerson(Person *arr, uint8_t i, float maxDistance, float maxTemp) {
@@ -412,6 +430,22 @@ uint8_t findClosestPerson(Person *arr, uint8_t i, float maxDistance, float maxTe
     }
   }
   return p;
+}
+
+bool otherPersonExists(uint8_t i) {
+  for (uint8_t x=0; x<MAX_PEOPLE; x++) {
+    Person p = known_people[x];
+    if (p.real() && p.total_count > 3 && ((uint8_t)p.confidence()) > 50 &&
+        ((uint8_t)p.neighbors())>2 && ((uint8_t)euclidean_distance(i, p.past_position)) < 5){
+      return true;
+    }
+  }
+  return false;
+}
+
+bool compareNeighboringPixels(uint8_t x, uint8_t y, uint8_t i) {
+  return norm_pixels[x] > (norm_pixels[y]+10) &&
+          (norm_pixels[i]-norm_pixels[x]) < AVG_CONF_THRESHOLD && samePoints(x, i);
 }
 
 uint8_t pointsAbove(uint8_t i) {
@@ -486,6 +520,8 @@ void clearPointsAfterDoorClose() {
       forgotten_people[i] = UNDEF_PERSON;
     }
     cycles_since_forgotten = MAX_EMPTY_CYCLES;
+    side1Point = 0;
+    side2Point = 0;
   }
 }
 
@@ -523,7 +559,8 @@ float bgDiff(uint8_t i) {
 }
 
 uint8_t calcGradient(float diff, float scale) {
-  if (diff < 0.5 || diff > 10.0) return 0;
+  if (diff < 0.5 || diff > 20.0) return 0;
+  if (diff > 10.0) return 100;
   diff /= scale;
   if (diff > 0.995) return 100;
   return (uint8_t)(diff*100.0);
@@ -620,39 +657,6 @@ bool normalizePixels() {
     norm_pixels[i] = min(bgm, fgm);
   }
 
-  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    neighbors_count[i] = 0;
-
-    if (norm_pixels[i] < CONFIDENCE_THRESHOLD) continue;
-
-    if (i >= GRID_EXTENT) {
-      // not top row
-      recheckPoint(i - GRID_EXTENT, i);
-      if (NOT_AXIS(i) > 1) {
-        recheckPoint(i-(GRID_EXTENT+1), i);
-      }
-      if (NOT_AXIS(i) < GRID_EXTENT) {
-        recheckPoint(i-(GRID_EXTENT-1), i);
-      }
-    }
-    if (i < GRID_EXTENT*7) {
-      // not bottom row
-      recheckPoint(i + GRID_EXTENT, i);
-      if (NOT_AXIS(i) > 1) {
-        recheckPoint(i+(GRID_EXTENT-1), i);
-      }
-      if (NOT_AXIS(i) < GRID_EXTENT) {
-        recheckPoint(i+(GRID_EXTENT+1), i);
-      }
-    }
-    if (NOT_AXIS(i) > 1) {
-      recheckPoint(i-1, i);
-    }
-    if (NOT_AXIS(i) < GRID_EXTENT) {
-      recheckPoint(i+1, i);
-    }
-  }
-
   return true;
 }
 
@@ -672,12 +676,12 @@ float calculateNewBackground(uint8_t i) {
 
   if (cycles_since_person == 0) {
     for (uint8_t x=0; x<MAX_PEOPLE; x++) {
-      if (known_people[x].real() && known_people[x].total_count() > 5 &&
-            known_people[x].total_count() < 8000 &&
+      if (known_people[x].real() && known_people[x].total_count > 5 &&
+            known_people[x].total_count < 8000 &&
             samePoints(known_people[x].past_position, i) &&
             ((uint8_t)known_people[x].confidence()) > 50 &&
-            euclidean_distance(known_people[x].past_position, i) < MAX_DISTANCE &&
-            known_people[x].total_distance() > MIN_DISTANCE_FRD) {
+            ((uint8_t)euclidean_distance(known_people[x].past_position, i)) < 3 &&
+            ((uint8_t)known_people[x].total_distance()) > 1) {
         // point has moved or is significantly higher than variance
         // decrease alpha to 0.0001
         return std * 0.1;
@@ -729,10 +733,12 @@ uint8_t findCurrentPoints(uint8_t *points) {
     for (uint8_t j=0; j<z; j++) {
       int8_t td = norm_pixels[ordered_indexes[j]] - norm_pixels[i];
       if (td < 15) {
-        int8_t nc = neighbors_count[i] - neighbors_count[ordered_indexes[j]];
+        uint8_t nci = neighborsCount(i);
+        uint8_t ncj = neighborsCount(ordered_indexes[j]);
+        int8_t nc = nci - ncj;
         if (abs(nc) > 1) {
           // prefer the point that's more in middle of blob
-          added = neighbors_count[i] > neighbors_count[ordered_indexes[j]];
+          added = nci > ncj;
         } else {
           // prefer point closer to middle of grid
           uint8_t edge1 = AXIS(i);
@@ -789,7 +795,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
 
     bool addable = true;
     for (uint8_t x=0; x<total_masses; x++) {
-      if (euclidean_distance(points[x], current_point) < MIN_DISTANCE_FRD) {
+      if (((uint8_t)euclidean_distance(points[x], current_point)) == 1) {
         addable = false;
         break;
       }
@@ -811,8 +817,7 @@ uint8_t findCurrentPoints(uint8_t *points) {
         // scan all known points after current_point to find neighbors to point x
         if (ordered_indexes[k] != UNDEF_POINT &&
               samePoints(ordered_indexes[k], ordered_indexes_temp[x]) &&
-              euclidean_distance(ordered_indexes[k], ordered_indexes_temp[x]) <
-                  MIN_DISTANCE_FRD) {
+              ((uint8_t)euclidean_distance(ordered_indexes[k], ordered_indexes_temp[x]))==1){
           ordered_indexes_temp[sorted_size] = ordered_indexes[k];
           ordered_indexes[k] = UNDEF_POINT;
           sorted_size++;
@@ -840,9 +845,9 @@ void forget_person(uint8_t idx, Person *temp_forgotten_people, uint8_t *pairs,
 
 bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp,
                       uint8_t &mj, uint8_t &md, uint8_t &cross, bool &revert,
-                      uint16_t &conf, float &b, float &f, float &rt, uint8_t &n,
-                      uint8_t &height, uint8_t &width, uint8_t &c, uint16_t &cstart,
-                      uint8_t &cend, float &v, uint8_t &fc) {
+                      uint16_t &conf, uint16_t &b, uint16_t &f, float &rt, uint8_t &n,
+                      uint8_t &height, uint8_t &width, uint8_t &c, uint16_t &ctotal,
+                      uint16_t &v, uint8_t &fc) {
   uint8_t pi = findClosestPerson(arr, point, 5.0, MAX_TEMP_DIFFERENCE);
   if (pi != UNDEF_POINT) {
     Person p = arr[pi];
@@ -856,7 +861,7 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp,
 
     if (p.history < MIN_HISTORY && p.side() != p.starting_side() &&
           pointOnSmallBorder(p.past_position) &&
-          p.history <= (MIN_HISTORY - normalizeAxis(ppaxis))) {
+          p.history <= (MIN_HISTORY+1 - normalizeAxis(ppaxis))) {
       // impossible for this person to ever do anything useful with its life, kill it
       return false;
     }
@@ -893,8 +898,7 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp,
     height += p.total_height;
     width += p.total_width;
     c += p.count;
-    cstart += p.count_start;
-    cend += p.count_end;
+    ctotal += p.total_count;
     fc += p.forgotten_count;
     arr[pi] = UNDEF_PERSON;
     return true;
@@ -903,9 +907,9 @@ bool remember_person(Person *arr, uint8_t point, uint8_t &h, uint8_t &sp,
 }
 
 void createNewPerson(uint8_t pp, uint8_t mj, uint8_t md, uint8_t h, uint8_t sp,
-                    uint8_t cross, bool revert, float rt, uint16_t conf, float b, float f,
-                    float v, uint8_t n, uint8_t height, uint8_t width, uint8_t c,
-                    uint16_t cstart, uint8_t cend, uint8_t fc, uint8_t j) {
+                    uint8_t cross, bool revert, float rt, uint16_t conf, uint16_t b,
+                    uint16_t f, uint16_t v, uint8_t n, uint8_t height, uint8_t width,
+                    uint8_t c, uint16_t ctotal, uint8_t fc, uint8_t j) {
   Person p;
   p.past_position = pp;
   p.starting_position = sp;
@@ -923,8 +927,7 @@ void createNewPerson(uint8_t pp, uint8_t mj, uint8_t md, uint8_t h, uint8_t sp,
   p.total_height = height;
   p.total_width = width;
   p.count = c;
-  p.count_start = cstart;
-  p.count_end = cend;
+  p.total_count = ctotal;
   p.forgotten_count = fc;
   known_people[j] = p;
 }
@@ -954,6 +957,26 @@ void processSensor() {
     temp_forgotten_people[i] = UNDEF_PERSON;
   }
 
+  if (!total_masses) {
+    side1Point = 0;
+    side2Point = 0;
+    SERIAL_PRINTLN(F("c sidePoints"));
+  } else if (side1Point || side2Point) {
+    bool conjoinedBlobExists = false;
+    for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
+      Person p = known_people[idx];
+      if (p.real() && ((uint8_t)p.neighbors()) > 3 && ((uint8_t)p.confidence()) > 50) {
+        conjoinedBlobExists = true;
+        break;
+      }
+    }
+    if (!conjoinedBlobExists) {
+      side1Point = 0;
+      side2Point = 0;
+      SERIAL_PRINTLN(F("c sidePoints"));
+    }
+  }
+
   // track forgotten point states in temporary local variables and reset global ones
   #define FORGET_POINT (forget_person(idx, temp_forgotten_people, pairs, temp_forgotten_num))
 
@@ -967,24 +990,25 @@ void processSensor() {
     float min_score = 100;
     float conf = p.confidence();
     uint8_t sp_axis = AXIS(p.past_position);
+    float maxD = MAX_DISTANCE + ((p.height() + p.width())/2.0) + (conf/100.0);
 
     if (p.history < MIN_HISTORY && p.side() != p.starting_side() &&
           pointOnSmallBorder(p.past_position) &&
-          p.history <= (MIN_HISTORY - normalizeAxis(sp_axis))) {
+          p.history <= (MIN_HISTORY+1 - normalizeAxis(sp_axis))) {
       // impossible for this person to ever do anything useful with its life, kill it
       FORGET_POINT;
       continue;
     }
 
     for (uint8_t j=0; j<total_masses; j++) {
-      uint8_t max_jump = max_axis_jump(points[j], p.past_position);
-      if (max_jump > 5) continue;
+      float d = euclidean_distance(p.past_position, points[j]);
+      if (d > maxD) continue;
 
       int8_t confDiff = ((uint8_t)conf) - norm_pixels[points[j]];
       bool confThresholdMet = abs(confDiff) > AVG_CONF_THRESHOLD;
 
       // can't jump more than 2 rows if more than 30% conf gap
-      if (max_jump > 3 && confThresholdMet) continue;
+      if (d > MAX_DISTANCE && confThresholdMet) continue;
 
       // can't shift more than 5º at once
       float tempDiff = diffFromPerson(points[j], p);
@@ -1018,11 +1042,10 @@ void processSensor() {
       }
 
       if (!crossedInMiddle) {
-        directionBonus += (0.05*neighbors_count[points[j]]);
+        directionBonus += (0.02*neighborsCount(points[j]));
       }
 
-      float d = euclidean_distance(p.past_position, points[j]);
-      float score = sq(d/5.0) + sq(tempDiff/MAX_TEMP_DIFFERENCE) -
+      float score = sq(d/5.0) + sq(tempDiff/(MAX_TEMP_DIFFERENCE*2)) -
                       sq(ratioP) - directionBonus;
       if (min_score - score > 0.05 || (score - min_score < 0.05 &&
             tempDiff < diffFromPerson(points[min_index], p))) {
@@ -1062,6 +1085,8 @@ void processSensor() {
             score = conf/100.0;
             score = sq(score);
             float directionBonus = 0;
+
+            // prefer people moving in the right direction
             uint8_t paxis = AXIS(points[i]);
             if (paxis == axis) { // and allies
               if (p.crossed && SIDE(points[i]) == p.starting_side()) {
@@ -1080,22 +1105,35 @@ void processSensor() {
                 directionBonus = 1.0;
               }
             }
-            directionBonus += (0.1*p.neighbors());
+
+            // prefer people with more neighbors
+            directionBonus += (0.05*p.neighbors());
+
+            // prefer people with more similar temps
             float tempDiff = diffFromPerson(points[i], p);
-            directionBonus -= sq(tempDiff/MAX_TEMP_DIFFERENCE);
-            if (p.max_jump > 1) {
-              directionBonus -= sq(float(p.max_jump - 1)/MAX_DISTANCE);
+            directionBonus -= sq(tempDiff/(MAX_TEMP_DIFFERENCE*2));
+
+            // prefer people who didn't take crazy leaps to get here
+            uint8_t axisJump = max_axis_jump(p.past_position, points[i]);
+            axisJump = max(axisJump, p.max_jump);
+            if (axisJump > 1) {
+              directionBonus -= sq(float(axisJump - 1)/MAX_DISTANCE);
             }
-            float td = axis_distance(p.starting_position, p.past_position);
-            if (td <= MIN_DISTANCE_FRD) {
-              if (p.total_count() == 1 || p.crossed) td = 1.0;
-              else td = 1.0/((float)(p.total_count() - 1));
+
+            // prefer people who have been around longer
+            float td = (float)axis_distance(p.starting_position, p.past_position);
+            if (td < 2) {
+              if (p.total_count == 1 || p.crossed) td = 1.0;
+              else td = 1.0/((float)(p.total_count - 1));
             }
             score *= (td + directionBonus);
-            score *= p.history;
+
+            // prefer people with similar confidences
             float newConf = (float)norm_pixels[points[i]];
             newConf = abs(newConf - conf);
             score *= (1.0 - newConf/100.0);
+
+            // dislike people who are further away
             score /= max(d, 0.9);
           }
           if (score - max_score > 0.05) {
@@ -1117,8 +1155,24 @@ void processSensor() {
         }
       }
       // once we've chosen our winning point, forget the rest...
+      bool holyMatrimony = norm_pixels[points[i]] > 50 && !pointOnSmallBorder(points[i]) &&
+                              neighborsCount(points[i]) > 3;
       for (uint8_t idx=0; idx < MAX_PEOPLE; idx++) {
         if (known_people[idx].real() && pairs[idx] == i && idx != max_idx) {
+          // does this look like two blobs combining into one?
+          if (holyMatrimony && known_people[idx].total_count > 3 &&
+                ((uint8_t)known_people[idx].neighbors()) > 1) {
+            uint8_t conf = (uint8_t)known_people[idx].confidence();
+            if (conf > 50) {
+              if (SIDE1(known_people[idx].starting_position)) {
+                side1Point = max(conf, side1Point);
+                SERIAL_PRINTLN(F("side1Point"));
+              } else {
+                side2Point = max(conf, side2Point);
+                SERIAL_PRINTLN(F("side2Point"));
+              }
+            }
+          }
           FORGET_POINT;
           taken[i]--;
         }
@@ -1159,7 +1213,7 @@ void processSensor() {
                   p.total_height = 0;
                   p.total_width = 0;
                   p.count = 0;
-                  p.count_start = 0;
+                  p.total_count = 0;
                 }
                 // reset start position, unless point is in a revert crisis
                 if (!p.reverted) {
@@ -1189,19 +1243,14 @@ void processSensor() {
           }
           p.total_raw_temp += raw_pixels[points[i]];
           p.total_conf += norm_pixels[points[i]];
-          p.total_bgm += bgDiff(points[i]);
-          p.total_fgm += fgDiff(points[i]);
-          p.total_variance += global_variance;
-          p.total_neighbors += neighbors_count[points[i]];
+          p.total_bgm += ((uint16_t)(bgDiff(points[i])*100.0));
+          p.total_fgm += ((uint16_t)(fgDiff(points[i])*100.0));
+          p.total_variance += ((uint16_t)(global_variance*100.0));
+          p.total_neighbors += neighborsCount(points[i]);
           p.total_height += calcHeight(points[i]);
           p.total_width += calcWidth(points[i]);
           p.count++;
-          if (p.side() == p.starting_side()) {
-            p.count_start++;
-            p.count_end = 0;
-          } else {
-            p.count_end++;
-          }
+          p.total_count++;
           cycles_since_person = 0;
           known_people[idx] = p;
           break;
@@ -1217,22 +1266,23 @@ void processSensor() {
       bool revert = false;
       uint16_t conf = norm_pixels[sp];
       float rt = raw_pixels[sp];
-      float b = bgDiff(sp);
-      float f = fgDiff(sp);
-      float v = global_variance;
-      uint8_t n = neighbors_count[sp];
-      uint8_t height = calcHeight(sp);
+      uint16_t b = ((uint16_t)(bgDiff(sp)*100.0));
+      uint16_t f = ((uint16_t)(fgDiff(sp)*100.0));
+      uint16_t v = ((uint16_t)(global_variance*100.0));
+      uint8_t n = neighborsCount(sp);
+      uint8_t hA = pointsAbove(sp);
+      uint8_t hB = pointsBelow(sp);
+      uint8_t height = hA + hB;
       uint8_t width = calcWidth(sp);
       uint8_t c = 1;
-      uint16_t cstart = 1;
-      uint8_t cend = 0;
+      uint16_t ctotal = 1;
       uint8_t fc = 0;
       bool retroMatched = false;
 
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i])) {
         // first let's check points on death row from this frame for a match
         if (remember_person(temp_forgotten_people, points[i], h, sp, mj, md, cross,
-              revert, conf, b, f, rt, n, height, width, c, cstart, cend, v, fc)) {
+              revert, conf, b, f, rt, n, height, width, c, ctotal, v, fc)) {
           retroMatched = true;
         }
       }
@@ -1240,19 +1290,55 @@ void processSensor() {
       if (!retroMatched && cycles_since_forgotten < MAX_EMPTY_CYCLES) {
         // second let's check past forgotten points for a match
         if (remember_person(forgotten_people, points[i], h, sp, mj, md, cross,
-              revert, conf, b, f, rt, n, height, width, c, cstart, cend, v, fc)) {
+              revert, conf, b, f, rt, n, height, width, c, ctotal, v, fc)) {
           retroMatched = true;
         }
       }
 
-      if (!retroMatched && !pointOnBorder(sp)) {
+      uint8_t spAxis = normalizeAxis(AXIS(sp));
+      if (!retroMatched && spAxis >= 3 && n > 2) {
         // if point is right in middle, drag it to the side it appears to be coming from
-        if (SIDE1(sp)) {
-          if (norm_pixels[sp + GRID_EXTENT] > norm_pixels[sp - GRID_EXTENT]) {
-            sp += GRID_EXTENT;
+        uint8_t a = sp - GRID_EXTENT;
+        uint8_t b = sp + GRID_EXTENT;
+        if ((SIDE1(sp) && hA == (spAxis-1)) || (SIDE2(sp) && hB == (spAxis-1))) {
+          // point reaches the bottom of its side, don't fudge it
+          retroMatched = true;
+        } else if ((side1Point || side2Point) && otherPersonExists(sp)) {
+          // there's another person in the frame, assume this is a split of that person
+          if (side1Point > (side2Point+10) && (spAxis == 4 ||
+                compareNeighboringPixels(a,b,sp))) {
+            if (SIDE2(sp)) {
+              h++;
+              while (SIDE2(sp)) {
+                sp -= GRID_EXTENT;
+              }
+            }
+            retroMatched = true;
+            side1Point = 0;
+            side2Point = 0;
+          } else if (side2Point > (side1Point+10) && (spAxis == 4 ||
+                compareNeighboringPixels(b,a,sp))) {
+            if (SIDE1(sp)) {
+              h++;
+              while (SIDE1(sp)) {
+                sp += GRID_EXTENT;
+              }
+            }
+            retroMatched = true;
+            side1Point = 0;
+            side2Point = 0;
           }
-        } else if (norm_pixels[sp - GRID_EXTENT] > norm_pixels[sp + GRID_EXTENT]) {
-          sp -= GRID_EXTENT;
+        }
+        if (!retroMatched && spAxis == 4 && height > 0) {
+          if (SIDE1(sp)) {
+            if (compareNeighboringPixels(b,a,sp)) {
+              sp += GRID_EXTENT;
+              h++;
+            }
+          } else if (compareNeighboringPixels(a,b,sp)) {
+            sp -= GRID_EXTENT;
+            h++;
+          }
         }
       }
 
@@ -1267,7 +1353,7 @@ void processSensor() {
         // look for first empty slot in past_points to use
         if (!known_people[j].real()) {
           createNewPerson(points[i], mj, md, h, sp, cross, revert, rt, conf, b, f, v, n,
-                          height, width, c, cstart, cend, fc, j);
+                          height, width, c, ctotal, fc, j);
           minIndex = UNDEF_POINT;
           break;
         } else {
@@ -1281,7 +1367,7 @@ void processSensor() {
       if (minIndex != UNDEF_POINT && (((float)conf)/(float)c) > minConf) {
         // replace lower conf slot with this new point
         createNewPerson(points[i], mj, md, h, sp, cross, revert, rt, conf, b, f, v, n,
-                        height, width, c, cstart, cend, fc, minIndex);
+                        height, width, c, ctotal, fc, minIndex);
       }
     }
   }
@@ -1333,7 +1419,7 @@ void processSensor() {
           SERIAL_PRINT(F("-"));
           SERIAL_PRINT(p.history);
           SERIAL_PRINT(F("-"));
-          SERIAL_PRINT(neighbors_count[p.past_position]);
+          SERIAL_PRINT(neighborsCount(p.past_position));
           SERIAL_PRINT(F("),"));
         }
       }
@@ -1353,10 +1439,10 @@ void processSensor() {
       for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
         SERIAL_PRINT(F(" "));
         if (norm_pixels[idx] < CONFIDENCE_THRESHOLD) {
-          SERIAL_PRINT(F("---"));
+          SERIAL_PRINT(F("-----"));
         } else {
-          if (norm_pixels[idx] < 100) SERIAL_PRINT(F(" "));
-          SERIAL_PRINT(norm_pixels[idx]);
+//          if (norm_pixels[idx] < 100) SERIAL_PRINT(F(" "));
+          SERIAL_PRINT(raw_pixels[idx]);
         }
 //        SERIAL_PRINT(raw_pixels[idx]);
         SERIAL_PRINT(F(" "));
