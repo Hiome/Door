@@ -470,7 +470,7 @@ idx_t findClosestPerson(Person *arr, coord_t i, float maxDistance) {
 bool otherPersonExists(coord_t i) {
   for (idx_t x=0; x<MAX_PEOPLE; x++) {
     Person p = known_people[x];
-    if (p.real() && p.total_count > 3 && ((uint8_t)p.confidence()) > 50 &&
+    if (p.real() && p.total_count > 3 && ((uint8_t)p.confidence()) > 60 &&
         p.neighborsi() > 2 && ((uint8_t)euclidean_distance(i, p.past_position)) < 5) {
       return true;
     }
@@ -694,6 +694,11 @@ bool normalizePixels() {
 }
 
 float calculateNewBackground(coord_t i) {
+  #ifdef RECESSED
+    // if door is covering sensor, don't learn anything new
+    if (door_state == DOOR_CLOSED) return 0;
+  #endif
+
   // ignore extreme raw pixels
   if (((uint8_t)raw_pixels[(i)]) < MIN_TEMP || ((uint8_t)raw_pixels[(i)]) > MAX_TEMP) {
     return 0;
@@ -701,6 +706,10 @@ float calculateNewBackground(coord_t i) {
 
   // implicit alpha of 0.001
   float std = raw_pixels[(i)] - bgPixel(i);
+
+  if (door_state != DOOR_CLOSED && frames_since_door_open < 3 && norm_pixels[(i)] < 30) {
+    return std*300.0;
+  }
 
   if (fgDiff(i) < global_variance) {
     if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && norm_pixels[(i)] < 50)
@@ -842,7 +851,7 @@ uint8_t findCurrentPoints(coord_t *points) {
     float fgD = fgDiff(current_point);
     float bgD = bgDiff(current_point);
     // point is too weak to consider
-    if (fgD < 0.8 || bgD < 0.8) continue;
+    if (fgD < 1 || bgD < 1) continue;
     // check if point is too small to consider
     int8_t fgDi = (int8_t)fgD - (int8_t)2;
     int8_t bgDi = (int8_t)bgD - (int8_t)2;
@@ -1254,7 +1263,10 @@ bool processSensor() {
                 p.max_temp_drift = 0;
               } else if (p.history > 1) {
                 // point moved backwards a little bit, decrement history
-                p.history--;
+                uint8_t sad = axis_distance(p.starting_position, points[i]);
+                // Starting Axis Distance must be greater than 0, or else it would be in
+                // earlier if condition. Make sure history is never higher than 1 x row.
+                p.history = min(p.history - 1, sad);
               }
             } else if (AXIS(points[i]) != AXIS(p.past_position)) {
               // "always forward, forward always" - Luke Cage
@@ -1291,7 +1303,6 @@ bool processSensor() {
       coord_t sp = points[i];
       uint8_t mj = 0;
       fint1_t md = 0;
-      uint8_t h = 1;
       uint8_t cross = 0;
       bool revert = false;
       uint16_t conf = norm_pixels[sp];
@@ -1304,6 +1315,7 @@ bool processSensor() {
       uint8_t hB = pointsBelow(sp);
       uint8_t height = hA + hB;
       uint8_t width = calcWidth(sp);
+      uint8_t h = 1;
       uint8_t c = 1;
       uint16_t ctotal = 1;
       uint8_t fc = 0;
@@ -1325,10 +1337,12 @@ bool processSensor() {
         }
       }
 
-      if (n == 0) continue;
+      if (n == 0 || f < 100 || b < 120) continue;
 
       axis_t spAxis = normalizeAxis(AXIS(sp));
-      if (!retroMatched && spAxis >= 3 && n > 2 && conf > 50 && b > 100) {
+      if (!retroMatched && spAxis >= 3 && (b < 150 || n < 2)) continue;
+
+      if (!retroMatched && spAxis >= 3 && (door_side == SIDE(sp) || !doorJustOpened())) {
         // if point is right in middle, drag it to the side it appears to be coming from
         coord_t a = sp - GRID_EXTENT;
         coord_t b = sp + GRID_EXTENT;
