@@ -570,7 +570,7 @@ float trimMean(float sum, float sq_sum, uint8_t cnt, uint8_t side) {
   float upperBound = mean + (NUM_STD_DEV * variance);
   float cavg = 0.0;
   uint8_t total = 0;
-  for (idx_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
+  for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
     if (raw_pixels[i] > lowerBound && raw_pixels[i] < upperBound) {
       cavg += raw_pixels[i];
       total++;
@@ -694,31 +694,37 @@ bool normalizePixels() {
 }
 
 float calculateNewBackground(coord_t i) {
-  #ifdef RECESSED
-    // if door is covering sensor, don't learn anything new
-    if (door_state == DOOR_CLOSED) return 0;
-  #endif
-
-  // ignore extreme raw pixels
-  if (((uint8_t)raw_pixels[(i)]) < MIN_TEMP || ((uint8_t)raw_pixels[(i)]) > MAX_TEMP) {
-    return 0;
-  }
-
-  // implicit alpha of 0.001
+  // implicit alpha of 0.001 because avg_pixels is raw_pixels*1000.0
   float std = raw_pixels[(i)] - bgPixel(i);
+  float fgd = fgDiff(i);
 
-  if (door_state != DOOR_CLOSED && frames_since_door_open < 3 && norm_pixels[(i)] < 30) {
-    return std*300.0;
+  if (door_state != DOOR_CLOSED && frames_since_door_open < 3 && fgd < 0.6) {
+    // door just opened, learn new bg very rapidly
+    return std * 300.0; // alpha = 0.3
   }
 
-  if (fgDiff(i) < global_variance) {
-    if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && norm_pixels[(i)] < 50)
+  if (fgd < 0.5) {
+    // foreground is uniform, learn it as the background
+    return std * 100.0; // alpha = 0.1
+  }
+
+  if (fgd < global_variance) {
+    if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && norm_pixels[(i)] < 50) {
+      // door changed, but fgd > 0.6 or door is closed. Learn new bg quickly but cautiously
       return std * 50.0; // alpha = 0.05
-    if (cycles_since_person == MAX_CLEARED_CYCLES)
-      return std * 10.0; // alpha = 0.01
+    }
+    if (cycles_since_person == MAX_CLEARED_CYCLES) {
+      if (norm_pixels[(i)] < CONFIDENCE_THRESHOLD) {
+        // point is definitely clear
+        return std * 100.0; // alpha = 0.1
+      } else {
+        // point _could_ be the beginning of a new person, play it safe
+        return std * 10.0; // alpha = 0.01
+      }
+    }
   }
 
-  if (cycles_since_person == 0) {
+  if (cycles_since_person == 0 && abs(std) > 0.5) {
     for (idx_t x=0; x<MAX_PEOPLE; x++) {
       if (known_people[x].real() && known_people[x].total_count > 5 &&
             known_people[x].total_count < 8000 &&
@@ -726,18 +732,32 @@ float calculateNewBackground(coord_t i) {
             ((uint8_t)known_people[x].confidence()) > 50 &&
             ((uint8_t)euclidean_distance(known_people[x].past_position, (i))) < 3 &&
             ((uint8_t)known_people[x].total_distance()) > 1) {
-        // point has moved or is significantly higher than variance
-        // decrease alpha to 0.0001
-        return std * 0.1;
+        // point has moved or is significantly higher than variance, decrease alpha.
+        // due to rounding, this means std needs to be at least 5 for bg to update.
+        return std * 0.1; // alpha = 0.0001
       }
     }
   }
 
-  return std;
+  return std; // alpha = 0.001
 }
 
 void updateBgAverage() {
+  #ifdef RECESSED
+    // if door is covering sensor, don't update background averages
+    if (door_state == DOOR_CLOSED) return;
+  #endif
+
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    // ignore sensor staring at back of door for wired sensors
+    if (door_state == DOOR_CLOSED && SIDE(i) != door_side) continue;
+    // ignore points where door is blocking sensor
+    if (door_state == DOOR_AJAR && SIDE(i) == door_side) continue;
+    // ignore extreme raw pixels
+    if (((uint8_t)raw_pixels[(i)]) < MIN_TEMP || ((uint8_t)raw_pixels[(i)]) > MAX_TEMP) {
+      continue;
+    }
+
     int32_t temp = ((int32_t)avg_pixels[i]) + ((int32_t)round(calculateNewBackground(i)));
     if (temp < ((int32_t)MIN_TEMP*1000) || temp > ((int32_t)MAX_TEMP*1000)) continue;
     avg_pixels[i] = temp;
@@ -747,7 +767,7 @@ void updateBgAverage() {
 // find how many of this points neighbors have already been counted
 uint8_t findKnownNeighbors(coord_t *arr, uint8_t arrSize, coord_t p, coord_t &lastNeighbor) {
   uint8_t knownNeighbors = 0;
-  for (idx_t f=0; f<arrSize; f++) {
+  for (uint8_t f=0; f<arrSize; f++) {
     if (arr[f] == p) continue;
     if (samePoints(arr[f], p) && ((uint8_t)euclidean_distance(arr[f], p)) == 1) {
       lastNeighbor = arr[f];
@@ -848,18 +868,17 @@ uint8_t findCurrentPoints(coord_t *points) {
     coord_t current_point = ordered_indexes[y];
     if (current_point == UNDEF_POINT) continue;
 
-    float fgD = fgDiff(current_point);
-    float bgD = bgDiff(current_point);
-    // point is too weak to consider
+    uint8_t fgD = (uint8_t)fgDiff(current_point);
+    uint8_t bgD = (uint8_t)bgDiff(current_point);
+    // check if point is too weak to consider for a peak
     if (fgD < 1 || bgD < 1) continue;
-    // check if point is too small to consider
-    int8_t fgDi = (int8_t)fgD - (int8_t)2;
-    int8_t bgDi = (int8_t)bgD - (int8_t)2;
-    if (fgDi >= 0 || bgDi >= 0) { // at least 2º diff
-      int8_t nc = neighborsCount(current_point);
-      // need at least 1 neighbor if 2º diff, 2 neighbors if 3º, 3 for 4º 4 for 5º
+    // check if point is too small to consider for a peak
+    fgD = max(fgD, bgD); // choose larger metric
+    if (fgD >= 2) { // at least 2º diff
+      uint8_t nc = neighborsCount(current_point) + 2;
+      // need at least 1 neighbor if 2º diff, 2 neighbors if 3º, 3 for 4º, 4 for 5º
       // once we have 5 neighbors, we're large enough regardless of temp
-      if (nc <= min(fgDi, 4) || nc <= min(bgDi, 4)) continue;
+      if (nc <= min(fgD, 6)) continue;
     }
 
     bool addable = true;
@@ -982,7 +1001,7 @@ bool remember_person(Person *arr, coord_t point, uint8_t &h, coord_t &sp,
     width += p.total_width;
     c += p.count;
     ctotal += p.total_count;
-    fc += (p.forgotten_count + 1);
+    fc += p.forgotten_count;
     arr[pi] = UNDEF_PERSON;
     return true;
   }
@@ -1089,24 +1108,27 @@ bool processSensor() {
       uint8_t w = calcWidth(points[j]);
       h = min(person_height, h);
       w = min(person_width, w);
-      float maxD = MAX_DISTANCE+1.05 + ((h + w)/2.0) + (conf/100.0);
+      float maxD = MAX_DISTANCE + ((h + w)/2.0) + (conf/100.0);
       maxD = min(maxD, (MAX_DISTANCE*2)); // don't let the D grow too big
 
       float d = euclidean_distance(p.past_position, points[j]);
-      if (((uint8_t)d) >= ((uint8_t)maxD)) continue;
+      if (d > maxD) continue;
 
       int8_t confDiff = ((int8_t)conf) - ((int8_t)norm_pixels[(points[j])]);
       bool confThresholdMet = abs(confDiff) > AVG_CONF_THRESHOLD;
 
-      // can't jump more than 2 rows if more than 30% conf gap
+      // can't jump more than 3 rows if more than 30% conf gap
       if (d > MAX_DISTANCE && confThresholdMet) continue;
 
       // can't shift more than 5º at once
       float tempDiff = diffFromPerson(points[j], p);
       if (tempDiff > MAX_TEMP_DIFFERENCE) continue;
 
-      // can't shift more than 2º if bigger than 30% conf gap or both points are on edge
+      // can't shift more than 3.5º if bigger than 30% conf gap
       if (tempDiff > NORMAL_TEMP_DIFFERENCE && (confThresholdMet ||
+            // or point is crossing sides
+            (p.side() == p.starting_side() && p.side() != SIDE(points[j])) ||
+            // or both points are on the edge of the grid
             (pointOnSmallBorder(p.past_position) && pointOnSmallBorder(points[j])))) {
         continue;
       }
@@ -1333,14 +1355,15 @@ bool processSensor() {
         // second let's check past forgotten points for a match
         if (remember_person(forgotten_people, points[i], h, sp, mj, md, cross,
               revert, conf, b, f, rt, n, height, width, c, ctotal, v, fc)) {
+          fc++;
           retroMatched = true;
         }
       }
 
-      if (n == 0 || f < 100 || b < 120) continue;
+      if (n == 0) continue;
 
       axis_t spAxis = normalizeAxis(AXIS(sp));
-      if (!retroMatched && spAxis >= 3 && (b < 150 || n < 2)) continue;
+      if (!retroMatched && spAxis >= 3 && (b < 120 || n < 2)) continue;
 
       if (!retroMatched && spAxis >= 3 && (door_side == SIDE(sp) || !doorJustOpened())) {
         // if point is right in middle, drag it to the side it appears to be coming from
