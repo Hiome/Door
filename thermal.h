@@ -3,7 +3,7 @@
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 #endif
 
-#define FIRMWARE_VERSION        "V20.1.27"
+#define FIRMWARE_VERSION        "V20.1.30"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
