@@ -26,10 +26,8 @@ const uint8_t CONFIDENCE_THRESHOLD   = 5;    // min 5% confidence required
 const uint8_t AVG_CONF_THRESHOLD     = 30;   // avg 30% confidence required
 const uint8_t MIN_TEMP               = 2;    // ignore all points colder than 2º C
 const uint8_t MAX_TEMP               = 45;   // ignore all points hotter than 45ºC
-const float   NORMAL_TEMP_DIFFERENCE = 3.5;  // usual temp difference between 2 points
-const float   MAX_TEMP_DIFFERENCE    = 5.0;  // max temp difference between 2 people
 const float   MAX_DISTANCE           = 3.0;  // max distance that a point is allowed to move
-const float   NUM_STD_DEV            = 2.0;  // max num of std dev in trimmed average
+const float   NUM_STD_DEV            = 1;    // max num of std dev in trimmed average
 const float   BACKGROUND_GRADIENT    = 2.0;
 const float   FOREGROUND_GRADIENT    = 2.0;
 const coord_t UNDEF_POINT            = AMG88xx_PIXEL_ARRAY_SIZE + 10;
@@ -402,8 +400,11 @@ float diffFromPerson(coord_t a, Person b) {
 }
 
 bool samePoints(coord_t a, coord_t b) {
-  return norm_pixels[(a)] > CONFIDENCE_THRESHOLD &&
-          abs(raw_pixels[(a)] - raw_pixels[(b)]) < NORMAL_TEMP_DIFFERENCE;
+  if (norm_pixels[(a)] < CONFIDENCE_THRESHOLD) return false;
+  float maxT = raw_pixels[(b)] - bgPixel(b);
+  maxT = abs(maxT)*0.7;
+  maxT = min(maxT, 5.0);
+  return abs(raw_pixels[(a)] - raw_pixels[(b)]) < maxT;
 }
 
 uint8_t maxPossibleNeighbors(coord_t i) {
@@ -451,9 +452,11 @@ idx_t findClosestPerson(Person *arr, coord_t i, float maxDistance) {
       if (dist > maxDistance) continue;
 
       float tempDiff = diffFromPerson(i, arr[x]);
-      if (tempDiff > NORMAL_TEMP_DIFFERENCE) continue;
+      float bgm = arr[x].bgm()/200.0;
+      float maxT = constrain(bgm, 2.0, 5.0);
+      if (tempDiff > maxT) continue;
 
-      float tempRatio = tempDiff/MAX_TEMP_DIFFERENCE;
+      float tempRatio = tempDiff/maxT;
       tempRatio = max(tempRatio, 0.1);
       float distRatio = dist/maxDistance;
       distRatio = max(distRatio, 0.1);
@@ -875,10 +878,11 @@ uint8_t findCurrentPoints(coord_t *points) {
     // check if point is too small to consider for a peak
     fgD = max(fgD, bgD); // choose larger metric
     if (fgD >= 2) { // at least 2º diff
-      uint8_t nc = neighborsCount(current_point) + 2;
+      uint8_t nc = neighborsCount(current_point);
+      uint8_t ncp = maxPossibleNeighbors(current_point);
       // need at least 1 neighbor if 2º diff, 2 neighbors if 3º, 3 for 4º, 4 for 5º
       // once we have 5 neighbors, we're large enough regardless of temp
-      if (nc <= min(fgD, 6)) continue;
+      if (nc < ncp && (nc + 2) <= min(fgD, 6)) continue;
     }
 
     bool addable = true;
@@ -904,7 +908,7 @@ uint8_t findCurrentPoints(coord_t *points) {
         // this is a peak that is touching another blob, don't let it peak
         if (knownNeighbors > 1) {
           addable = false;
-        } else if (knownNeighbors == 1) {
+        } else { // knownNeighbors == 1
           coord_t lFN2 = UNDEF_POINT;
           if (findKnownNeighbors(ordered_indexes_temp, x, lastFoundNeighbor, lFN2) > 1) {
             addable = false;
@@ -1092,6 +1096,8 @@ bool processSensor() {
     idx_t min_index = UNDEF_INDEX;
     float min_score = 100;
     float conf = p.confidence();
+    float bgm = p.bgm()/200.0;
+    float maxT = constrain(bgm, 2.0, 5.0);
     uint8_t person_height = p.heighti();
     uint8_t person_width = p.widthi();
 
@@ -1120,14 +1126,12 @@ bool processSensor() {
       // can't jump more than 3 rows if more than 30% conf gap
       if (d > MAX_DISTANCE && confThresholdMet) continue;
 
-      // can't shift more than 5º at once
+      // can't shift more than 3-6º at once
       float tempDiff = diffFromPerson(points[j], p);
-      if (tempDiff > MAX_TEMP_DIFFERENCE) continue;
+      if (tempDiff > (maxT + 1)) continue;
 
-      // can't shift more than 3.5º if bigger than 30% conf gap
-      if (tempDiff > NORMAL_TEMP_DIFFERENCE && (confThresholdMet ||
-            // or point is crossing sides
-            (p.side() == p.starting_side() && p.side() != SIDE(points[j])) ||
+      // can't shift more than 2-5º if bigger than 30% conf gap or jumping more than 3 rows
+      if (tempDiff > maxT && (confThresholdMet || d > MAX_DISTANCE ||
             // or both points are on the edge of the grid
             (pointOnSmallBorder(p.past_position) && pointOnSmallBorder(points[j])))) {
         continue;
@@ -1135,12 +1139,12 @@ bool processSensor() {
 
       float ratioP = min(((float)norm_pixels[(points[j])])/conf,
                          conf/((float)norm_pixels[(points[j])]));
-      float score = sq(d/MAX_DISTANCE) + sq(tempDiff/NORMAL_TEMP_DIFFERENCE) - sq(ratioP);
+      float score = sq(d/maxD) + sq(tempDiff/maxT) - sq(ratioP);
       if (!p.crossed || pointOnSmallBorder(p.starting_position)) {
         score -= (0.02*((float)neighborsCount(points[j])));
       }
 
-      if (score >= 3) continue; // distance is high AND temp diff is high
+      if (score > 2.5) continue; // distance is high AND temp diff is high
 
       if (score <= (min_score - 0.05) || (score <= (min_score + 0.05) &&
             tempDiff < diffFromPerson(points[min_index], p))) {
@@ -1186,7 +1190,7 @@ bool processSensor() {
 
           // prefer people with more similar temps
           float tempDiff = diffFromPerson(points[i], p);
-          score -= sq(tempDiff/NORMAL_TEMP_DIFFERENCE);
+          score -= sq(tempDiff/3.0);
 
           // prefer people who didn't take crazy leaps to get here
           float d = euclidean_distance(p.past_position, points[i]);
