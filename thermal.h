@@ -1,9 +1,10 @@
 #ifdef ENABLE_SERIAL
   #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
+//  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.2.10"
+#define FIRMWARE_VERSION        "V20.2.12"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -373,9 +374,11 @@ float fgDiff(coord_t i) {
   fgmt1 = min(fgmt1, fgmt2);
 
   if (((uint8_t)raw_pixels[(i)]) <= MIN_TEMP_FRD+2) {
+    // raw_pixels must be between 14-15 if MIN_TEMP_FRD is 13
     fgmt2 = raw_pixels[i] - MIN_TEMP_FRD;
     fgmt1 = min(fgmt1, fgmt2);
   } else if (((uint8_t)raw_pixels[(i)]) >= MAX_TEMP_FRD-2) {
+    // raw_pixels must be between 35-36 if MAX_TEMP_FRD is 37
     fgmt2 = MAX_TEMP_FRD - raw_pixels[i];
     fgmt1 = min(fgmt1, fgmt2);
   }
@@ -769,6 +772,7 @@ uint8_t bucketNum(float r, float minVal, float maxVal) {
 uint8_t findCurrentPoints(coord_t *points) {
   // sort pixels by confidence
   coord_t ordered_indexes_temp[AMG88xx_PIXEL_ARRAY_SIZE];
+  uint8_t neighbors_cache[AMG88xx_PIXEL_ARRAY_SIZE] = { 0 };
   uint8_t active_pixel_count = 0;
   float minVal = MAX_TEMP_FRD;
   float maxVal = MIN_TEMP_FRD;
@@ -790,74 +794,83 @@ uint8_t findCurrentPoints(coord_t *points) {
         ordered_indexes_temp[active_pixel_count] = i;
       }
       active_pixel_count++;
+      neighbors_cache[i] = neighborsCount(i);
     }
 
     if (((uint8_t)raw_pixels[i]) < MIN_TEMP_FRD || ((uint8_t)raw_pixels[i]) > MAX_TEMP_FRD) {
       continue;
     }
-    minVal = min(minVal, raw_pixels[i]);
-    maxVal = max(maxVal, raw_pixels[i]);
+    if (raw_pixels[i] < minVal) minVal = raw_pixels[i];
+    else if (raw_pixels[i] > maxVal) maxVal = raw_pixels[i];
   }
 
   uint8_t bin_counts[NUM_BUCKETS] = { 0 };
+  coord_t sibling_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     uint8_t bidx = bucketNum(raw_pixels[i], minVal, maxVal);
     bin_counts[bidx]++;
+    sibling_indexes[i] = UNDEF_POINT;
   }
 
   // reorder based on position
   coord_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
+  float fgThreshold = (min(global_variance, 1)*1.5);
   for (uint8_t z=0; z<active_pixel_count; z++) {
     coord_t i = ordered_indexes_temp[z];
     bool added = false;
-    for (uint8_t j=0; j<z; j++) {
-      if (diffFromPoint(ordered_indexes[j], i) < 0.7) {
-        uint8_t nci = neighborsCount(i);
-        uint8_t ncj = neighborsCount(ordered_indexes[j]);
-        if (nci > ncj + 1) {
-          // prefer the point that's more in middle of blob
-          added = true;
-        } else if (nci >= ncj) {
-          // prefer point closer to middle of grid
-          axis_t edge1 = AXIS(i);
-          axis_t edge2 = AXIS(ordered_indexes[j]);
-
-          // use columns instead of rows if same row
-          if (edge1 == edge2) {
-            edge1 = NOT_AXIS(i);
-            edge2 = NOT_AXIS(ordered_indexes[j]);
-          }
-
-          // calculate row # from opposite edge
-          edge1 = normalizeAxis(edge1);
-          edge2 = normalizeAxis(edge2);
-
-          if (edge1 == edge2 && edge1 == 4 && SIDE(i) != SIDE(ordered_indexes[j])) {
-            // we're debating between 2 points on either side of border.
-            // find which side this person was previously on to avoid flip-flopping.
-            if (SIDE1(i)) {
-              if (diffFromPoint(i-GRID_EXTENT, i) + 0.5 <
-                    diffFromPoint(ordered_indexes[j]+GRID_EXTENT, ordered_indexes[j]) &&
-                      samePoints(i-GRID_EXTENT, i)) {
+    if (fgDiff(i) > fgThreshold && bgDiff(i) > 0.8) {
+      for (uint8_t j=0; j<z; j++) {
+        coord_t oj = sibling_indexes[j] == UNDEF_POINT ? ordered_indexes[j] :
+                        sibling_indexes[j];
+        if (diffFromPoint(oj, i) < 0.7) {
+          uint8_t nci = neighbors_cache[i];
+          uint8_t ncj = neighbors_cache[ordered_indexes[j]];
+          if (nci > (ncj + 1)) {
+            // prefer the point that's more in middle of blob
+            added = true;
+          } else if (nci >= ncj) {
+            // prefer point closer to middle of grid
+            axis_t edge1 = AXIS(i);
+            axis_t edge2 = AXIS(ordered_indexes[j]);
+  
+            // use columns instead of rows if same row
+            if (edge1 == edge2) {
+              edge1 = NOT_AXIS(i);
+              edge2 = NOT_AXIS(ordered_indexes[j]);
+            }
+  
+            // calculate row # from opposite edge
+            edge1 = normalizeAxis(edge1);
+            edge2 = normalizeAxis(edge2);
+  
+            if (edge1 == edge2 && edge1 == 4 && SIDE(i) != SIDE(ordered_indexes[j])) {
+              // we're debating between 2 points on either side of border.
+              // find which side this person was previously on to avoid flip-flopping.
+              if (SIDE1(i)) {
+                if (diffFromPoint(i-GRID_EXTENT, i) + 0.5 <
+                      diffFromPoint(ordered_indexes[j]+GRID_EXTENT, ordered_indexes[j]) &&
+                        samePoints(i-GRID_EXTENT, i)) {
+                  edge1++;
+                }
+              } else if (diffFromPoint(i+GRID_EXTENT, i) + 0.5 <
+                      diffFromPoint(ordered_indexes[j]-GRID_EXTENT, ordered_indexes[j]) &&
+                        samePoints(i+GRID_EXTENT, i)) {
                 edge1++;
               }
-            } else if (diffFromPoint(i+GRID_EXTENT, i) + 0.5 <
-                    diffFromPoint(ordered_indexes[j]-GRID_EXTENT, ordered_indexes[j]) &&
-                      samePoints(i+GRID_EXTENT, i)) {
-              edge1++;
             }
+  
+            added = edge1 > edge2;
           }
-
-          added = edge1 > edge2;
-        }
-        if (added) {
-          norm_pixels[i] = norm_pixels[(ordered_indexes[j])];
-          // insert point i in front of j
-          for (int8_t x=z; x>j; x--) {
-            ordered_indexes[x] = ordered_indexes[(x-1)];
+          if (added) {
+            // insert point i in front of j
+            for (int8_t x=z; x>j; x--) {
+              sibling_indexes[x] = sibling_indexes[(x-1)];
+              ordered_indexes[x] = ordered_indexes[(x-1)];
+            }
+            sibling_indexes[j] = oj;
+            ordered_indexes[j] = i;
+            break;
           }
-          ordered_indexes[j] = i;
-          break;
         }
       }
     }
@@ -880,6 +893,13 @@ uint8_t findCurrentPoints(coord_t *points) {
     bin_clusters[bidx]++;
 
     bool addable = total_masses < MAX_PEOPLE;
+    // check if point is too weak to consider for a peak
+    float fgD = addable ? fgDiff(current_point) : 0;
+    if (addable && (fgD < fgThreshold || bgDiff(current_point) < 0.8)) {
+      addable = false;
+    }
+
+    // check if point is too close to existing cluster
     if (addable) {
       for (idx_t x=0; x<total_masses; x++) {
         if ((uint8_t)euclidean_distance(points[x], current_point) == 1 &&
@@ -888,12 +908,6 @@ uint8_t findCurrentPoints(coord_t *points) {
           break;
         }
       }
-    }
-
-    // check if point is too weak to consider for a peak
-    float fgD = addable ? fgDiff(current_point) : 0;
-    if (addable && (fgD < (min(global_variance, 1)*1.5)) || bgDiff(current_point) < 0.8) {
-      addable = false;
     }
 
     ordered_indexes_temp[sorted_size] = current_point;
@@ -944,8 +958,11 @@ uint8_t findCurrentPoints(coord_t *points) {
 
     // check if point is too small/large to be a valid person
     uint8_t maxSize = fgD < 1 ? 5 : (fgD < 1.5 ? 7 : 10);
-    float minSizeRatio = 0.3 - (min(fgD, 2)/10.0);
-    if (addable && bucketPointsInCluster < maxSize && bin_clusters[bidx]<=(fgD>2 ? 3 : 2) &&
+    maxSize += ((uint8_t)(bucketWidth + 0.5));
+    float minSizeRatio = 0.3 - (min(fgD, 2)/10.0) - (bucketWidth/10.0);
+    minSizeRatio = max(minSizeRatio, 0.05);
+    uint8_t maxClusters = (((uint8_t)fgD) > 2 ? 3 : 2) + ((uint8_t)(bucketWidth + 0.5));
+    if (addable && bucketPointsInCluster < maxSize && bin_clusters[bidx] <= maxClusters &&
           ((float)bucketPointsInCluster)/((float)bin_counts[bidx]) > minSizeRatio) {
       points[total_masses] = current_point;
       total_masses++;
@@ -955,9 +972,10 @@ uint8_t findCurrentPoints(coord_t *points) {
   // if points are from the same bucket, drop them
   for (uint8_t i = 0; i < total_masses; i++) {
     uint8_t idx = points[i];
-    uint8_t bidx = bucketNum(raw_pixels[idx], minVal, maxVal);
-    float fgD = fgDiff(idx);
-    if (bin_clusters[bidx] > (fgD > 2 ? 3 : 2)) {
+    float width = (maxVal - minVal)/NUM_BUCKETS;
+    uint8_t bidx = bucketNum(raw_pixels[points[i]], minVal, maxVal);
+    uint8_t maxClusters = (((uint8_t)fgDiff(idx)) > 2 ? 3 : 2) + ((uint8_t)(width + 0.5));
+    if (bin_clusters[bidx] > maxClusters) {
       points[i] = UNDEF_POINT;
     }
   }
@@ -978,6 +996,25 @@ uint8_t findCurrentPoints(coord_t *points) {
     if (points[i] != UNDEF_POINT) final_total_masses++;
     else break;
   }
+
+  #ifdef PRINT_RAW_DATA
+    if (final_total_masses >= 0) {
+      SERIAL_PRINT(maxVal);
+      SERIAL_PRINT(F(", "));
+      SERIAL_PRINT(minVal);
+      SERIAL_PRINT(F(", "));
+      SERIAL_PRINTLN(bucketWidth);
+      for (uint8_t i=0; i<NUM_BUCKETS; i++) {
+        SERIAL_PRINT(i);
+        SERIAL_PRINT(F(" ("));
+        SERIAL_PRINT((minVal + i*bucketWidth));
+        SERIAL_PRINT(F("-"));
+        SERIAL_PRINT((minVal + (i+1)*bucketWidth));
+        SERIAL_PRINT(F("): "));
+        SERIAL_PRINTLN(bin_counts[i]);
+      }
+    }
+  #endif
 
   return final_total_masses;
 }
@@ -1131,7 +1168,7 @@ bool processSensor() {
       float maxD = MAX_DISTANCE + ((h + w + n)/4.0) + (norm_pixels[points[j]]/100.0);
       float maxD2 = MAX_DISTANCE + (p.height+p.width+p.neighbors)/4.0 + (p.confidence/100.0);
       maxD = min(maxD, maxD2); // choose smaller range of 2 points as max range
-      maxD = min(maxD, (MAX_DISTANCE*3)); // don't let the D grow too big
+      maxD = min(maxD, 6.0);   // don't let the D grow too big
 
       float d = euclidean_distance(p.past_position, points[j]);
       if (d > maxD) continue;
@@ -1140,14 +1177,12 @@ bool processSensor() {
       float tempDiff = diffFromPerson(points[j], p);
       if (tempDiff > maxT) continue;
 
-      float ratioP = min(((float)norm_pixels[(points[j])])/((float)p.confidence),
-                         ((float)p.confidence)/((float)norm_pixels[(points[j])]));
-      float score = sq(d/maxD) + sq(tempDiff/maxT) - sq(ratioP);
+      float score = sq(d/maxD) + sq(tempDiff/maxT);
       if (!p.crossed || pointOnSmallBorder(p.starting_position)) {
         score -= (0.02*((float)n));
       }
 
-      if (score > 1.5) continue; // distance is high AND temp diff is high AND conf is low
+      if (score > 1.8) continue; // distance is high AND temp diff is high AND conf is low
 
       if (score <= (min_score - 0.05) || (score <= (min_score + 0.05) &&
             tempDiff < diffFromPerson(points[min_index], p))) {
@@ -1176,13 +1211,8 @@ bool processSensor() {
       for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
         Person p = known_people[idx];
         if (p.real() && pairs[idx] == i) {
-          score = min(((float)norm_pixels[(points[i])])/((float)p.confidence),
-                      ((float)p.confidence)/((float)norm_pixels[(points[i])]));
-          score *= 0.75; // weight the confidence ratio a little lower
-          score = sq(score);
-
           // prefer people with more neighbors
-          score += (0.03*((float)p.neighbors));
+          score = (0.03*((float)p.neighbors));
 
           // prefer people with more similar temps
           float tempDiff = diffFromPerson(points[i], p);
@@ -1196,7 +1226,7 @@ bool processSensor() {
           score -= sq(d/maxD);
 
           // prefer people who have been around longer
-          score += ((p.total_distance() + p.history)/30.0);
+          score += ((p.total_distance() + p.history)/10.0);
 
           if (score >= max_score + 0.05) {
             max_score = score;
@@ -1427,7 +1457,7 @@ bool processSensor() {
   // wrap up with debugging output
 
   #ifdef PRINT_RAW_DATA
-    if (total_masses > 0) {
+    if (total_masses >= 0) {
       for (idx_t i = 0; i<MAX_PEOPLE; i++) {
         Person p = known_people[i];
         if (p.real()) {
@@ -1498,6 +1528,10 @@ void runThermalLoop() {
     if (cycles_since_person < MAX_CLEARED_CYCLES) {
       cycles_since_person++;
     }
+
+    #ifdef TIME_CYCLES
+      SERIAL_PRINTLN(millis());
+    #endif
   }
 }
 
