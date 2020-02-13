@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.2.13b"
+#define FIRMWARE_VERSION        "V20.2.13c"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -28,8 +28,8 @@ const uint8_t CONFIDENCE_THRESHOLD   = 5;    // min 5% confidence required
 const uint8_t AVG_CONF_THRESHOLD     = 30;   // avg 30% confidence required
 const uint8_t MIN_TEMP               = 2;    // ignore all points colder than 2º C
 const uint8_t MAX_TEMP               = 45;   // ignore all points hotter than 45ºC
-const uint8_t MIN_TEMP_FRD           = 13;
-const uint8_t MAX_TEMP_FRD           = 37;
+const uint8_t MIN_TEMP_FRD           = 5;
+const uint8_t MAX_TEMP_FRD           = 40;
 const uint8_t NUM_BUCKETS            = 10;   // 3 + log2(n) * log(n) where n = distinct rows
 const float   MAX_DISTANCE           = 2.0;  // max distance that a point is allowed to move
 const float   BACKGROUND_GRADIENT    = 2.0;
