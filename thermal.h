@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.2.13"
+#define FIRMWARE_VERSION        "V20.2.13b"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -715,19 +715,9 @@ float calculateNewBackground(coord_t i) {
     return std * 300.0; // alpha = 0.3
   }
 
-  if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && fgd < 1) {
-    // door changed, but fgd > 0.6 or door is closed. Learn new bg quickly but cautiously
+  if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && fgd < 0.8) {
+    // Learn new bg quickly but cautiously
     return std * 50.0; // alpha = 0.05
-  }
-
-  if (fgd < global_variance && cycles_since_person == MAX_CLEARED_CYCLES) {
-    if (norm_pixels[(i)] < CONFIDENCE_THRESHOLD) {
-      // point is definitely clear
-      return std * 100.0; // alpha = 0.1
-    } else {
-      // point _could_ be the beginning of a new person, play it safe
-      return std * 10.0; // alpha = 0.01
-    }
   }
 
   if (cycles_since_person == 0 && abs(std) > 0.5) {
@@ -745,9 +735,9 @@ float calculateNewBackground(coord_t i) {
   }
 
   if (fgd < 0.5) {
-    if (global_variance < 0.6) return std * 500.0; // alpha = 0.5
+    if (global_variance < 0.5) return std * 100.0; // alpha = 0.1
     // foreground is uniform, learn it as the background
-    return std * 100.0; // alpha = 0.1
+    return std * 50.0; // alpha = 0.05
   }
 
   return std; // alpha = 0.001
@@ -841,7 +831,7 @@ uint8_t findCurrentPoints(coord_t *points) {
 
   // reorder based on position
   coord_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
-  float fgThreshold = (min(global_variance, 1)*1.5);
+  float fgThreshold = min(global_variance, 0.9)*1.5;
   for (uint8_t z=0; z<active_pixel_count; z++) {
     coord_t i = ordered_indexes_temp[z];
     bool added = false;
@@ -942,8 +932,8 @@ uint8_t findCurrentPoints(coord_t *points) {
     ordered_indexes[y] = UNDEF_POINT;
 
     uint8_t bucketPointsInCluster = 1;
-    float bucketLowerLimit = minVal + bucketWidth*bidx;
-    float bucketUpperLimit = bucketLowerLimit + bucketWidth;
+    float bucketLowerLimit = minVal + bucketWidth*bidx - 0.1;
+    float bucketUpperLimit = bucketLowerLimit + bucketWidth + 0.1;
 
     // scan all points added after current_point, since they must be part of same blob
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
@@ -973,8 +963,8 @@ uint8_t findCurrentPoints(coord_t *points) {
               ((uint8_t)euclidean_distance(ordered_indexes[k], blobPoint)) == 1) {
             ordered_indexes_temp[sorted_size] = ordered_indexes[k];
             sorted_size++;
-            if (raw_pixels[ordered_indexes[k]] >= bucketLowerLimit &&
-                raw_pixels[ordered_indexes[k]] <= bucketUpperLimit) {
+            if (raw_pixels[ordered_indexes[k]] > bucketLowerLimit &&
+                raw_pixels[ordered_indexes[k]] < bucketUpperLimit) {
               bucketPointsInCluster++;
             }
             ordered_indexes[k] = UNDEF_POINT;
@@ -984,24 +974,25 @@ uint8_t findCurrentPoints(coord_t *points) {
     }
 
     // check if point is too small/large to be a valid person
-    uint8_t maxSize = fgD < 1 ? 5 : (fgD < 1.5 ? 7 : 10);
-    maxSize += ((uint8_t)(bucketWidth + 0.5));
-    float minSizeRatio = 0.3 - (min(fgD, 2)/10.0) - (bucketWidth/10.0);
-    minSizeRatio = max(minSizeRatio, 0.05);
-    uint8_t maxClusters = (((uint8_t)fgD) > 2 ? 3 : 2) + ((uint8_t)(bucketWidth + 0.5));
-    if (addable && bucketPointsInCluster < maxSize && bin_clusters[bidx] <= maxClusters &&
-          ((float)bucketPointsInCluster)/((float)bin_counts[bidx]) > minSizeRatio) {
-      points[total_masses] = current_point;
-      total_masses++;
+    if (addable) {
+      uint8_t maxSize = fgD < 1 ? 10 : 15;
+      maxSize += ((uint8_t)(bucketWidth + 0.5));
+      float minSizeRatio = 0.25 - (min(fgD, 2)/10.0) - (bucketWidth/10.0);
+      minSizeRatio = max(minSizeRatio, 0.05);
+      uint8_t maxClusters = (((uint8_t)fgD) > 2 ? 4 : 3) + ((uint8_t)(bucketWidth + 0.5));
+      if (bucketPointsInCluster < maxSize && bin_clusters[bidx] <= maxClusters &&
+            ((float)bucketPointsInCluster)/((float)bin_counts[bidx]) > minSizeRatio) {
+        points[total_masses] = current_point;
+        total_masses++;
+      }
     }
   }
 
   // if points are from the same bucket, drop them
   for (uint8_t i = 0; i < total_masses; i++) {
     uint8_t idx = points[i];
-    float width = (maxVal - minVal)/NUM_BUCKETS;
-    uint8_t bidx = bucketNum(raw_pixels[points[i]], minVal, maxVal);
-    uint8_t maxClusters = (((uint8_t)fgDiff(idx)) > 2 ? 3 : 2) + ((uint8_t)(width + 0.5));
+    uint8_t bidx = bucketNum(raw_pixels[idx], minVal, maxVal);
+    uint8_t maxClusters = (((uint8_t)fgDiff(idx))>2 ? 4 : 3) + ((uint8_t)(bucketWidth+0.5));
     if (bin_clusters[bidx] > maxClusters) {
       points[i] = UNDEF_POINT;
     }
@@ -1011,7 +1002,7 @@ uint8_t findCurrentPoints(coord_t *points) {
   uint8_t final_total_masses = 0;
   for (uint8_t i = 0; i < total_masses; i++) {
     if (points[i] == UNDEF_POINT) {
-      for (uint8_t y = i; y < total_masses; y++) {
+      for (uint8_t y = i+1; y < total_masses; y++) {
         if (points[y] != UNDEF_POINT) {
           points[i] = points[y];
           points[y] = UNDEF_POINT;
