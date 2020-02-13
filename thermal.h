@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.2.12"
+#define FIRMWARE_VERSION        "V20.2.13"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -171,6 +171,30 @@ bool doorJustOpened() {
   else return readDoorState() == DOOR_OPEN;
 }
 
+//typedef struct {
+//  coord_t   current_position;
+//  uint8_t   confidence;
+//  uint8_t   neighbors;
+//  uint8_t   height;
+//  uint8_t   width;
+//  float     raw_temp;
+//  float     bgm;
+//  float     fgm;
+//
+//  bool      real() { return current_position != UNDEF_POINT; };
+//  uint8_t   side() { return SIDE(current_position); };
+//  float     max_distance() {
+//    return MAX_DISTANCE + (height+width+neighbors)/4.0 + (confidence/100.0);
+//  };
+//  float     max_allowed_temp_drift() {
+//    float maxT = fgm * 0.85;
+//    return min(maxT, 5.0);
+//  };
+//  float     difference_from_point(coord_t a) {
+//    return abs(raw_pixels[(a)] - raw_temp);
+//  };
+//} PossiblePerson;
+
 typedef struct {
   coord_t   past_position;        //:7 0-63 + UNDEF_POINT
   coord_t   starting_position;    //:6 0-63
@@ -199,6 +223,16 @@ typedef struct {
   uint8_t   side() { return SIDE(past_position); };
   float     total_distance() {
     return euclidean_distance(starting_position, past_position);
+  };
+  float     max_distance() {
+    return MAX_DISTANCE + (height+width+neighbors)/4.0 + (confidence/100.0);
+  };
+  float     max_allowed_temp_drift() {
+    float maxT = fgm * 0.85;
+    return constrain(maxT, 2.0, 5.0);
+  };
+  float     difference_from_point(coord_t a) {
+    return abs(raw_pixels[(a)] - raw_temp);
   };
 
   #define METALENGTH  49 // TODO drop extra 0's from neighbors/height/width
@@ -360,10 +394,6 @@ float diffFromPoint(coord_t a, coord_t b) {
   return abs(raw_pixels[(a)] - raw_pixels[(b)]);
 }
 
-float diffFromPerson(coord_t a, Person b) {
-  return abs(raw_pixels[(a)] - b.raw_temp);
-}
-
 // calculate difference from foreground
 float fgDiff(coord_t i) {
   if (((uint8_t)raw_pixels[(i)])<=MIN_TEMP_FRD || ((uint8_t)raw_pixels[(i)])>=MAX_TEMP_FRD) {
@@ -413,13 +443,8 @@ uint8_t calcBgm(coord_t i) {
 }
 
 float maxTempDiffForPoint(coord_t x) {
-  float maxT = fgDiff(x) * 0.7;
+  float maxT = fgDiff(x) * 0.85;
   return min(maxT, 5.0);
-}
-
-float maxTempDiffForPerson(Person x) {
-  float maxT = x.fgm * 0.7;
-  return constrain(maxT, 2.0, 5.0);
 }
 
 bool samePoints(coord_t a, coord_t b) {
@@ -429,7 +454,9 @@ bool samePoints(coord_t a, coord_t b) {
 
 bool samePerson(coord_t a, Person b) {
   if (norm_pixels[(a)] < CONFIDENCE_THRESHOLD) return false;
-  return diffFromPerson(a, b) < maxTempDiffForPerson(b);
+  float mtdPerson = b.max_allowed_temp_drift();
+  float mtdPoint = maxTempDiffForPoint(a);
+  return b.difference_from_point(a) < max(mtdPerson, mtdPoint);
 }
 
 uint8_t maxPossibleNeighbors(coord_t i) {
@@ -474,13 +501,13 @@ idx_t findClosestPerson(Person *arr, coord_t i, float maxDistance) {
   for (idx_t x=0; x<MAX_PEOPLE; x++) {
     Person p = arr[x];
     if (p.real()) {
-      float maxD = MAX_DISTANCE + (p.height+p.width+p.neighbors)/4.0 + (p.confidence/100.0);
+      float maxD = p.max_distance();
       maxDistance = min(maxDistance, maxD);
       float dist = euclidean_distance(p.past_position, i);
       if (dist > maxDistance) continue;
 
-      float tempDiff = diffFromPerson(i, p);
-      float maxT = maxTempDiffForPerson(p) * 0.6;
+      float tempDiff = p.difference_from_point(i);
+      float maxT = p.max_allowed_temp_drift() * 0.6;
       if (tempDiff > maxT) continue;
 
       float tempRatio = tempDiff/maxT;
@@ -1058,7 +1085,7 @@ bool remember_person(Person *arr, coord_t point, uint8_t &h, coord_t &sp, uint8_
     sp = p.starting_position;
     h = min(p.history, MIN_HISTORY);
 
-    fint1_t tempDrift = floatToFint1(diffFromPerson(point, p));
+    fint1_t tempDrift = floatToFint1(p.difference_from_point(point));
     md = max(tempDrift, p.max_temp_drift);
 
     uint8_t axisJump = max_axis_jump(p.past_position, point);
@@ -1158,7 +1185,8 @@ bool processSensor() {
 
     idx_t min_index = UNDEF_INDEX;
     float min_score = 100;
-    float maxT = maxTempDiffForPerson(p);
+    float maxT = p.max_allowed_temp_drift();
+    float maxD2 = p.max_distance();
 
     // pair this person with a point in current frame
     for (idx_t j=0; j<total_masses; j++) {
@@ -1166,7 +1194,6 @@ bool processSensor() {
       uint8_t w = calcWidth(points[j]);
       uint8_t n = neighborsCount(points[j]);
       float maxD = MAX_DISTANCE + ((h + w + n)/4.0) + (norm_pixels[points[j]]/100.0);
-      float maxD2 = MAX_DISTANCE + (p.height+p.width+p.neighbors)/4.0 + (p.confidence/100.0);
       maxD = min(maxD, maxD2); // choose smaller range of 2 points as max range
       maxD = min(maxD, 6.0);   // don't let the D grow too big
 
@@ -1174,10 +1201,12 @@ bool processSensor() {
       if (d > maxD) continue;
 
       // can't shift more than 2-5º at once
-      float tempDiff = diffFromPerson(points[j], p);
-      if (tempDiff > maxT) continue;
+      float tempDiff = p.difference_from_point(points[j]);
+      float maxTPoint = maxTempDiffForPoint(points[j]);
+      float maxTfrd = max(maxT, maxTPoint);
+      if (tempDiff > maxTfrd) continue;
 
-      float score = sq(d/maxD) + sq(tempDiff/maxT);
+      float score = sq(d/maxD) + sq(tempDiff/maxTfrd);
       if (!p.crossed || pointOnSmallBorder(p.starting_position)) {
         score -= (0.02*((float)n));
       }
@@ -1185,7 +1214,7 @@ bool processSensor() {
       if (score > 1.8) continue; // distance is high AND temp diff is high AND conf is low
 
       if (score <= (min_score - 0.05) || (score <= (min_score + 0.05) &&
-            tempDiff < diffFromPerson(points[min_index], p))) {
+            tempDiff < p.difference_from_point(points[min_index]))) {
         // either score is less than min score, or if it's similar,
         // choose the point with more similar raw temp
         min_score = score;
@@ -1215,14 +1244,13 @@ bool processSensor() {
           score = (0.03*((float)p.neighbors));
 
           // prefer people with more similar temps
-          float tempDiff = diffFromPerson(points[i], p);
-          float maxT = maxTempDiffForPerson(p);
+          float tempDiff = p.difference_from_point(points[i]);
+          float maxT = p.max_allowed_temp_drift();
           score -= sq(tempDiff/maxT);
 
           // prefer people who didn't take crazy leaps to get here
           float d = euclidean_distance(p.past_position, points[i]);
-          float maxD = MAX_DISTANCE + ((p.height + p.width + p.neighbors)/4.0) +
-                          (p.confidence/100.0);
+          float maxD = p.max_distance();
           score -= sq(d/maxD);
 
           // prefer people who have been around longer
@@ -1325,7 +1353,7 @@ bool processSensor() {
             p.past_position = points[i];
           }
           if (p.count) {
-            fint1_t td = floatToFint1(diffFromPerson(points[i], p));
+            fint1_t td = floatToFint1(p.difference_from_point(points[i]));
             p.max_temp_drift = max(p.max_temp_drift, td);
           }
           p.confidence = norm_pixels[(points[i])];
