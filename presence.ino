@@ -106,7 +106,10 @@ void setup() {
   initialize();
 }
 
-void loop() {
+void checkForUpdates() {
   if (radio.receiveDone()) CheckForWirelessHEX(radio, flash, false);
+}
+
+void loop() {
   loop_frd();
 }
