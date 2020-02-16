@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.2.14"
+#define FIRMWARE_VERSION        "V20.2.15"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -769,18 +769,17 @@ uint8_t findCurrentPoints() {
   // adjust sorted pixels based on position
   coord_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
   int8_t neighbors_cache[AMG88xx_PIXEL_ARRAY_SIZE];
-  float fgThreshold = min(global_variance, 0.9)*1.5;
   for (uint8_t z=0; z<active_pixel_count; z++) {
     coord_t i = ordered_indexes_temp[z];
     neighbors_cache[i] = -1;
     bool added = false;
     float fgd = fgDiff(i);
-    if (fgd > fgThreshold && bgDiff(i) > 0.8) {
+//    if (fgd > 0.5 && bgDiff(i) > 0.5) {
       float mt = maxTempDiffForFgd(fgd);
       for (uint8_t j=0; j<z; j++) {
         coord_t oj = sibling_indexes[j] == UNDEF_POINT ? ordered_indexes[j] :
                         sibling_indexes[j];
-        if (diffFromPoint(oj, i) < 0.7) {
+        if (diffFromPoint(oj, i) < min(fgd-0.1, 0.7)) {
           int8_t nci = neighbors_cache[i];
           if (nci < 0) {
             nci = neighborsCount(i, mt, norm_pixels);
@@ -842,7 +841,7 @@ uint8_t findCurrentPoints() {
           }
         }
       }
-    }
+//    }
     if (!added) {
       // append i to end of array
       ordered_indexes[z] = i;
@@ -864,16 +863,16 @@ uint8_t findCurrentPoints() {
     bool addable = total_masses < MAX_PEOPLE && bin_clusters[bidx] <= 3;
     // check if point is too weak to consider for a peak
     float fgD = addable ? fgDiff(current_point) : 0;
-    if (addable && (fgD < fgThreshold || bgDiff(current_point) < 0.8)) {
-      addable = false;
-    }
+//    if (addable && (fgD < 0.8 || bgDiff(current_point) < 0.5)) {
+//      addable = false;
+//    }
 
-    if (addable) {
+    if (addable && (bidx < 2 || bidx > 7)) {
       float fgVal = bidx < 5 ? maxVal : minVal;
       float fgmt1 = abs(fgVal - cavg1);
       float fgmt2 = abs(fgVal - cavg2);
       fgmt1 = min(fgmt1, fgmt2);
-      if (abs(fgmt1 - fgD) < 0.5) addable = false;
+      if (abs(fgmt1 - fgD) < 0.2) addable = false;
     }
 
     // check if point is too close to existing cluster
@@ -934,10 +933,10 @@ uint8_t findCurrentPoints() {
     // check if point is too small/large to be a valid person
     if (addable) {
       // determine how many points we want to allow in this blob from parent bucket
-      uint8_t maxSize = ((uint8_t)fgD) < 1 ? 5 : (fgD < 1.5 ? 7 : 10);
+      uint8_t maxSize = (((uint8_t)fgD) < 1 ? 6 : 10) + ((uint8_t)(bucketWidth + 0.5));
       // determine how many of parent bucket points need to be in this blob to make it valid
-      float minSizeRatio = 0.3 - (min(fgD, 2)/10.0) - (bucketWidth/10.0);
-      minSizeRatio = max(minSizeRatio, 0.05);
+      float minSizeRatio = 0.3 - (fgD/10.0) - (bucketWidth/5.0);
+      minSizeRatio = max(minSizeRatio, 0.09);
       if (bucketPointsInCluster <= maxSize &&
             ((float)bucketPointsInCluster)/((float)bin_counts[bidx]) > minSizeRatio) {
         picked_points[total_masses] = current_point;
@@ -967,9 +966,9 @@ uint8_t findCurrentPoints() {
 
   #ifdef PRINT_RAW_DATA
     if (final_total_masses >= 0) {
-      SERIAL_PRINT(maxVal);
+      SERIAL_PRINT(cavg1);
       SERIAL_PRINT(F(", "));
-      SERIAL_PRINT(minVal);
+      SERIAL_PRINT(cavg2);
       SERIAL_PRINT(F(", "));
       SERIAL_PRINTLN(bucketWidth);
       for (uint8_t i=0; i<NUM_BUCKETS; i++) {
