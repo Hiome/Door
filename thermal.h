@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.2.15"
+#define FIRMWARE_VERSION        "V20.2.17"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -44,6 +44,18 @@ float global_variance = 0;
 float cavg1 = 0;
 float cavg2 = 0;
 
+#ifdef PRINT_RAW_DATA
+
+// Replace above progmem with following functions to save 146 bytes of storage space
+axis_t xCoord(coord_t p) {
+  return (p % GRID_EXTENT) + 1;
+}
+axis_t yCoord(coord_t p) {
+  return (p/GRID_EXTENT) + 1;
+}
+
+#else
+
 // store in-memory so we don't have to do math every time
 const axis_t xcoordinates[AMG88xx_PIXEL_ARRAY_SIZE] PROGMEM = {
   1,  2,  3,  4,  5,  6,  7,  8,
@@ -68,6 +80,8 @@ const axis_t ycoordinates[AMG88xx_PIXEL_ARRAY_SIZE] PROGMEM = {
 
 #define xCoord(p) ( (axis_t)pgm_read_byte_near(xcoordinates + (p)) )
 #define yCoord(p) ( (axis_t)pgm_read_byte_near(ycoordinates + (p)) )
+
+#endif
 
 // check if point is on the top or bottom edges
 // xxxxxxxx
@@ -249,8 +263,8 @@ typedef struct {
   fint1_t   max_temp_drift;       //:6 0-60
   uint16_t  count;
 
-  uint8_t   history           :4; // 1-10 (could be 1-7)
-  uint8_t   neighbors         :4; // 0-8
+  uint8_t   history;           //:4; // 1-10 (could be 1-7)
+  uint8_t   neighbors;         //:4; // 0-8
 
   uint8_t   height            :3; // 0-7
   uint8_t   forgotten_count   :2; // 0-2
@@ -469,6 +483,60 @@ uint8_t neighborsCount(coord_t i,float mt,uint8_t (&norm_pixels)[AMG88xx_PIXEL_A
   return nc;
 }
 
+bool compareNeighbor(coord_t i, coord_t x, float mt, float &minDiff, float &minAbyssDiff,
+                      int8_t &sign, uint8_t (&norm_pixels)[AMG88xx_PIXEL_ARRAY_SIZE]) {
+  float d = raw_pixels[(i)] - raw_pixels[(x)];
+  float ad = abs(d);
+  if (ad > 5) return true;
+
+  if (norm_pixels[(x)] > CONFIDENCE_THRESHOLD && ad < mt) {
+    // registered neighbor, we good
+    minDiff = max(minDiff, ad);
+  } else {
+    if (sign == 0) {
+      if (d < -0.5) sign = -1;
+      else if (d > 0.5) sign = 1;
+    } else if ((sign < 0 && d > 0.5) || (sign > 0 && d < -0.5)) {
+      return false;
+    }
+
+    minAbyssDiff = min(minAbyssDiff, ad);
+  }
+
+  // good if abyss is further away than closest known neighbor
+  return minAbyssDiff + 0.25 > minDiff;
+}
+
+#define CHECK_NEIGHBOR(x) ( compareNeighbor(i,(x),mt,minDiff,minAbyssDiff,sign,norm_pixels) )
+
+bool compareDifferentials(coord_t i, float mt,
+                            uint8_t (&norm_pixels)[AMG88xx_PIXEL_ARRAY_SIZE]) {
+  float minDiff = max(0.2, mt*0.3);
+  float minAbyssDiff = 6;
+  int8_t sign = 0;
+  if (i >= GRID_EXTENT) { // not top row
+    // top
+    if (!CHECK_NEIGHBOR(i-GRID_EXTENT)) return false;
+    // top left
+    if (NOT_AXIS(i) > 1 && !CHECK_NEIGHBOR(i-(GRID_EXTENT+1))) return false;
+    // top right
+    if (NOT_AXIS(i) < GRID_EXTENT && !CHECK_NEIGHBOR(i-(GRID_EXTENT-1))) return false;
+  }
+  if (i < GRID_EXTENT*7) { // not bottom row
+    // bottom
+    if (!CHECK_NEIGHBOR(i + GRID_EXTENT)) return false;
+    // bottom left
+    if (NOT_AXIS(i) > 1 && !CHECK_NEIGHBOR(i+(GRID_EXTENT-1))) return false;
+    // bottom right
+    if (NOT_AXIS(i) < GRID_EXTENT && !CHECK_NEIGHBOR(i+(GRID_EXTENT+1))) return false;
+  }
+  // left
+  if (NOT_AXIS(i) > 1 && !CHECK_NEIGHBOR(i-1)) return false;
+  // right
+  if (NOT_AXIS(i) < GRID_EXTENT && !CHECK_NEIGHBOR(i+1)) return false;
+  return true;
+}
+
 uint8_t calcHeight(coord_t i, uint8_t (&norm_pixels)[AMG88xx_PIXEL_ARRAY_SIZE]) {
   uint8_t height = 0;
   float mt = maxTempDiffForPoint(i);
@@ -546,37 +614,84 @@ void clearPointsAfterDoorClose() {
   }
 }
 
-float trimMean(uint8_t side) {
-  float sum = 0;
-  float sq_sum = 0;
-  uint8_t cnt = 0;
+uint8_t bucketNum(float r, float width, float minVal, float maxVal) {
+  if (r <= minVal + 0.1) return 0;
+  if (r >= maxVal - 0.1) return NUM_BUCKETS-1;
+  return (uint8_t)((r - minVal)/width);
+}
 
+float trimMean(uint8_t side) {
+  float minVal = MAX_TEMP;
+  float maxVal = MIN_TEMP;
   for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
     if (((uint8_t)raw_pixels[i]) < MIN_TEMP || ((uint8_t)raw_pixels[i]) > MAX_TEMP) continue;
+    minVal = min(minVal, raw_pixels[i]);
+    maxVal = max(maxVal, raw_pixels[i]);
+  }
+
+  uint8_t bin_counts[NUM_BUCKETS] = { 0 };
+  float bucketWidth = (maxVal - minVal)/NUM_BUCKETS;
+  for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
+    uint8_t bidx = bucketNum(raw_pixels[i], bucketWidth, minVal, maxVal);
+    bin_counts[bidx]++;
+  }
+
+  uint8_t maxBucketCount = 3;
+  uint8_t bucketStart = 0;
+  uint8_t bucketEnd = 0;
+  for (uint8_t i=0; i < NUM_BUCKETS; i++) {
+    if (bin_counts[i] == 0 && i == (bucketEnd + 1)) {
+      bucketEnd = i;
+    } else if (bin_counts[i] > maxBucketCount + 3) {
+      maxBucketCount = bin_counts[i];
+      bucketStart = i;
+      bucketEnd = i;
+    } else if (bin_counts[i] >= maxBucketCount - 3) {
+      if (i == (bucketEnd + 1)) {
+        bucketEnd = i;
+        maxBucketCount = max(bin_counts[i], maxBucketCount);
+      } else if (bin_counts[i] > maxBucketCount) {
+        maxBucketCount = bin_counts[i];
+        bucketStart = i;
+        bucketEnd = i;
+      } else if (bin_counts[i] == maxBucketCount) {
+        bucketStart = 10;
+      }
+    }
+  }
+
+//  for (uint8_t i=0; i<NUM_BUCKETS; i++) {
+//    SERIAL_PRINT(i);
+//    SERIAL_PRINT(F(" ("));
+//    SERIAL_PRINT((minVal + i*bucketWidth));
+//    SERIAL_PRINT(F("-"));
+//    SERIAL_PRINT((minVal + (i+1)*bucketWidth));
+//    SERIAL_PRINT(F("): "));
+//    SERIAL_PRINTLN(bin_counts[i]);
+//  }
+
+//  float variance = (sq_sum - (sq(sum)/((float)cnt)))/((float)cnt);
+//  variance = sqrt(abs(variance));
+  // TODO delete me, variance isn't used anymore
+  global_variance = max(global_variance, bucketWidth);
+
+  if (bucketStart < 10 && maxBucketCount > 6) {
+    maxVal = minVal + (bucketEnd+1)*bucketWidth + 0.1;
+    minVal = minVal + bucketStart*bucketWidth - 0.1;
+  }
+
+  float sum = 0;
+  uint8_t cnt = 0;
+  for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
+    if (raw_pixels[i] < minVal || raw_pixels[i] > maxVal) continue;
     sum += raw_pixels[i];
-    sq_sum += sq(raw_pixels[i]);
     cnt++;
   }
 
   if (!cnt) return 0;
 
-  float variance = (sq_sum - (sq(sum)/((float)cnt)))/((float)cnt);
-  variance = sqrt(abs(variance));
-  global_variance = max(global_variance, variance);
-
-  float mean = sum/((float)cnt);
-  float lowerBound = mean - variance;
-  float upperBound = mean + variance;
-  float cavg = 0.0;
-  uint8_t total = 0;
-  for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
-    if (raw_pixels[i] > lowerBound && raw_pixels[i] < upperBound) {
-      cavg += raw_pixels[i];
-      total++;
-    }
-  }
-
-  return total ? (cavg/(float)total) : mean;
+//  SERIAL_PRINTLN(sum/((float)cnt));
+  return sum/((float)cnt);
 }
 
 // calculate foreground gradient scale
@@ -712,15 +827,10 @@ uint8_t findKnownNeighbors(coord_t (&arr)[AMG88xx_PIXEL_ARRAY_SIZE], uint8_t arr
   return knownNeighbors;
 }
 
-uint8_t bucketNum(float r, float width, float minVal, float maxVal) {
-  if (r <= minVal + 0.1) return 0;
-  if (r >= maxVal - 0.1) return NUM_BUCKETS-1;
-  return (uint8_t)((r - minVal)/width);
-}
-
 uint8_t findCurrentPoints() {
   // sort pixels by confidence
   coord_t ordered_indexes_temp[AMG88xx_PIXEL_ARRAY_SIZE];
+  coord_t sibling_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
   uint8_t norm_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
   uint8_t active_pixel_count = 0;
   float minVal = MAX_TEMP;
@@ -729,6 +839,7 @@ uint8_t findCurrentPoints() {
     uint8_t bgm = calcBgm(i);
     uint8_t fgm = calcFgm(i);
     norm_pixels[i] = min(bgm, fgm);
+    sibling_indexes[i] = UNDEF_POINT;
 
     if (norm_pixels[i] > CONFIDENCE_THRESHOLD) {
       bool added = false;
@@ -757,13 +868,11 @@ uint8_t findCurrentPoints() {
   }
 
   // sort pixels into buckets
-  uint8_t bin_counts[NUM_BUCKETS] = { 0 };
   float bucketWidth = (maxVal - minVal)/NUM_BUCKETS;
-  coord_t sibling_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
+  uint8_t bin_counts[NUM_BUCKETS] = { 0 };
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     uint8_t bidx = bucketNum(raw_pixels[i], bucketWidth, minVal, maxVal);
     bin_counts[bidx]++;
-    sibling_indexes[i] = UNDEF_POINT;
   }
 
   // adjust sorted pixels based on position
@@ -774,12 +883,12 @@ uint8_t findCurrentPoints() {
     neighbors_cache[i] = -1;
     bool added = false;
     float fgd = fgDiff(i);
-//    if (fgd > 0.5 && bgDiff(i) > 0.5) {
+//    if (fgd > 0.7) {
       float mt = maxTempDiffForFgd(fgd);
       for (uint8_t j=0; j<z; j++) {
         coord_t oj = sibling_indexes[j] == UNDEF_POINT ? ordered_indexes[j] :
                         sibling_indexes[j];
-        if (diffFromPoint(oj, i) < min(fgd-0.1, 0.7)) {
+        if (diffFromPoint(oj, i) < 0.2) {
           int8_t nci = neighbors_cache[i];
           if (nci < 0) {
             nci = neighborsCount(i, mt, norm_pixels);
@@ -840,8 +949,8 @@ uint8_t findCurrentPoints() {
             break;
           }
         }
-      }
-//    }
+//      }
+    }
     if (!added) {
       // append i to end of array
       ordered_indexes[z] = i;
@@ -863,17 +972,17 @@ uint8_t findCurrentPoints() {
     bool addable = total_masses < MAX_PEOPLE && bin_clusters[bidx] <= 3;
     // check if point is too weak to consider for a peak
     float fgD = addable ? fgDiff(current_point) : 0;
-//    if (addable && (fgD < 0.8 || bgDiff(current_point) < 0.5)) {
-//      addable = false;
-//    }
-
-    if (addable && (bidx < 2 || bidx > 7)) {
-      float fgVal = bidx < 5 ? maxVal : minVal;
-      float fgmt1 = abs(fgVal - cavg1);
-      float fgmt2 = abs(fgVal - cavg2);
-      fgmt1 = min(fgmt1, fgmt2);
-      if (abs(fgmt1 - fgD) < 0.2) addable = false;
+    if (addable && fgD < 0.7) {
+      addable = false;
     }
+
+//    if (addable && (bidx < 2 || bidx > 7)) {
+//      float fgVal = bidx < 5 ? maxVal : minVal;
+//      float fgmt1 = abs(fgVal - cavg1);
+//      float fgmt2 = abs(fgVal - cavg2);
+//      fgmt1 = min(fgmt1, fgmt2);
+//      if (abs(fgmt1 - fgD) < 0.2) addable = false;
+//    }
 
     // check if point is too close to existing cluster
     if (addable) {
@@ -931,14 +1040,14 @@ uint8_t findCurrentPoints() {
     }
 
     // check if point is too small/large to be a valid person
-    if (addable) {
-      // determine how many points we want to allow in this blob from parent bucket
-      uint8_t maxSize = (((uint8_t)fgD) < 1 ? 6 : 10) + ((uint8_t)(bucketWidth + 0.5));
-      // determine how many of parent bucket points need to be in this blob to make it valid
-      float minSizeRatio = 0.3 - (fgD/10.0) - (bucketWidth/5.0);
-      minSizeRatio = max(minSizeRatio, 0.09);
-      if (bucketPointsInCluster <= maxSize &&
-            ((float)bucketPointsInCluster)/((float)bin_counts[bidx]) > minSizeRatio) {
+    if (addable && bucketPointsInCluster < 13 &&
+            ((float)bucketPointsInCluster)/((float)bin_counts[bidx]) > 0.13) {
+      float mt = maxTempDiffForFgd(fgD);
+      if (neighbors_cache[current_point] < 0) {
+        neighbors_cache[current_point] = neighborsCount(current_point, mt, norm_pixels);
+      }
+      if (neighbors_cache[current_point] >= 2 ||
+            compareDifferentials(current_point, mt, norm_pixels)) {
         picked_points[total_masses] = current_point;
         total_masses++;
       }
@@ -952,11 +1061,10 @@ uint8_t findCurrentPoints() {
     uint8_t bidx = bucketNum(raw_pixels[idx],bucketWidth,minVal,maxVal);
     if (bin_clusters[bidx] > 3) continue;
 
-    int8_t n = neighbors_cache[idx];
     PossiblePerson pp = {
       .current_position=idx,
       .confidence=norm_pixels[idx],
-      .neighbors=(n >= 0 ? n : neighborsCount(idx, maxTempDiffForPoint(idx), norm_pixels)),
+      .neighbors=neighbors_cache[idx],
       .height=calcHeight(idx, norm_pixels),
       .width=calcWidth(idx, norm_pixels)
     };
@@ -970,16 +1078,23 @@ uint8_t findCurrentPoints() {
       SERIAL_PRINT(F(", "));
       SERIAL_PRINT(cavg2);
       SERIAL_PRINT(F(", "));
+      SERIAL_PRINT(millis());
+      SERIAL_PRINT(F(", "));
       SERIAL_PRINTLN(bucketWidth);
-      for (uint8_t i=0; i<NUM_BUCKETS; i++) {
-        SERIAL_PRINT(i);
-        SERIAL_PRINT(F(" ("));
-        SERIAL_PRINT((minVal + i*bucketWidth));
-        SERIAL_PRINT(F("-"));
-        SERIAL_PRINT((minVal + (i+1)*bucketWidth));
-        SERIAL_PRINT(F("): "));
-        SERIAL_PRINTLN(bin_counts[i]);
-      }
+//      uint8_t bin_counts[NUM_BUCKETS] = { 0 };
+//      for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+//        uint8_t bidx = bucketNum(raw_pixels[i], bucketWidth, minVal, maxVal);
+//        bin_counts[bidx]++;
+//      }
+//      for (uint8_t i=0; i<NUM_BUCKETS; i++) {
+//        SERIAL_PRINT(i);
+//        SERIAL_PRINT(F(" ("));
+//        SERIAL_PRINT((minVal + i*bucketWidth));
+//        SERIAL_PRINT(F("-"));
+//        SERIAL_PRINT((minVal + (i+1)*bucketWidth));
+//        SERIAL_PRINT(F("): "));
+//        SERIAL_PRINTLN(bin_counts[i]);
+//      }
     }
   #endif
 
@@ -1022,7 +1137,7 @@ idx_t findClosestPerson(Person (&arr)[MAX_PEOPLE], coord_t i, float maxDistance)
     Person p = arr[x];
     if (p.real()) {
       float maxD = p.max_distance();
-      maxDistance = min(maxDistance, maxD);
+      maxDistance = max(maxDistance, maxD);
       float dist = euclidean_distance(p.past_position, i);
       if (dist > maxDistance) continue;
 
@@ -1160,7 +1275,7 @@ bool processSensor() {
     for (idx_t j=0; j<total_masses; j++) {
       PossiblePerson pp = points[j];
       float maxD = pp.max_distance();
-      maxD = min(maxD, maxD2); // choose smaller range of 2 points as max range
+      maxD = max(maxD, maxD2); // choose smaller range of 2 points as max range
       maxD = min(maxD, 6.0);   // don't let the D grow too big
 
       float d = euclidean_distance(p.past_position, pp.current_position);
@@ -1172,7 +1287,7 @@ bool processSensor() {
       float maxTfrd = max(maxT, maxTPoint);
       if (tempDiff > maxTfrd) continue;
 
-      float score = sq(d/maxD) + sq(tempDiff/maxTfrd);
+      float score = sq(d/maxD) + sq(max(tempDiff, 1)/maxTfrd);
       if (!p.crossed || pointOnSmallBorder(p.starting_position)) {
         score -= (0.02*((float)pp.neighbors));
       }
@@ -1213,6 +1328,7 @@ bool processSensor() {
 
           // prefer people with more similar temps
           float tempDiff = p.difference_from_point(points[i].current_position);
+          tempDiff = max(tempDiff, 1);
           float maxT2 = p.max_allowed_temp_drift();
           maxT2 = max(maxT, maxT2);
           score -= sq(tempDiff/maxT2);
@@ -1220,7 +1336,7 @@ bool processSensor() {
           // prefer people who didn't take crazy leaps to get here
           float d = euclidean_distance(p.past_position, points[i].current_position);
           float maxD2 = p.max_distance();
-          maxD2 = min(maxD, maxD2);
+          maxD2 = max(maxD, maxD2);
           score -= sq(d/maxD2);
 
           // prefer people who have been around longer
