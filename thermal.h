@@ -483,13 +483,10 @@ uint8_t neighborsCount(coord_t i,float mt,uint8_t (&norm_pixels)[AMG88xx_PIXEL_A
   return nc;
 }
 
-bool testNeighbor(coord_t i, coord_t x, float mt, float &minDiff, float &minAbyssDiff,
-                int8_t &sign, uint8_t &c, uint8_t &ct,
-                uint8_t (&norm_pixels)[AMG88xx_PIXEL_ARRAY_SIZE]) {
+bool compareNeighbor(coord_t i, coord_t x, float mt, float &minDiff, float &minAbyssDiff,
+                int8_t &sign, uint8_t &c, uint8_t (&norm_pixels)[AMG88xx_PIXEL_ARRAY_SIZE]) {
   float d = raw_pixels[(i)] - raw_pixels[(x)];
   float ad = abs(d);
-  ct++;
-
   if (ad > 5) return true;
 
   if (norm_pixels[(x)] > CONFIDENCE_THRESHOLD && ad < mt) {
@@ -512,7 +509,7 @@ bool testNeighbor(coord_t i, coord_t x, float mt, float &minDiff, float &minAbys
   return minAbyssDiff + 0.25 > minDiff;
 }
 
-#define CHECK_NEIGHBOR(x) (testNeighbor(i,(x),mt,minDiff,minAbyssDiff,sign,c,ct,norm_pixels))
+#define CHECK_NEIGHBOR(x) (compareNeighbor(i,(x),mt,minDiff,minAbyssDiff,sign,c,norm_pixels))
 
 bool compareDifferentials(coord_t i, float mt,
                             uint8_t (&norm_pixels)[AMG88xx_PIXEL_ARRAY_SIZE]) {
@@ -520,7 +517,6 @@ bool compareDifferentials(coord_t i, float mt,
   float minAbyssDiff = 6;
   int8_t sign = 0;
   uint8_t c = 0;
-  uint8_t ct = 0;
   if (i >= GRID_EXTENT) { // not top row
     // top
     if (!CHECK_NEIGHBOR(i-GRID_EXTENT)) return false;
@@ -542,7 +538,7 @@ bool compareDifferentials(coord_t i, float mt,
   // right
   if (NOT_AXIS(i) < GRID_EXTENT && !CHECK_NEIGHBOR(i+1)) return false;
 
-  return c <= (ct/2);
+  return c < 3;
 }
 
 uint8_t calcHeight(coord_t i, uint8_t (&norm_pixels)[AMG88xx_PIXEL_ARRAY_SIZE]) {
