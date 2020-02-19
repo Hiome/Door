@@ -92,6 +92,10 @@ uint8_t publish(const char* msg, const char* meta, uint8_t retries) {
 #endif
 
 void setup() {
+  // setup LED's
+  DDRB  = DDRB  | B00000010;  // set pin 9 as output
+  PORTB = PORTB | B00000010;  // pull pin 9 high
+
   SERIAL_START;
 
   radio.initialize(RF69_915MHZ, NODEID, NETWORKID);
@@ -104,6 +108,8 @@ void setup() {
   if (flash.initialize()) flash.sleep();
 
   initialize();
+
+  PORTB = PORTB & B11111101;  // pull LED low
 }
 
 void checkForUpdates() {
