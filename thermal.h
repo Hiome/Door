@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.2.18"
+#define FIRMWARE_VERSION        "V20.2.19"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -495,9 +495,8 @@ bool compareNeighbor(coord_t i, coord_t x, float mt, float &minDiff, float &minA
   } else {
     if (ad > 0.5) {
       if (sign == 0) {
-        if (d < -0.5) sign = -1;
-        else if (d > 0.5) sign = 1;
-      } else if ((sign < 0 && d > 0.5) || (sign > 0 && d < -0.5)) {
+        sign = d < 0 ? -1 : 1;
+      } else if ((sign < 0 && d > 0) || (sign > 0 && d < 0)) {
         return false;
       }
     } else c++;
@@ -511,12 +510,28 @@ bool compareNeighbor(coord_t i, coord_t x, float mt, float &minDiff, float &minA
 
 #define CHECK_NEIGHBOR(x) (compareNeighbor(i,(x),mt,minDiff,minAbyssDiff,sign,c,norm_pixels))
 
+// it's easiest to explain this logic in terms of fascism. Buckle up!
+// it's 1940 and you live at coordinate i in nazi germany.
+// you have 2 kinds of neighbors: nazis and jews. But which are you? You claim to be a nazi.
+// The other nazis are recognized as neighboring points. They are a similar temperature.
+// The jews are too different from you to be considered part of you.
 bool compareDifferentials(coord_t i, float mt,
                             uint8_t (&norm_pixels)[AMG88xx_PIXEL_ARRAY_SIZE]) {
+  // this is the max difference between you and a "fellow" nazi. You want this to be as
+  // small as possible to look more like a nazi. if a jew looks more similar to you than
+  // the nazis, there's a good chance you're actually a jew in disguise.
   float minDiff = max(0.2, mt*0.3);
+  // this is the min difference between you and the jew. You want this to be as large as
+  // possible to distance yourself from the jews. If this number becomes less than the
+  // above minDiff, you're in trouble.
   float minAbyssDiff = 6;
+  // you should be be more extreme than all the jews. If there are jews on both sides of
+  // you, you're probably a jew too.
   int8_t sign = 0;
+  // keep count of how many jews look like you. If more than 2, you're probably in a family
+  // of jews.
   uint8_t c = 0;
+
   if (i >= GRID_EXTENT) { // not top row
     // top
     if (!CHECK_NEIGHBOR(i-GRID_EXTENT)) return false;
@@ -874,9 +889,11 @@ uint8_t findCurrentPoints() {
   // sort pixels into buckets
   float bucketWidth = (maxVal - minVal)/NUM_BUCKETS;
   uint8_t bin_counts[NUM_BUCKETS] = { 0 };
+  uint8_t lost_bin_counts[NUM_BUCKETS] = { 0 };
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     uint8_t bidx = bucketNum(raw_pixels[i], bucketWidth, minVal, maxVal);
     bin_counts[bidx]++;
+    if (norm_pixels[i] <= CONFIDENCE_THRESHOLD) lost_bin_counts[bidx]++;
   }
 
   // adjust sorted pixels based on position
@@ -973,7 +990,8 @@ uint8_t findCurrentPoints() {
     uint8_t bidx = bucketNum(raw_pixels[current_point], bucketWidth, minVal, maxVal);
     bin_clusters[bidx]++;
 
-    bool addable = total_masses < MAX_PEOPLE && bin_clusters[bidx] <= 3;
+    bool addable = total_masses < MAX_PEOPLE && bin_clusters[bidx] <= 3 &&
+                      ((float)lost_bin_counts[bidx])/((float)bin_counts[bidx]) < 0.55;
     // check if point is too weak to consider for a peak
     float fgD = addable ? fgDiff(current_point) : 0;
     if (addable && fgD < 0.7) {
@@ -1045,7 +1063,8 @@ uint8_t findCurrentPoints() {
 
     // check if point is too small/large to be a valid person
     if (addable && bucketPointsInCluster < 13 &&
-            ((float)bucketPointsInCluster)/((float)bin_counts[bidx]) > 0.13) {
+          ((float)bucketPointsInCluster)/((float)(bin_counts[bidx] + lost_bin_counts[bidx]))
+              > 0.13) {
       float mt = maxTempDiffForFgd(fgD);
       if (neighbors_cache[current_point] < 0) {
         neighbors_cache[current_point] = neighborsCount(current_point, mt, norm_pixels);
@@ -1082,8 +1101,8 @@ uint8_t findCurrentPoints() {
       SERIAL_PRINT(F(", "));
       SERIAL_PRINT(cavg2);
       SERIAL_PRINT(F(", "));
-      SERIAL_PRINT(millis());
-      SERIAL_PRINT(F(", "));
+//      SERIAL_PRINT(millis());
+//      SERIAL_PRINT(F(", "));
       SERIAL_PRINTLN(bucketWidth);
 //      uint8_t bin_counts[NUM_BUCKETS] = { 0 };
 //      for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
