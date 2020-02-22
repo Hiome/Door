@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.2.19"
+#define FIRMWARE_VERSION        "V20.2.22"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -40,7 +40,7 @@ uint8_t side1Point = 0;
 uint8_t side2Point = 0;
 float global_bgm = 0;
 float global_fgm = 0;
-float global_variance = 0;
+float global_variance = 0; // TODO delete me
 float cavg1 = 0;
 float cavg2 = 0;
 
@@ -226,7 +226,7 @@ uint8_t calcBgm(coord_t i) {
 }
 
 float maxTempDiffForFgd(float f) {
-  f *= 0.85;
+  f *= 0.7;
   return min(f, 5.0);
 }
 
@@ -249,7 +249,7 @@ typedef struct {
     return MAX_DISTANCE + (height+width+neighbors)/4.0 + (confidence/100.0);
   };
   float     max_allowed_temp_drift() {
-    return maxTempDiffForFgd(fgm());
+    return maxTempDiffForFgd(fgm())*1.2;
   };
 } PossiblePerson;
 
@@ -288,8 +288,8 @@ typedef struct {
     return MAX_DISTANCE + (height+width+neighbors)/4.0 + (confidence/100.0);
   };
   float     max_allowed_temp_drift() {
-    float maxT = maxTempDiffForFgd(fgm);;
-    return max(maxT, 2.0);
+    float maxT = maxTempDiffForFgd(fgm)*1.2;
+    return max(maxT, 1.0);
   };
   float     difference_from_point(coord_t a) {
     return abs(raw_pixels[(a)] - raw_temp);
@@ -481,108 +481,6 @@ uint8_t neighborsCount(coord_t i,float mt,uint8_t (&norm_pixels)[AMG88xx_PIXEL_A
   // right
   if (NOT_AXIS(i) < GRID_EXTENT && CHECK_POINT(i+1)) nc++;
   return nc;
-}
-
-bool compareNeighbor(coord_t i, coord_t x, float mt, float &minDiff, float &minAbyssDiff,
-                int8_t &sign, uint8_t &c, uint8_t (&norm_pixels)[AMG88xx_PIXEL_ARRAY_SIZE]) {
-  float d = raw_pixels[(i)] - raw_pixels[(x)];
-  float ad = abs(d);
-  if (ad > 5) return true;
-
-  if (norm_pixels[(x)] > CONFIDENCE_THRESHOLD && ad < mt) {
-    // registered neighbor, we good
-    minDiff = max(minDiff, ad);
-  } else {
-    if (ad > 0.5) {
-      if (sign == 0) {
-        sign = d < 0 ? -1 : 1;
-      } else if ((sign < 0 && d > 0) || (sign > 0 && d < 0)) {
-        return false;
-      }
-    } else c++;
-
-    minAbyssDiff = min(minAbyssDiff, ad);
-  }
-
-  // good if abyss is further away than closest known neighbor
-  return minAbyssDiff + 0.25 > minDiff;
-}
-
-#define CHECK_NEIGHBOR(x) (compareNeighbor(i,(x),mt,minDiff,minAbyssDiff,sign,c,norm_pixels))
-
-// it's easiest to explain this logic in terms of fascism. Buckle up!
-// it's 1940 and you live at coordinate i in nazi germany.
-// you have 2 kinds of neighbors: nazis and jews. But which are you? You claim to be a nazi.
-// The other nazis are recognized as neighboring points. They are a similar temperature.
-// The jews are too different from you to be considered part of you.
-bool compareDifferentials(coord_t i, float mt,
-                            uint8_t (&norm_pixels)[AMG88xx_PIXEL_ARRAY_SIZE]) {
-  // this is the max difference between you and a "fellow" nazi. You want this to be as
-  // small as possible to look more like a nazi. if a jew looks more similar to you than
-  // the nazis, there's a good chance you're actually a jew in disguise.
-  float minDiff = max(0.2, mt*0.3);
-  // this is the min difference between you and the jew. You want this to be as large as
-  // possible to distance yourself from the jews. If this number becomes less than the
-  // above minDiff, you're in trouble.
-  float minAbyssDiff = 6;
-  // you should be be more extreme than all the jews. If there are jews on both sides of
-  // you, you're probably a jew too.
-  int8_t sign = 0;
-  // keep count of how many jews look like you. If more than 2, you're probably in a family
-  // of jews.
-  uint8_t c = 0;
-
-  if (i >= GRID_EXTENT) { // not top row
-    // top
-    if (!CHECK_NEIGHBOR(i-GRID_EXTENT)) return false;
-    // top left
-    if (NOT_AXIS(i) > 1 && !CHECK_NEIGHBOR(i-(GRID_EXTENT+1))) return false;
-    // top right
-    if (NOT_AXIS(i) < GRID_EXTENT && !CHECK_NEIGHBOR(i-(GRID_EXTENT-1))) return false;
-  }
-  if (i < GRID_EXTENT*7) { // not bottom row
-    // bottom
-    if (!CHECK_NEIGHBOR(i + GRID_EXTENT)) return false;
-    // bottom left
-    if (NOT_AXIS(i) > 1 && !CHECK_NEIGHBOR(i+(GRID_EXTENT-1))) return false;
-    // bottom right
-    if (NOT_AXIS(i) < GRID_EXTENT && !CHECK_NEIGHBOR(i+(GRID_EXTENT+1))) return false;
-  }
-  // left
-  if (NOT_AXIS(i) > 1 && !CHECK_NEIGHBOR(i-1)) return false;
-  // right
-  if (NOT_AXIS(i) < GRID_EXTENT && !CHECK_NEIGHBOR(i+1)) return false;
-
-  return c < 3;
-}
-
-uint8_t calcHeight(coord_t i, uint8_t (&norm_pixels)[AMG88xx_PIXEL_ARRAY_SIZE]) {
-  uint8_t height = 0;
-  float mt = maxTempDiffForPoint(i);
-  for (coord_t x = i + GRID_EXTENT; x < AMG88xx_PIXEL_ARRAY_SIZE; x += GRID_EXTENT) {
-    if (CHECK_POINT(x)) height++;
-    else break;
-  }
-  for (int8_t x = ((int8_t)i) - ((int8_t)GRID_EXTENT); x >= 0; x -= ((int8_t)GRID_EXTENT)) {
-    if (CHECK_POINT(x)) height++;
-    else break;
-  }
-  return height;
-}
-
-uint8_t calcWidth(coord_t i, uint8_t (&norm_pixels)[AMG88xx_PIXEL_ARRAY_SIZE]) {
-  uint8_t width = 0;
-  uint8_t axis = AXIS(i);
-  float mt = maxTempDiffForPoint(i);
-  for (coord_t x = i+1; x < AMG88xx_PIXEL_ARRAY_SIZE && AXIS(x) == axis; x++) {
-    if (CHECK_POINT(x)) width++;
-    else break;
-  }
-  for (int8_t x = ((int8_t)i)-1; x >= 0 && AXIS(x) == axis; x--) {
-    if (CHECK_POINT(x)) width++;
-    else break;
-  }
-  return width;
 }
 
 void publishEvents() {
@@ -832,13 +730,13 @@ void updateBgAverage() {
 }
 
 // find how many of this points neighbors have already been counted
-uint8_t findKnownNeighbors(coord_t (&arr)[AMG88xx_PIXEL_ARRAY_SIZE], uint8_t arrSize,
-        coord_t p, float mt, coord_t &lastNeighbor) {
+uint8_t findKnownNeighbors(uint8_t (&clusters)[AMG88xx_PIXEL_ARRAY_SIZE], uint8_t c,
+        coord_t p, coord_t &lastNeighbor) {
   uint8_t knownNeighbors = 0;
-  for (uint8_t f=0; f<arrSize; f++) {
-    if (arr[f] == p) continue;
-    if (diffFromPoint(arr[f], p) < mt && ((uint8_t)euclidean_distance(arr[f], p)) == 1) {
-      lastNeighbor = arr[f];
+  for (coord_t f=0; f<AMG88xx_PIXEL_ARRAY_SIZE; f++) {
+    if (clusters[f] == c && ((uint8_t)euclidean_distance(f, p)) == 1 &&
+          diffFromPoint(f, p) < 5) {
+      lastNeighbor = f;
       knownNeighbors++;
       if (knownNeighbors > 1) return knownNeighbors;
     }
@@ -852,8 +750,6 @@ uint8_t findCurrentPoints() {
   coord_t sibling_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
   uint8_t norm_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
   uint8_t active_pixel_count = 0;
-  float minVal = MAX_TEMP;
-  float maxVal = MIN_TEMP;
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     uint8_t bgm = calcBgm(i);
     uint8_t fgm = calcFgm(i);
@@ -878,49 +774,23 @@ uint8_t findCurrentPoints() {
       }
       active_pixel_count++;
     }
-
-    if (((uint8_t)raw_pixels[i]) <= MIN_TEMP || ((uint8_t)raw_pixels[i]) >= MAX_TEMP) {
-      continue;
-    }
-    minVal = min(minVal, raw_pixels[i]);
-    maxVal = max(maxVal, raw_pixels[i]);
-  }
-
-  // sort pixels into buckets
-  float bucketWidth = (maxVal - minVal)/NUM_BUCKETS;
-  uint8_t bin_counts[NUM_BUCKETS] = { 0 };
-  uint8_t lost_bin_counts[NUM_BUCKETS] = { 0 };
-  for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    uint8_t bidx = bucketNum(raw_pixels[i], bucketWidth, minVal, maxVal);
-    bin_counts[bidx]++;
-    if (norm_pixels[i] <= CONFIDENCE_THRESHOLD) lost_bin_counts[bidx]++;
   }
 
   // adjust sorted pixels based on position
   coord_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
-  int8_t neighbors_cache[AMG88xx_PIXEL_ARRAY_SIZE];
   for (uint8_t z=0; z<active_pixel_count; z++) {
     coord_t i = ordered_indexes_temp[z];
-    neighbors_cache[i] = -1;
     bool added = false;
     float fgd = fgDiff(i);
 //    if (fgd > 0.7) {
       float mt = maxTempDiffForFgd(fgd);
+      uint8_t nci = neighborsCount(i, mt, norm_pixels);
       for (uint8_t j=0; j<z; j++) {
         coord_t oj = sibling_indexes[j] == UNDEF_POINT ? ordered_indexes[j] :
                         sibling_indexes[j];
-        if (diffFromPoint(oj, i) < 0.2) {
-          int8_t nci = neighbors_cache[i];
-          if (nci < 0) {
-            nci = neighborsCount(i, mt, norm_pixels);
-            neighbors_cache[i] = nci;
-          }
-          int8_t ncj = neighbors_cache[ordered_indexes[j]];
-          if (ncj < 0) {
-            float mt2 = maxTempDiffForPoint(ordered_indexes[j]);
-            ncj = neighborsCount(ordered_indexes[j], mt2, norm_pixels);
-            neighbors_cache[ordered_indexes[j]] = ncj;
-          }
+        if (norm_pixels[i] > norm_pixels[oj]/2 && diffFromPoint(oj, i) < min(fgd-0.1, 0.7)) {
+          float mt2 = maxTempDiffForPoint(ordered_indexes[j]);
+          uint8_t ncj = neighborsCount(ordered_indexes[j], mt2, norm_pixels);
           if (nci > (ncj + 1)) {
             // prefer the point that's more in middle of blob
             added = true;
@@ -959,6 +829,7 @@ uint8_t findCurrentPoints() {
   
             added = edge1 > edge2;
           }
+
           if (added) {
             // insert point i in front of j
             for (int8_t x=z; x>j; x--) {
@@ -970,49 +841,41 @@ uint8_t findCurrentPoints() {
             break;
           }
         }
-//      }
-    }
+      }
+//    }
     if (!added) {
       // append i to end of array
       ordered_indexes[z] = i;
     }
   }
 
-  // reorder based on blob boundaries
+  // DBSCAN algorithm will identify core points and label every point to a cluster number
   uint8_t sorted_size = 0;
   uint8_t total_masses = 0;
-  uint8_t bin_clusters[NUM_BUCKETS] = { 0 };
-  coord_t picked_points[MAX_PEOPLE];
+  // 0 means no cluster, first cluster starts at 1
+  uint8_t clusterNum[AMG88xx_PIXEL_ARRAY_SIZE] = { 0 };
+  uint8_t clusterIdx = 0;
   for (uint8_t y=0; y<active_pixel_count; y++) {
     coord_t current_point = ordered_indexes[y];
     if (current_point == UNDEF_POINT) continue;
 
-    uint8_t bidx = bucketNum(raw_pixels[current_point], bucketWidth, minVal, maxVal);
-    bin_clusters[bidx]++;
+    clusterIdx++;
+    clusterNum[current_point] = clusterIdx;
 
-    bool addable = total_masses < MAX_PEOPLE && bin_clusters[bidx] <= 3 &&
-                      ((float)lost_bin_counts[bidx])/((float)bin_counts[bidx]) < 0.55;
-    // check if point is too weak to consider for a peak
-    float fgD = addable ? fgDiff(current_point) : 0;
-    if (addable && fgD < 0.7) {
-      addable = false;
-    }
-
-//    if (addable && (bidx < 2 || bidx > 7)) {
-//      float fgVal = bidx < 5 ? maxVal : minVal;
-//      float fgmt1 = abs(fgVal - cavg1);
-//      float fgmt2 = abs(fgVal - cavg2);
-//      fgmt1 = min(fgmt1, fgmt2);
-//      if (abs(fgmt1 - fgD) < 0.2) addable = false;
-//    }
-
-    // check if point is too close to existing cluster
+    bool addable = true;
     if (addable) {
-      for (idx_t x=0; x<total_masses; x++) {
-        if ((uint8_t)euclidean_distance(picked_points[x], current_point) == 1 &&
-              diffFromPoint(picked_points[x], current_point) < 5) {
+      coord_t lastFoundNeighbor = UNDEF_POINT;
+      uint8_t knownNeighbors = findKnownNeighbors(clusterNum, clusterIdx,
+                                                    current_point, lastFoundNeighbor);
+      if (knownNeighbors > 0) {
+        // this is a peak that is touching another blob, don't let it peak
+        if (knownNeighbors > 1) {
           addable = false;
-          break;
+        } else { // knownNeighbors == 1
+          coord_t lFN2 = UNDEF_POINT;
+          if (findKnownNeighbors(clusterNum, clusterIdx, lastFoundNeighbor, lFN2) != 1) {
+            addable = false;
+          }
         }
       }
     }
@@ -1020,108 +883,72 @@ uint8_t findCurrentPoints() {
     ordered_indexes_temp[sorted_size] = current_point;
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
-    uint8_t bucketPointsInCluster = 1;
+    float mt = maxTempDiffForPoint(current_point);
 
     // scan all points added after current_point, since they must be part of same blob
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
-      coord_t blobPoint = ordered_indexes_temp[x];
-      coord_t lastFoundNeighbor = UNDEF_POINT;
-      float mt = maxTempDiffForPoint(blobPoint);
-      uint8_t knownNeighbors = findKnownNeighbors(ordered_indexes_temp, sorted_size,
-          blobPoint, mt, lastFoundNeighbor);
-
-      if (addable && knownNeighbors > 0 && blobPoint == current_point) {
-        // this is a peak that is touching another blob, don't let it peak
-        if (knownNeighbors > 1) {
-          addable = false;
-        } else { // knownNeighbors == 1
-          coord_t lFN2 = UNDEF_POINT;
-          float mt2 = maxTempDiffForPoint(lastFoundNeighbor);
-          if (findKnownNeighbors(ordered_indexes_temp, x, lastFoundNeighbor, mt2, lFN2) > 1){
-            addable = false;
-          }
-        }
-      }
-      if (knownNeighbors > 1 || blobPoint == current_point) {
-        // this is touching an existing blob from at least 2 points or is a peak,
-        // so find rest of blob
-        for (uint8_t k=y+1; k<active_pixel_count; k++) {
-          // scan all known points after current_point to find neighbors to point x
-          if (ordered_indexes[k] != UNDEF_POINT &&
-              diffFromPoint(ordered_indexes[k], blobPoint) < mt &&
-              ((uint8_t)euclidean_distance(ordered_indexes[k], blobPoint)) == 1) {
-            ordered_indexes_temp[sorted_size] = ordered_indexes[k];
-            sorted_size++;
-            if (bucketNum(raw_pixels[ordered_indexes[k]],bucketWidth,minVal,maxVal) == bidx){
-              bucketPointsInCluster++;
-            }
-            ordered_indexes[k] = UNDEF_POINT;
-          }
+      for (uint8_t k=y+1; k<active_pixel_count; k++) {
+        // scan all known points after current_point to find neighbors to point x
+        if (ordered_indexes[k] != UNDEF_POINT &&
+            diffFromPoint(ordered_indexes[k], current_point) < mt &&
+            ((uint8_t)euclidean_distance(ordered_indexes[k], ordered_indexes_temp[x]))==1) {
+          clusterNum[ordered_indexes[k]] = clusterIdx;
+          ordered_indexes_temp[sorted_size] = ordered_indexes[k];
+          sorted_size++;
+          ordered_indexes[k] = UNDEF_POINT;
         }
       }
     }
 
     // check if point is too small/large to be a valid person
-    if (addable && bucketPointsInCluster < 13 &&
-          ((float)bucketPointsInCluster)/((float)(bin_counts[bidx] + lost_bin_counts[bidx]))
-              > 0.13) {
-      float mt = maxTempDiffForFgd(fgD);
-      if (neighbors_cache[current_point] < 0) {
-        neighbors_cache[current_point] = neighborsCount(current_point, mt, norm_pixels);
+    if (addable) {
+      uint8_t noiseSize = 0;
+      uint8_t blobSize = 1;
+      axis_t minAxis = AXIS(current_point);
+      axis_t maxAxis = minAxis;
+      axis_t minNAxis = NOT_AXIS(current_point);
+      axis_t maxNAxis = minNAxis;
+      uint8_t neighbors = 0;
+      mt = constrain(mt, 0.51, 1.51);
+      for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
+        // if point is within 3 distance of core point, not in cluster, but could have been,
+        // then count it as noise
+        if (clusterNum[n] != clusterIdx &&
+              diffFromPoint(n, current_point) < mt &&
+              ((uint8_t)euclidean_distance(n, current_point)) < 3) {
+          noiseSize++;
+        } else if (clusterNum[n] == clusterIdx && n != current_point) {
+          blobSize++;
+          axis_t axisn = AXIS(n);
+          minAxis = min(minAxis, axisn);
+          maxAxis = max(maxAxis, axisn);
+          axis_t naxisn = NOT_AXIS(n);
+          minNAxis = min(minNAxis, naxisn);
+          maxNAxis = max(maxNAxis, naxisn);
+          if (((uint8_t)euclidean_distance(n, current_point)) == 1) neighbors++;
+        }
       }
-      if (neighbors_cache[current_point] >= 2 ||
-            compareDifferentials(current_point, mt, norm_pixels)) {
-        picked_points[total_masses] = current_point;
+
+      uint8_t height = maxAxis - minAxis;
+      uint8_t width = maxNAxis - minNAxis;
+      if (blobSize < ((height+1)*(width+1))/2) noiseSize = 100;
+
+      if (noiseSize < blobSize) {
+        PossiblePerson pp = {
+          .current_position=current_point,
+          .confidence=norm_pixels[current_point],
+          .neighbors=neighbors,
+          .height=height,
+          .width=width
+        };
+        points[total_masses] = pp;
         total_masses++;
+        if (total_masses == MAX_PEOPLE) break;
       }
     }
   }
 
-  // if points are from the same bucket, drop them
-  uint8_t final_total_masses = 0;
-  for (uint8_t i = 0; i < total_masses; i++) {
-    coord_t idx = picked_points[i];
-    uint8_t bidx = bucketNum(raw_pixels[idx],bucketWidth,minVal,maxVal);
-    if (bin_clusters[bidx] > 3) continue;
-
-    PossiblePerson pp = {
-      .current_position=idx,
-      .confidence=norm_pixels[idx],
-      .neighbors=neighbors_cache[idx],
-      .height=calcHeight(idx, norm_pixels),
-      .width=calcWidth(idx, norm_pixels)
-    };
-    points[final_total_masses] = pp;
-    final_total_masses++;
-  }
-
-  #ifdef PRINT_RAW_DATA
-    if (final_total_masses >= 0) {
-      SERIAL_PRINT(cavg1);
-      SERIAL_PRINT(F(", "));
-      SERIAL_PRINT(cavg2);
-      SERIAL_PRINT(F(", "));
-//      SERIAL_PRINT(millis());
-//      SERIAL_PRINT(F(", "));
-      SERIAL_PRINTLN(bucketWidth);
-//      uint8_t bin_counts[NUM_BUCKETS] = { 0 };
-//      for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-//        uint8_t bidx = bucketNum(raw_pixels[i], bucketWidth, minVal, maxVal);
-//        bin_counts[bidx]++;
-//      }
-//      for (uint8_t i=0; i<NUM_BUCKETS; i++) {
-//        SERIAL_PRINT(i);
-//        SERIAL_PRINT(F(" ("));
-//        SERIAL_PRINT((minVal + i*bucketWidth));
-//        SERIAL_PRINT(F("-"));
-//        SERIAL_PRINT((minVal + (i+1)*bucketWidth));
-//        SERIAL_PRINT(F("): "));
-//        SERIAL_PRINTLN(bin_counts[i]);
-//      }
-    }
-  #endif
-
-  return final_total_masses;
+  return total_masses;
 }
 
 void forget_person(idx_t idx, Person (&temp_forgotten_people)[MAX_PEOPLE],
@@ -1186,7 +1013,7 @@ bool remember_person(Person (&arr)[MAX_PEOPLE], coord_t point, uint8_t &h, coord
         uint8_t &mj, fint1_t &md, uint8_t &cross, bool &revert, uint16_t &c, uint8_t &fc,
         uint8_t height, uint8_t width, uint8_t neighbors, uint8_t conf) {
   float maxD = MAX_DISTANCE + (height+width+neighbors)/4.0 + (conf/100.0);
-  idx_t pi = findClosestPerson(arr, point, min(maxD, 5.0));
+  idx_t pi = findClosestPerson(arr, point, min(maxD, 4.0));
   if (pi != UNDEF_INDEX) {
     Person p = arr[pi];
 
@@ -1299,7 +1126,7 @@ bool processSensor() {
       PossiblePerson pp = points[j];
       float maxD = pp.max_distance();
       maxD = max(maxD, maxD2); // choose smaller range of 2 points as max range
-      maxD = min(maxD, 6.0);   // don't let the D grow too big
+      maxD = min(maxD, 5.0);   // don't let the D grow too big
 
       float d = euclidean_distance(p.past_position, pp.current_position);
       if (d > maxD) continue;
@@ -1628,6 +1455,9 @@ bool processSensor() {
       }
       SERIAL_PRINTLN();
 
+      SERIAL_PRINT(cavg1);
+      SERIAL_PRINT(F(", "));
+      SERIAL_PRINTLN(cavg2);
       SERIAL_PRINTLN(global_bgm);
       SERIAL_PRINTLN(global_fgm);
       SERIAL_PRINTLN(global_variance);
