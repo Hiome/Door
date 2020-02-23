@@ -446,40 +446,61 @@ const Person UNDEF_PERSON = {
   .fgm=0
 };
 
-uint8_t maxPossibleNeighbors(coord_t i) {
-  bool onTBEdge = pointOnEdge(i);
-  bool onLREdge = pointOnLREdge(i);
-  if (onTBEdge || onLREdge) {
-    if (onTBEdge && onLREdge) return 3;
-    return 5;
-  }
-  return 8;
-}
-
-#define CHECK_POINT(x) ( norm_pixels[(x)] > CONFIDENCE_THRESHOLD && diffFromPoint(x,i) < mt )
-
-uint8_t neighborsCount(coord_t i,float mt,uint8_t (&norm_pixels)[AMG88xx_PIXEL_ARRAY_SIZE]) {
+uint8_t loadNeighbors(coord_t i, coord_t (&nArray)[8]) {
   uint8_t nc = 0;
+
   if (i >= GRID_EXTENT) { // not top row
     // top
-    if (CHECK_POINT(i-GRID_EXTENT)) nc++;
+    nArray[nc] = i-GRID_EXTENT;
+    nc++;
     // top left
-    if (NOT_AXIS(i) > 1 && CHECK_POINT(i-(GRID_EXTENT+1))) nc++;
+    if (NOT_AXIS(i) > 1) {
+      nArray[nc] = i-(GRID_EXTENT+1);
+      nc++;
+    }
     // top right
-    if (NOT_AXIS(i) < GRID_EXTENT && CHECK_POINT(i-(GRID_EXTENT-1))) nc++;
+    if (NOT_AXIS(i) < GRID_EXTENT) {
+      nArray[nc] = i-(GRID_EXTENT-1);
+      nc++;
+    }
   }
   if (i < GRID_EXTENT*7) { // not bottom row
     // bottom
-    if (CHECK_POINT(i + GRID_EXTENT)) nc++;
+    nArray[nc] = i + GRID_EXTENT;
+    nc++;
     // bottom left
-    if (NOT_AXIS(i) > 1 && CHECK_POINT(i+(GRID_EXTENT-1))) nc++;
+    if (NOT_AXIS(i) > 1) {
+      nArray[nc] = i+(GRID_EXTENT-1);
+      nc++;
+    }
     // bottom right
-    if (NOT_AXIS(i) < GRID_EXTENT && CHECK_POINT(i+(GRID_EXTENT+1))) nc++;
+    if (NOT_AXIS(i) < GRID_EXTENT) {
+      nArray[nc] = i+(GRID_EXTENT+1);
+      nc++;
+    }
   }
   // left
-  if (NOT_AXIS(i) > 1 && CHECK_POINT(i-1)) nc++;
+  if (NOT_AXIS(i) > 1) {
+    nArray[nc] = i-1;
+    nc++;
+  }
   // right
-  if (NOT_AXIS(i) < GRID_EXTENT && CHECK_POINT(i+1)) nc++;
+  if (NOT_AXIS(i) < GRID_EXTENT) {
+    nArray[nc] = i+1;
+    nc++;
+  }
+
+  return nc;
+}
+
+uint8_t neighborsCount(coord_t i,float mt,uint8_t (&norm_pixels)[AMG88xx_PIXEL_ARRAY_SIZE]) {
+  uint8_t nc = 0;
+  coord_t neighbors[8];
+  uint8_t neighborsCount = loadNeighbors(i, neighbors);
+  for (uint8_t x = 0; x < neighborsCount; x++) {
+    coord_t n = neighbors[x];
+    if (norm_pixels[n] > CONFIDENCE_THRESHOLD && diffFromPoint(n, i) < mt) nc++;
+  }
   return nc;
 }
 
@@ -737,17 +758,26 @@ bool isNeighborly(coord_t a, coord_t b) {
 }
 
 // find how many of this points neighbors have already been counted
-uint8_t findKnownNeighbors(uint8_t (&clusters)[AMG88xx_PIXEL_ARRAY_SIZE], uint8_t c,
+uint8_t findKnownNeighbors(uint8_t (&clusters)[AMG88xx_PIXEL_ARRAY_SIZE],
         coord_t p, coord_t &lastNeighbor) {
   uint8_t knownNeighbors = 0;
-  for (coord_t f=0; f<AMG88xx_PIXEL_ARRAY_SIZE; f++) {
-    if (clusters[f] > 0 && clusters[f] != c && isNeighborly(f,p) && diffFromPoint(f,p) < 5) {
-      lastNeighbor = f;
+  coord_t foundNeighbors[8];
+  coord_t neighbors[8];
+  uint8_t nc = loadNeighbors(p, neighbors);
+  for (uint8_t x = 0; x < nc; x++) {
+    coord_t n = neighbors[x];
+    if (clusters[n] > 0 && ((uint8_t)diffFromPoint(n,p)) < 5) {
+      lastNeighbor = n;
+      for (uint8_t i = 0; i < knownNeighbors; i++) {
+        if (clusters[foundNeighbors[i]] == clusters[n]) {
+          return 2;
+        }
+      }
+      foundNeighbors[knownNeighbors] = n;
       knownNeighbors++;
-      if (knownNeighbors > 1) return knownNeighbors;
     }
   }
-  return knownNeighbors;
+  return knownNeighbors ? 1 : 0;
 }
 
 uint8_t findCurrentPoints() {
@@ -865,42 +895,34 @@ uint8_t findCurrentPoints() {
     coord_t current_point = ordered_indexes[y];
     if (current_point == UNDEF_POINT) continue;
 
+    bool addable = true;
+    coord_t lastFoundNeighbor = UNDEF_POINT;
+    uint8_t knownNeighbors = findKnownNeighbors(clusterNum,current_point,lastFoundNeighbor);
+    // this is a peak that is touching another blob, don't let it peak
+    if (knownNeighbors > 1) {
+      addable = false;
+    } else if (knownNeighbors == 1) {
+      coord_t lFN2 = UNDEF_POINT;
+      if (findKnownNeighbors(clusterNum, lastFoundNeighbor, lFN2) != 1) {
+        addable = false;
+      }
+    }
+
     clusterIdx++;
     clusterNum[current_point] = clusterIdx;
     ordered_indexes_temp[sorted_size] = current_point;
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
-    float mt = maxTempDiffForPoint(current_point);
-    bool addable = true;
 
     // scan all points added after current_point, since they must be part of same blob
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
       coord_t blobPoint = ordered_indexes_temp[x];
-
-      if (addable) {
-        coord_t lastFoundNeighbor = UNDEF_POINT;
-        uint8_t knownNeighbors = findKnownNeighbors(clusterNum, clusterIdx,
-                                                      blobPoint, lastFoundNeighbor);
-        if (knownNeighbors > 0 && blobPoint == current_point) {
-          // this is a peak that is touching another blob, don't let it peak
-          if (knownNeighbors > 1) {
-            addable = false;
-          } else { // knownNeighbors == 1
-            coord_t lFN2 = UNDEF_POINT;
-            if (findKnownNeighbors(clusterNum, clusterIdx, lastFoundNeighbor, lFN2) != 1) {
-              addable = false;
-            }
-          }
-        } else if (knownNeighbors > 1) {
-          float mt2 = maxTempDiffForPoint(lastFoundNeighbor);
-          addable = diffFromPoint(lastFoundNeighbor, blobPoint) < max(mt, mt2);
-        }
-      }
+      float mtb = maxTempDiffForPoint(blobPoint);
 
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
         // scan all known points after current_point to find neighbors to point x
         if (ordered_indexes[k] != UNDEF_POINT &&
-            diffFromPoint(ordered_indexes[k], current_point) < mt &&
+            diffFromPoint(ordered_indexes[k], blobPoint) < mtb &&
             isNeighborly(ordered_indexes[k], blobPoint)) {
           clusterNum[ordered_indexes[k]] = clusterIdx;
           ordered_indexes_temp[sorted_size] = ordered_indexes[k];
@@ -913,21 +935,27 @@ uint8_t findCurrentPoints() {
     // check if point is too small/large to be a valid person
     if (addable) {
       uint8_t noiseSize = 0;
+      uint8_t coreBlobSize = 0;
       uint8_t blobSize = 1;
       axis_t minAxis = AXIS(current_point);
       axis_t maxAxis = minAxis;
       axis_t minNAxis = NOT_AXIS(current_point);
       axis_t maxNAxis = minNAxis;
       uint8_t neighbors = 0;
+      float mt = maxTempDiffForPoint(current_point);
       mt = constrain(mt, 0.51, 1.51);
       for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
         // if point is within 3 distance of core point, not in cluster, but could have been,
         // then count it as noise
-        if (clusterNum[n] != clusterIdx &&
-              diffFromPoint(n, current_point) < mt &&
-              ((uint8_t)euclidean_distance(n, current_point)) < 3) {
-          noiseSize++;
-        } else if (clusterNum[n] == clusterIdx && n != current_point) {
+        if (diffFromPoint(n, current_point) < mt &&
+            ((uint8_t)euclidean_distance(n, current_point)) < 3) {
+          if (clusterNum[n] == clusterIdx) {
+            coreBlobSize++;
+          } else {
+            noiseSize++;
+          }
+        }
+        if (clusterNum[n] == clusterIdx && n != current_point) {
           blobSize++;
           axis_t axisn = AXIS(n);
           minAxis = min(minAxis, axisn);
@@ -941,9 +969,11 @@ uint8_t findCurrentPoints() {
 
       uint8_t height = maxAxis - minAxis;
       uint8_t width = maxNAxis - minNAxis;
-      if (blobSize < ((height+1)*(width+1))/2) noiseSize = 100;
+      uint8_t dimension = max(height, width) + 1;
+      // ignore a blob that fills less than 1/3 of its bounding box
+      if (blobSize/sq(dimension) < 0.3) noiseSize = 100;
 
-      if (noiseSize < blobSize) {
+      if (noiseSize < coreBlobSize) {
         PossiblePerson pp = {
           .current_position=current_point,
           .confidence=norm_pixels[current_point],
