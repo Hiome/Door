@@ -512,7 +512,10 @@ bool checkDoorState() {
 }
 
 void clearPointsAfterDoorClose() {
-  uint8_t old_door = door_state;
+  #ifdef RECESSED
+    uint8_t old_door = door_state;
+  #endif
+
   if (checkDoorState()) {
     cycles_since_forgotten = MAX_EMPTY_CYCLES;
     side1Point = 0;
@@ -729,13 +732,16 @@ void updateBgAverage() {
   }
 }
 
+bool isNeighborly(coord_t a, coord_t b) {
+  return ((uint8_t)(euclidean_distance(a, b) + 0.1)) == 1;
+}
+
 // find how many of this points neighbors have already been counted
 uint8_t findKnownNeighbors(uint8_t (&clusters)[AMG88xx_PIXEL_ARRAY_SIZE], uint8_t c,
         coord_t p, coord_t &lastNeighbor) {
   uint8_t knownNeighbors = 0;
   for (coord_t f=0; f<AMG88xx_PIXEL_ARRAY_SIZE; f++) {
-    if (clusters[f] == c && ((uint8_t)euclidean_distance(f, p)) == 1 &&
-          diffFromPoint(f, p) < 5) {
+    if (clusters[f] > 0 && clusters[f] != c && isNeighborly(f,p) && diffFromPoint(f,p) < 5) {
       lastNeighbor = f;
       knownNeighbors++;
       if (knownNeighbors > 1) return knownNeighbors;
@@ -861,37 +867,41 @@ uint8_t findCurrentPoints() {
 
     clusterIdx++;
     clusterNum[current_point] = clusterIdx;
-
-    bool addable = true;
-    if (addable) {
-      coord_t lastFoundNeighbor = UNDEF_POINT;
-      uint8_t knownNeighbors = findKnownNeighbors(clusterNum, clusterIdx,
-                                                    current_point, lastFoundNeighbor);
-      if (knownNeighbors > 0) {
-        // this is a peak that is touching another blob, don't let it peak
-        if (knownNeighbors > 1) {
-          addable = false;
-        } else { // knownNeighbors == 1
-          coord_t lFN2 = UNDEF_POINT;
-          if (findKnownNeighbors(clusterNum, clusterIdx, lastFoundNeighbor, lFN2) != 1) {
-            addable = false;
-          }
-        }
-      }
-    }
-
     ordered_indexes_temp[sorted_size] = current_point;
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
     float mt = maxTempDiffForPoint(current_point);
+    bool addable = true;
 
     // scan all points added after current_point, since they must be part of same blob
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
+      coord_t blobPoint = ordered_indexes_temp[x];
+
+      if (addable) {
+        coord_t lastFoundNeighbor = UNDEF_POINT;
+        uint8_t knownNeighbors = findKnownNeighbors(clusterNum, clusterIdx,
+                                                      blobPoint, lastFoundNeighbor);
+        if (knownNeighbors > 0 && blobPoint == current_point) {
+          // this is a peak that is touching another blob, don't let it peak
+          if (knownNeighbors > 1) {
+            addable = false;
+          } else { // knownNeighbors == 1
+            coord_t lFN2 = UNDEF_POINT;
+            if (findKnownNeighbors(clusterNum, clusterIdx, lastFoundNeighbor, lFN2) != 1) {
+              addable = false;
+            }
+          }
+        } else if (knownNeighbors > 1) {
+          float mt2 = maxTempDiffForPoint(lastFoundNeighbor);
+          addable = diffFromPoint(lastFoundNeighbor, blobPoint) < max(mt, mt2);
+        }
+      }
+
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
         // scan all known points after current_point to find neighbors to point x
         if (ordered_indexes[k] != UNDEF_POINT &&
             diffFromPoint(ordered_indexes[k], current_point) < mt &&
-            ((uint8_t)euclidean_distance(ordered_indexes[k], ordered_indexes_temp[x]))==1) {
+            isNeighborly(ordered_indexes[k], blobPoint)) {
           clusterNum[ordered_indexes[k]] = clusterIdx;
           ordered_indexes_temp[sorted_size] = ordered_indexes[k];
           sorted_size++;
@@ -925,7 +935,7 @@ uint8_t findCurrentPoints() {
           axis_t naxisn = NOT_AXIS(n);
           minNAxis = min(minNAxis, naxisn);
           maxNAxis = max(maxNAxis, naxisn);
-          if (((uint8_t)euclidean_distance(n, current_point)) == 1) neighbors++;
+          if (isNeighborly(n, current_point)) neighbors++;
         }
       }
 
