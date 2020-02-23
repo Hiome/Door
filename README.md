@@ -41,4 +41,6 @@ arduino-cli core update-index --additional-urls https://lowpowerlab.github.io/Mo
 arduino-cli core install arduino:avr
 ```
 
-Then run `./compile.sh` from this directory. Make sure `OUTPUT_DIR` is set correctly in script.
+Then run `./verify.sh` from this directory to make sure it all worked.
+
+When you're ready to generate hex files, run `./compile.sh`. Make sure `OUTPUT_DIR` is set correctly in script.
