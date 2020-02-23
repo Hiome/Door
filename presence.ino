@@ -7,8 +7,6 @@
  *  
  */
 
-//#define ENABLE_SERIAL
-
 #include "config.h"
 #define NETWORKID     27  // the same on all nodes that talk to each other
 #define GATEWAYID     1
