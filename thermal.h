@@ -209,7 +209,7 @@ float bgDiff(coord_t i) {
 }
 
 uint8_t calcGradient(float diff, float scale) {
-  if (diff < 0.5 || ((uint8_t)diff) > 20) return 0;
+  if (diff < 0.25 || ((uint8_t)diff) > 20) return 0;
   diff /= scale;
   if (diff > 0.995) return 100;
   return (uint8_t)(diff*100.0);
@@ -249,7 +249,8 @@ typedef struct {
     return MAX_DISTANCE + (height+width+neighbors)/4.0 + (confidence/100.0);
   };
   float     max_allowed_temp_drift() {
-    return maxTempDiffForFgd(fgm())*1.2;
+    float maxT = maxTempDiffForFgd(fgm())*1.2;
+    return min(maxT, 4.0);
   };
 } PossiblePerson;
 
@@ -289,7 +290,7 @@ typedef struct {
   };
   float     max_allowed_temp_drift() {
     float maxT = maxTempDiffForFgd(fgm)*1.2;
-    return max(maxT, 1.0);
+    return min(maxT, 4.0);
   };
   float     difference_from_point(coord_t a) {
     return abs(raw_pixels[(a)] - raw_temp);
@@ -892,7 +893,8 @@ uint8_t findCurrentPoints() {
     coord_t current_point = ordered_indexes[y];
     if (current_point == UNDEF_POINT) continue;
 
-    bool addable = true;
+    float fgd = fgDiff(current_point);
+    bool addable = fgd > 0.5 && bgDiff(current_point) > 0.5;
     coord_t lastFoundNeighbor = UNDEF_POINT;
     uint8_t knownNeighbors = findKnownNeighbors(clusterNum,current_point,lastFoundNeighbor);
     // this is a peak that is touching another blob, don't let it peak
@@ -951,7 +953,7 @@ uint8_t findCurrentPoints() {
       axis_t minNAxis = NOT_AXIS(current_point);
       axis_t maxNAxis = minNAxis;
       uint8_t neighbors = 0;
-      float mt = maxTempDiffForPoint(current_point);
+      float mt = maxTempDiffForFgd(fgd);
       float mt_constrained = constrain(mt, 0.51, 1.51);
       for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
         // if point is within 3 distance of core point, not in cluster, but could have been,
