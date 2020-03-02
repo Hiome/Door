@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.2.26"
+#define FIRMWARE_VERSION        "V20.3.2"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -209,7 +209,7 @@ float bgDiff(coord_t i) {
 }
 
 uint8_t calcGradient(float diff, float scale) {
-  if (diff < 0.25 || ((uint8_t)diff) > 20) return 0;
+  if (diff < 0.5 || ((uint8_t)diff) > 20) return 0;
   diff /= scale;
   if (diff > 0.995) return 100;
   return (uint8_t)(diff*100.0);
@@ -226,7 +226,7 @@ uint8_t calcBgm(coord_t i) {
 }
 
 float maxTempDiffForFgd(float f) {
-  f *= 0.7;
+  f *= 0.85;
   return min(f, 5.0);
 }
 
@@ -249,7 +249,7 @@ typedef struct {
     return MAX_DISTANCE + (height+width+neighbors)/4.0 + (confidence/100.0);
   };
   float     max_allowed_temp_drift() {
-    float maxT = maxTempDiffForFgd(fgm())*1.2;
+    float maxT = maxTempDiffForFgd(fgm());
     return min(maxT, 4.0);
   };
 } PossiblePerson;
@@ -289,7 +289,7 @@ typedef struct {
     return MAX_DISTANCE + (height+width+neighbors)/4.0 + (confidence/100.0);
   };
   float     max_allowed_temp_drift() {
-    float maxT = maxTempDiffForFgd(fgm)*1.2;
+    float maxT = maxTempDiffForFgd(fgm);
     return min(maxT, 4.0);
   };
   float     difference_from_point(coord_t a) {
@@ -894,41 +894,54 @@ uint8_t findCurrentPoints() {
     if (current_point == UNDEF_POINT) continue;
 
     float fgd = fgDiff(current_point);
-    bool addable = fgd > 0.5 && bgDiff(current_point) > 0.5;
+    bool addable = true;
     coord_t lastFoundNeighbor = UNDEF_POINT;
     uint8_t knownNeighbors = findKnownNeighbors(clusterNum,current_point,lastFoundNeighbor);
     // this is a peak that is touching another blob, don't let it peak
     if (knownNeighbors > 1) {
+      // it's part of a blob, don't count it
       addable = false;
     } else if (knownNeighbors == 1) {
+      // it's touching a single point... is that point part of a blob?
       coord_t lFN2 = UNDEF_POINT;
-      if (findKnownNeighbors(clusterNum, lastFoundNeighbor, lFN2) != 1) {
+      if (findKnownNeighbors(clusterNum, lastFoundNeighbor, lFN2) > 1) {
         addable = false;
       }
     }
+
+    #ifdef PRINT_RAW_DATA
+      if (!addable) {
+          SERIAL_PRINT(F("skipped "));
+          SERIAL_PRINT(current_point);
+          SERIAL_PRINT(F(" because too close to blob"));
+      }
+    #endif
 
     clusterIdx++;
     clusterNum[current_point] = clusterIdx;
     ordered_indexes_temp[sorted_size] = current_point;
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
+    uint8_t currBlobSize = 1;
 
     // scan all points added after current_point, since they must be part of same blob
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
       coord_t blobPoint = ordered_indexes_temp[x];
-      float mtb = maxTempDiffForPoint(blobPoint);
 
-      uint8_t fnc = 0;
-      coord_t blobNeighbors[8];
-      uint8_t nc = loadNeighbors(blobPoint, blobNeighbors);
-      for (uint8_t bn = 0; bn < nc; bn++) {
-        if (clusterNum[blobNeighbors[bn]] == clusterIdx) {
-          fnc++;
-          if (fnc == 2) break;
+      if (currBlobSize > 3) {
+        uint8_t fnc = 0;
+        coord_t blobNeighbors[8];
+        uint8_t nc = loadNeighbors(blobPoint, blobNeighbors);
+        for (uint8_t bn = 0; bn < nc; bn++) {
+          if (clusterNum[blobNeighbors[bn]] == clusterIdx) {
+            fnc++;
+            if (fnc == 2) break;
+          }
         }
+        if (fnc == 1) continue;
       }
-      if (fnc == 1) continue;
 
+      float mtb = maxTempDiffForPoint(blobPoint);
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
         // scan all known points after current_point to find neighbors to point x
         if (ordered_indexes[k] != UNDEF_POINT &&
@@ -938,15 +951,13 @@ uint8_t findCurrentPoints() {
           ordered_indexes_temp[sorted_size] = ordered_indexes[k];
           sorted_size++;
           ordered_indexes[k] = UNDEF_POINT;
-          fnc++;
-          if (fnc == nc) break;
+          currBlobSize++;
         }
       }
     }
 
     // check if point is too small/large to be a valid person
     if (addable) {
-      uint8_t noiseSize = 0;
       uint8_t blobSize = 1;
       axis_t minAxis = AXIS(current_point);
       axis_t maxAxis = minAxis;
@@ -954,18 +965,11 @@ uint8_t findCurrentPoints() {
       axis_t maxNAxis = minNAxis;
       uint8_t neighbors = 0;
       float mt = maxTempDiffForFgd(fgd);
-      float mt_constrained = constrain(mt, 0.51, 1.51);
       for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
-        // if point is within 3 distance of core point, not in cluster, but could have been,
-        // then count it as noise
-        float dp = diffFromPoint(n, current_point);
-        if (dp > mt) continue;
-        uint8_t di = ((uint8_t)(euclidean_distance(n, current_point) + 0.1));
-        if (di >= 3) continue;
+        if (clusterNum[n] == clusterIdx && n != current_point) {
+          float dp = diffFromPoint(n, current_point);
+          if (dp > mt) continue;
 
-        if (clusterNum[n] != clusterIdx) {
-          if (dp < mt_constrained) noiseSize++;
-        } else if (n != current_point) {
           blobSize++;
           axis_t axisn = AXIS(n);
           minAxis = min(minAxis, axisn);
@@ -973,28 +977,74 @@ uint8_t findCurrentPoints() {
           axis_t naxisn = NOT_AXIS(n);
           minNAxis = min(minNAxis, naxisn);
           maxNAxis = max(maxNAxis, naxisn);
-          if (di == 1) neighbors++;
+          if (isNeighborly(n, current_point)) neighbors++;
         }
+      }
+
+      if (blobSize > ((uint8_t)(10*fgd))) {
+        #ifdef PRINT_RAW_DATA
+          SERIAL_PRINT(F("skipped "));
+          SERIAL_PRINT(current_point);
+          SERIAL_PRINT(F(" because blob is too large"));
+        #endif
+
+        continue;
       }
 
       uint8_t height = maxAxis - minAxis;
       uint8_t width = maxNAxis - minNAxis;
       uint8_t dimension = max(height, width) + 1;
       // ignore a blob that fills less than 1/3 of its bounding box
-      if ((blobSize+1)*3 < sq(dimension)) noiseSize = 100;
+      if ((blobSize+(uint8_t)fgd)*3 >= sq(dimension)) {
+        uint8_t noiseSize = 0;
+        float mt_constrained = mt*0.7;
+        mt_constrained = constrain(mt, 0.51, 1.51);
+        for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
+          if (clusterNum[n] == clusterIdx) continue;
+  
+          float dp = diffFromPoint(n, current_point);
+          if (dp > mt_constrained) continue;
 
-      if (noiseSize < blobSize) {
-        PossiblePerson pp = {
-          .current_position=current_point,
-          .confidence=norm_pixels[current_point],
-          .neighbors=neighbors,
-          .height=height,
-          .width=width
-        };
-        points[total_masses] = pp;
-        total_masses++;
-        if (total_masses == MAX_PEOPLE) break;
+          if (norm_pixels[n] < CONFIDENCE_THRESHOLD && dp > 0.75) continue;
+  
+          uint8_t di = ((uint8_t)(euclidean_distance(n, current_point) + 0.1));
+          if (di >= dimension+2) continue;
+
+          noiseSize++;
+        }
+
+        if (noiseSize < blobSize) {
+          #ifdef PRINT_RAW_DATA
+            SERIAL_PRINT(F("added "));
+            SERIAL_PRINTLN(current_point);
+          #endif
+          PossiblePerson pp = {
+            .current_position=current_point,
+            .confidence=norm_pixels[current_point],
+            .neighbors=neighbors,
+            .height=height,
+            .width=width
+          };
+          points[total_masses] = pp;
+          total_masses++;
+          if (total_masses == MAX_PEOPLE) break;
+        }
+        #ifdef PRINT_RAW_DATA
+          else {
+            SERIAL_PRINT(F("skipped "));
+            SERIAL_PRINT(current_point);
+            SERIAL_PRINT(F(" because noise is "));
+            SERIAL_PRINTLN(noiseSize);
+          }
+        #endif
       }
+      #ifdef PRINT_RAW_DATA
+        else {
+            SERIAL_PRINT(F("skipped "));
+            SERIAL_PRINT(current_point);
+            SERIAL_PRINT(F(" because density is too low"));
+        }
+      #endif
     }
   }
 
@@ -1174,8 +1224,19 @@ bool processSensor() {
     // pair this person with a point in current frame
     for (idx_t j=0; j<total_masses; j++) {
       PossiblePerson pp = points[j];
-      float maxD = pp.max_distance();
-      maxD = max(maxD, maxD2); // choose smaller range of 2 points as max range
+      float maxD;
+      float maxTfrd;
+      if (pp.side() != p.starting_side() && pointOnSmallBorder(pp.current_position)) {
+        // this point looks like it's leaving or new, limit to max allowed range of known pt
+        maxD = maxD2;
+        maxTfrd = maxT;
+      } else {
+        maxD = pp.max_distance();
+        maxD = max(maxD, maxD2); // choose larger range of 2 points as max distance
+
+        maxTfrd = pp.max_allowed_temp_drift();
+        maxTfrd = max(maxT, maxTfrd); // choose larger temp drift of 2 points as max drift
+      }
       maxD = min(maxD, 5.0);   // don't let the D grow too big
 
       float d = euclidean_distance(p.past_position, pp.current_position);
@@ -1183,8 +1244,6 @@ bool processSensor() {
 
       // can't shift more than 2-5º at once
       float tempDiff = p.difference_from_point(pp.current_position);
-      float maxTPoint = pp.max_allowed_temp_drift();
-      float maxTfrd = max(maxT, maxTPoint);
       if (tempDiff > maxTfrd) continue;
 
       float score = sq(d/maxD) + sq(max(tempDiff, 1)/maxTfrd);
