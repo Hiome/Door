@@ -40,7 +40,6 @@ uint8_t side1Point = 0;
 uint8_t side2Point = 0;
 float global_bgm = 0;
 float global_fgm = 0;
-float global_variance; // TODO delete me
 float cavg1 = 0;
 float cavg2 = 0;
 
@@ -177,7 +176,7 @@ uint8_t readDoorState() {
 }
 
 bool doorJustOpened() {
-  if (door_state != DOOR_CLOSED) return frames_since_door_open <= 1;
+  if (door_state != DOOR_CLOSED) return frames_since_door_open < MAX_DOOR_CHANGE_FRAMES;
   else return readDoorState() != DOOR_CLOSED;
 }
 
@@ -296,9 +295,9 @@ typedef struct {
     return abs(raw_pixels[(a)] - raw_temp);
   };
 
-  #define METALENGTH  49 // TODO drop extra 0's from neighbors/height/width
+  #define METALENGTH  41
   void generateMeta(char *meta) {
-    sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%u0x%u0x%u0x%ux%ux%ux%u",
+    sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
       confidence,                         // 3  100
       floatToFint2(bgm),                  // 4  1020
       floatToFint2(fgm),                  // 4  1020
@@ -310,10 +309,9 @@ typedef struct {
       height,                             // 1  7
       width,                              // 1  7
       max_jump,                           // 1  5
-      floatToFint2(global_variance),      // 4  1000
       max_temp_drift,                     // 2  99
       forgotten_count                     // 1  3
-    );                                    // + 13 'x' + 1 null => 46 total
+    );                                    // + 12 'x' + 1 null => 41 total
   };
 
   void revert() {
@@ -615,8 +613,6 @@ float trimMean(uint8_t side) {
 
 //  float variance = (sq_sum - (sq(sum)/((float)cnt)))/((float)cnt);
 //  variance = sqrt(abs(variance));
-  // TODO delete me, variance isn't used anymore
-  global_variance = max(global_variance, bucketWidth);
 
   if (bucketStart < 10 && maxBucketCount > 6) {
     maxVal = minVal + (bucketEnd+1)*bucketWidth + 0.1;
@@ -663,7 +659,6 @@ bool normalizePixels() {
   if (!amg.readPixels(raw_pixels)) return false;
 
   // calculate trimmed average
-  global_variance = 0.0;
   cavg1 = trimMean(1);
   cavg2 = trimMean(2);
 
@@ -842,24 +837,6 @@ uint8_t findCurrentPoints() {
           // calculate row # from opposite edge
           edge1 = normalizeAxis(edge1);
           edge2 = normalizeAxis(edge2);
-
-          if (edge1 == edge2 && edge1 == 4 && SIDE(i) != SIDE(ordered_indexes[j])) {
-            // we're debating between 2 points on either side of border.
-            // find which side this person was previously on to avoid flip-flopping.
-            if (SIDE1(i)) {
-              float dfp = diffFromPoint(i-GRID_EXTENT, i);
-              if (dfp < mt && dfp + 0.5 <
-                    diffFromPoint(ordered_indexes[j]+GRID_EXTENT, ordered_indexes[j])) {
-                edge1++;
-              }
-            } else {
-              float dfp = diffFromPoint(i+GRID_EXTENT, i);
-              if (dfp < mt && dfp + 0.5 <
-                    diffFromPoint(ordered_indexes[j]-GRID_EXTENT, ordered_indexes[j])) {
-                edge1++;
-              }
-            }
-          }
 
           added = edge1 > edge2;
         }
