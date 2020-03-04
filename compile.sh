@@ -22,5 +22,6 @@ compileHex() {
 compileHex "#define THERMAL" "door/r2_alpha"
 compileHex "#define THERMAL\n#define R3" "door/r3_alpha"
 compileHex "#define THERMAL\n#define R3\n#define RECESSED" "door/r3_recessed"
+compileHex "#define BATTERY\n#define R3" "battery/r3"
 
 echo "Finished compiling $count files on `date`"

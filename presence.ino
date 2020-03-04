@@ -15,6 +15,7 @@
 #define SERIAL_BAUD   115200
 #define RETRY_TIME    60
 #define RETRY_COUNT   20
+#define BATT          A3
 
 #include <RFM69_ATC.h>
 #include <RFM69_OTA.h>
@@ -23,13 +24,6 @@
 
 RFM69_ATC radio;
 SPIFlash flash(8, 0xEF30); //EF30 for windbond 4mbit flash
-
-uint32_t heartbeats = 0;
-void beatHeart() {
-  heartbeats++;
-  // 108000 = 10 (frames/sec) * 60 (sec/min) * 60 (min/hr) * 3 (hrs)
-  if (heartbeats > 108000) publish("h", "0", 0);
-}
 
 #ifdef ENABLE_SERIAL
   #define SERIAL_START      ( Serial.begin(SERIAL_BAUD) )
@@ -45,10 +39,37 @@ void beatHeart() {
 
 #define LOWPOWER_DELAY(d) ( LowPower.powerDown(d, ADC_OFF, BOD_ON) )
 
+uint32_t heartbeats = 0;
+void beatHeart(uint32_t maxBeats) {
+  heartbeats++;
+  if (heartbeats > maxBeats) publish("h", "0", 0);
+}
+
+bool battConnected = true;
+uint16_t checkBattery() {
+  if (!battConnected) return 0;
+  // https://lowpowerlab.com/forum/index.php/topic,1206.0.html
+  return (uint16_t)(analogRead(BATT)*0.644);
+}
+
+void isBatteryConnected() {
+  uint16_t total_change = 0;
+  uint16_t b = checkBattery();
+  for (uint8_t k=0; k<10; k++) {
+    uint16_t b2 = checkBattery();
+    int16_t bd = (int16_t)b - (int16_t)b2;
+    total_change += abs(bd);
+    b = b2;
+    LOWPOWER_DELAY(SLEEP_30MS);
+  }
+  SERIAL_PRINTLN(total_change);
+  if (total_change > 100) battConnected = false;
+}
+
 uint8_t packetCount = 1;
 uint8_t publish(const char* msg, const char* meta, uint8_t retries) {
-  char sendBuf[58];
-  int8_t len = sprintf(sendBuf, "%s;%s%u", msg, meta, packetCount);
+  char sendBuf[55];
+  int8_t len = sprintf(sendBuf, "%s;%s%u%u", msg, meta, checkBattery(), packetCount);
   if (len <= 0) return 0;
 
   bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries, RETRY_TIME);
@@ -85,6 +106,8 @@ uint8_t publish(const char* msg, const char* meta, uint8_t retries) {
   #include "thermal.h"
 #elif defined BED
   #include "bed.h"
+#elif defined BATTERY
+  #include "battery.h"
 #else
   #error Missing node type
 #endif
@@ -104,6 +127,8 @@ void setup() {
   radio.enableAutoPower(ATC_RSSI);
 
   if (flash.initialize()) flash.sleep();
+
+  isBatteryConnected();
 
   initialize();
 

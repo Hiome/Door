@@ -1635,7 +1635,8 @@ void runThermalLoop() {
     // clear sideXPoints used to track which side a merged from (naming things is hard, ok)
     clearSideXPoints();
     // send heartbeat event if necessary
-    beatHeart();
+    // 108000 = 10 (frames/sec) * 60 (sec/min) * 60 (min/hr) * 3 (hrs)
+    beatHeart(108000);
     // increment counter for how long door has been open
     if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) {
       frames_since_door_open++;
