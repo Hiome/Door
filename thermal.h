@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.3.2"
+#define FIRMWARE_VERSION        "V20.3.4"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -1128,32 +1128,6 @@ bool remember_person(Person (&arr)[MAX_PEOPLE], coord_t point, uint8_t &h, coord
   return false;
 }
 
-void createNewPerson(coord_t pp, uint8_t mj, fint1_t md, uint8_t h, coord_t sp,
-                    uint8_t cross, bool revert, float rt, uint8_t conf, float b,
-                    float f, uint8_t n, uint8_t height, uint8_t width,
-                    uint16_t c, uint8_t fc, idx_t j) {
-  Person p = {
-    .past_position=pp,
-    .starting_position=sp,
-    .max_position=pp,
-    .confidence=conf,
-    .max_temp_drift=md,
-    .count=c,
-    .history=h,
-    .neighbors=n,
-    .height=height,
-    .forgotten_count=fc,
-    .width=width,
-    .crossed=cross,
-    .max_jump=mj,
-    .reverted=revert,
-    .raw_temp=rt,
-    .bgm=b,
-    .fgm=f
-  };
-  known_people[j] = p;
-}
-
 bool processSensor() {
   if (!normalizePixels()) return false;
 
@@ -1479,24 +1453,31 @@ bool processSensor() {
         continue;
       }
 
-      uint8_t minConf = 100;
-      idx_t minIndex = UNDEF_INDEX;
       for (idx_t j=0; j<MAX_PEOPLE; j++) {
-        // look for first empty slot in past_points to use
+        // look for first empty slot in known_people to use
         if (!known_people[j].real()) {
-          createNewPerson(points[i].current_position, mj, md, h, sp, cross, revert, rt,
-                          conf, b, f, n, height, width, c, fc, j);
-          minIndex = UNDEF_INDEX;
+          Person p = {
+            .past_position=points[i].current_position,
+            .starting_position=sp,
+            .max_position=points[i].current_position,
+            .confidence=conf,
+            .max_temp_drift=md,
+            .count=c,
+            .history=h,
+            .neighbors=n,
+            .height=height,
+            .forgotten_count=fc,
+            .width=width,
+            .crossed=cross,
+            .max_jump=mj,
+            .reverted=revert,
+            .raw_temp=rt,
+            .bgm=b,
+            .fgm=f
+          };
+          known_people[j] = p;
           break;
-        } else if (known_people[j].confidence < minConf) {
-          minConf = known_people[j].confidence;
-          minIndex = j;
         }
-      }
-      if (minIndex != UNDEF_INDEX && conf > minConf) {
-        // replace lower conf slot with this new point
-        createNewPerson(points[i].current_position, mj, md, h, sp, cross, revert, rt,
-                        conf, b, f, n, height, width, c, fc, minIndex);
       }
     }
   }
