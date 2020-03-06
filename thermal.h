@@ -277,10 +277,12 @@ typedef struct {
   float     raw_temp;
   float     bgm;
   float     fgm;
+  float     avg_fgm;
 
   bool      real() { return past_position != UNDEF_POINT; };
   uint8_t   starting_side() { return SIDE(starting_position); };
   uint8_t   side() { return SIDE(past_position); };
+  float     max_fgm() { return max(avg_fgm, fgm); };
   float     total_distance() {
     return euclidean_distance(starting_position, past_position);
   };
@@ -442,7 +444,8 @@ const Person UNDEF_PERSON = {
   .reverted=false,
   .raw_temp=0,
   .bgm=0,
-  .fgm=0
+  .fgm=0,
+  .avg_fgm=0
 };
 
 uint8_t loadNeighbors(coord_t i, coord_t (&nArray)[8]) {
@@ -754,26 +757,17 @@ bool isNeighborly(coord_t a, coord_t b) {
 }
 
 // find how many of this points neighbors have already been counted
-uint8_t findKnownNeighbors(uint8_t (&clusters)[AMG88xx_PIXEL_ARRAY_SIZE],
-        coord_t p, coord_t &lastNeighbor) {
+uint8_t findKnownNeighbors(uint8_t (&clusters)[AMG88xx_PIXEL_ARRAY_SIZE], coord_t p) {
   uint8_t knownNeighbors = 0;
-  coord_t foundNeighbors[8];
   coord_t neighbors[8];
   uint8_t nc = loadNeighbors(p, neighbors);
   for (uint8_t x = 0; x < nc; x++) {
     coord_t n = neighbors[x];
-    if (clusters[n] > 0 && ((uint8_t)diffFromPoint(n,p)) < 5) {
-      lastNeighbor = n;
-      for (uint8_t i = 0; i < knownNeighbors; i++) {
-        if (clusters[foundNeighbors[i]] == clusters[n]) {
-          return 2;
-        }
-      }
-      foundNeighbors[knownNeighbors] = n;
+    if (clusters[n] > 0 && clusters[n] != clusters[p] && ((uint8_t)diffFromPoint(n,p)) < 4) {
       knownNeighbors++;
     }
   }
-  return knownNeighbors ? 1 : 0;
+  return knownNeighbors;
 }
 
 uint8_t findCurrentPoints() {
@@ -870,42 +864,20 @@ uint8_t findCurrentPoints() {
     coord_t current_point = ordered_indexes[y];
     if (current_point == UNDEF_POINT) continue;
 
-    float fgd = fgDiff(current_point);
-    bool addable = true;
-    coord_t lastFoundNeighbor = UNDEF_POINT;
-    uint8_t knownNeighbors = findKnownNeighbors(clusterNum,current_point,lastFoundNeighbor);
-    // this is a peak that is touching another blob, don't let it peak
-    if (knownNeighbors > 1) {
-      // it's part of a blob, don't count it
-      addable = false;
-    } else if (knownNeighbors == 1) {
-      // it's touching a single point... is that point part of a blob?
-      coord_t lFN2 = UNDEF_POINT;
-      if (findKnownNeighbors(clusterNum, lastFoundNeighbor, lFN2) > 1) {
-        addable = false;
-      }
-    }
-
-    #ifdef PRINT_RAW_DATA
-      if (!addable) {
-          SERIAL_PRINT(F("skipped "));
-          SERIAL_PRINT(current_point);
-          SERIAL_PRINT(F(" because too close to blob"));
-      }
-    #endif
-
     clusterIdx++;
     clusterNum[current_point] = clusterIdx;
     ordered_indexes_temp[sorted_size] = current_point;
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
     uint8_t currBlobSize = 1;
+    bool addable = true;
 
     // scan all points added after current_point, since they must be part of same blob
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
       coord_t blobPoint = ordered_indexes_temp[x];
 
       if (currBlobSize > 3) {
+        // find how many neighbors this point has
         uint8_t fnc = 0;
         coord_t blobNeighbors[8];
         uint8_t nc = loadNeighbors(blobPoint, blobNeighbors);
@@ -915,6 +887,7 @@ uint8_t findCurrentPoints() {
             if (fnc == 2) break;
           }
         }
+        // stop traversing if this point only has one connection to this blob
         if (fnc == 1) continue;
       }
 
@@ -931,6 +904,17 @@ uint8_t findCurrentPoints() {
           currBlobSize++;
         }
       }
+
+      if (blobPoint == current_point) {
+        uint8_t knownNeighbors = findKnownNeighbors(clusterNum, current_point);
+        // this is a peak that is touching another blob, don't let it peak
+        if (currBlobSize < knownNeighbors) {
+          addable = false;
+          SERIAL_PRINT(F("skipped "));
+          SERIAL_PRINT(current_point);
+          SERIAL_PRINTLN(F(" because too close to blob"));
+        }
+      }
     }
 
     // check if point is too small/large to be a valid person
@@ -941,6 +925,7 @@ uint8_t findCurrentPoints() {
       axis_t minNAxis = NOT_AXIS(current_point);
       axis_t maxNAxis = minNAxis;
       uint8_t neighbors = 0;
+      float fgd = fgDiff(current_point);
       float mt = maxTempDiffForFgd(fgd);
       for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
         if (clusterNum[n] == clusterIdx && n != current_point) {
@@ -958,21 +943,20 @@ uint8_t findCurrentPoints() {
         }
       }
 
-      if (blobSize > ((uint8_t)(10*fgd))) {
-        #ifdef PRINT_RAW_DATA
-          SERIAL_PRINT(F("skipped "));
-          SERIAL_PRINT(current_point);
-          SERIAL_PRINT(F(" because blob is too large"));
-        #endif
-
+      if (blobSize > ((uint8_t)(10.0*fgd))) {
+        SERIAL_PRINT(F("skipped "));
+        SERIAL_PRINT(current_point);
+        SERIAL_PRINTLN(F(" because blob is too large"));
         continue;
       }
 
       uint8_t height = maxAxis - minAxis;
       uint8_t width = maxNAxis - minNAxis;
       uint8_t dimension = max(height, width) + 1;
+      uint8_t boundingBox = min(dimension, 5);
       // ignore a blob that fills less than 1/3 of its bounding box
-      if ((blobSize+(uint8_t)fgd)*3 >= sq(dimension)) {
+      // a blob with 9 points will always pass density test
+      if ((blobSize+(uint8_t)fgd)*3 >= sq(boundingBox)) {
         uint8_t noiseSize = 0;
         float mt_constrained = mt*0.7;
         mt_constrained = constrain(mt, 0.51, 1.51);
@@ -990,11 +974,10 @@ uint8_t findCurrentPoints() {
           noiseSize++;
         }
 
-        if (noiseSize < blobSize) {
-          #ifdef PRINT_RAW_DATA
-            SERIAL_PRINT(F("added "));
-            SERIAL_PRINTLN(current_point);
-          #endif
+        if (noiseSize <= blobSize) {
+          SERIAL_PRINT(F("added "));
+          SERIAL_PRINTLN(current_point);
+
           PossiblePerson pp = {
             .current_position=current_point,
             .confidence=norm_pixels[current_point],
@@ -1005,23 +988,17 @@ uint8_t findCurrentPoints() {
           points[total_masses] = pp;
           total_masses++;
           if (total_masses == MAX_PEOPLE) break;
+        } else {
+          SERIAL_PRINT(F("skipped "));
+          SERIAL_PRINT(current_point);
+          SERIAL_PRINT(F(" because noise is "));
+          SERIAL_PRINTLN(noiseSize);
         }
-        #ifdef PRINT_RAW_DATA
-          else {
-            SERIAL_PRINT(F("skipped "));
-            SERIAL_PRINT(current_point);
-            SERIAL_PRINT(F(" because noise is "));
-            SERIAL_PRINTLN(noiseSize);
-          }
-        #endif
+      } else {
+          SERIAL_PRINT(F("skipped "));
+          SERIAL_PRINT(current_point);
+          SERIAL_PRINTLN(F(" because density is too low"));
       }
-      #ifdef PRINT_RAW_DATA
-        else {
-            SERIAL_PRINT(F("skipped "));
-            SERIAL_PRINT(current_point);
-            SERIAL_PRINT(F(" because density is too low"));
-        }
-      #endif
     }
   }
 
@@ -1033,7 +1010,7 @@ void forget_person(idx_t idx, Person (&temp_forgotten_people)[MAX_PEOPLE],
   Person p = known_people[(idx)];
   if (p.forgotten_count < MAX_FORGOTTEN_COUNT && p.confidence > 30 &&
         (p.checkForRevert() || axis_distance(p.starting_position, p.past_position) > 1) &&
-        p.fgm > 1 && p.history <= p.count) {
+        p.max_fgm() > 1 && p.history <= p.count) {
     temp_forgotten_people[(temp_forgotten_num)] = p;
     temp_forgotten_num++;
   }
@@ -1177,7 +1154,8 @@ bool processSensor() {
       PossiblePerson pp = points[j];
       float maxD;
       float maxTfrd;
-      if (pp.side() != p.starting_side() && pointOnSmallBorder(pp.current_position)) {
+      if (pp.side() != p.starting_side() && pointOnSmallBorder(pp.current_position) &&
+            p.avg_fgm < 2*p.fgm) {
         // this point looks like it's leaving or new, limit to max allowed range of known pt
         maxD = maxD2;
         maxTfrd = maxT;
@@ -1361,6 +1339,7 @@ bool processSensor() {
           p.raw_temp = pp.raw_temp();
           p.bgm = pp.bgm();
           p.fgm = pp.fgm();
+          p.avg_fgm = (0.33*p.fgm + 0.66*p.avg_fgm);
           p.neighbors = pp.neighbors;
           p.height = pp.height;
           p.width = pp.width;
@@ -1473,7 +1452,8 @@ bool processSensor() {
             .reverted=revert,
             .raw_temp=rt,
             .bgm=b,
-            .fgm=f
+            .fgm=f,
+            .avg_fgm=f
           };
           known_people[j] = p;
           break;
