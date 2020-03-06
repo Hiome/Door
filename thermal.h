@@ -568,9 +568,9 @@ float calcBgAvg(uint8_t side) {
   return bg_sum/((float)bg_cnt);
 }
 
-void sortClustersByCount(uint8_t clusters, int8_t (&clusterCount)[NUM_BUCKETS],
+void sortClustersByCount(uint8_t clusters, uint8_t (&clusterCount)[NUM_BUCKETS],
                           uint8_t (&sortedClusters)[NUM_BUCKETS]) {
-  for (uint8_t i = 0; i <= clusters; i++) {
+  for (uint8_t i = 0; i < clusters; i++) {
     // sort clusters by clusterCount again
     bool added = false;
     for (uint8_t j=0; j<i; j++) {
@@ -621,26 +621,40 @@ float trimMean(uint8_t side) {
   for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
     uint8_t bidx = bucketNum(raw_pixels[i], bucketWidth, minVal, maxVal);
     bin_counts[bidx]++;
+    if (bgDiff(i) < 1) bin_counts[bidx]++; // double weight for points close to background
   }
+
+  uint8_t sortedBins[NUM_BUCKETS];
+  sortClustersByCount(NUM_BUCKETS, bin_counts, sortedBins);
 
   // cluster the buckets by distance
   int8_t currentCluster = -1;
   uint8_t clusterStarts[NUM_BUCKETS];
   uint8_t clusterEnds[NUM_BUCKETS];
-  int8_t clusterCount[NUM_BUCKETS] = { 0 };
+  uint8_t clusterCount[NUM_BUCKETS];
   for (uint8_t i = 0; i < NUM_BUCKETS; i++) {
-    // bucket needs at least 3 points to be considered
-    if (bin_counts[i] <= 3) continue;
+    uint8_t binIndex = sortedBins[i];
+    if (bin_counts[binIndex] == 0) continue;
 
-    if (currentCluster == -1 || i - clusterEnds[currentCluster] > 2) {
-      // this is either the first sizeable bucket or too far from the current cluster.
-      // either way, start a new cluster
-      currentCluster++;
-      clusterStarts[currentCluster] = i;
+    currentCluster++;
+    clusterStarts[currentCluster] = binIndex;
+    clusterEnds[currentCluster] = binIndex;
+    clusterCount[currentCluster] = bin_counts[binIndex];
+
+    for (int8_t j = binIndex-1; j >= 0; j--) {
+      if (bin_counts[j] >= bin_counts[binIndex]/2) {
+        clusterStarts[currentCluster] = j;
+        clusterCount[currentCluster] += bin_counts[j];
+        bin_counts[j] = 0;
+      } else if (clusterStarts[currentCluster] - j > 2) break;
     }
-
-    clusterEnds[currentCluster] = i;
-    clusterCount[currentCluster] += bin_counts[i];
+    for (uint8_t j = binIndex+1; j < NUM_BUCKETS; j++) {
+      if (bin_counts[j] >= bin_counts[binIndex]/2) {
+        clusterEnds[currentCluster] = j;
+        clusterCount[currentCluster] += bin_counts[j];
+        bin_counts[j] = 0;
+      } else if (j - clusterEnds[currentCluster] > 2) break;
+    }
   }
 
   // clusters found!
@@ -651,35 +665,15 @@ float trimMean(uint8_t side) {
       topCluster = 0;
     } else {
       // multiple clusters found! Sort them by size to choose the largest
-      uint8_t sortedClusterIdx1[NUM_BUCKETS];
-      sortClustersByCount(currentCluster, clusterCount, sortedClusterIdx1);
+      uint8_t sortedClusters[NUM_BUCKETS];
+      sortClustersByCount(currentCluster+1, clusterCount, sortedClusters);
 
-      if (clusterCount[(sortedClusterIdx1[0])] > clusterCount[(sortedClusterIdx1[1])] + 3) {
+      if (clusterCount[(sortedClusters[0])] > clusterCount[(sortedClusters[1])]) {
         // there is a clear winner in the cluster wars
-        topCluster = sortedClusterIdx1[0];
+        topCluster = sortedClusters[0];
       } else {
-        // 2+ clusters of similar size, let's find the one more similar to the background
-        // first, calculate the background average
-        float bg_avg = calcBgAvg(side);
-        for (uint8_t i = 0; i <= currentCluster; i++) {
-          // then, decrease clusterCount by however far the point is from that bg average
-          float sp = minVal + (clusterStarts[i])*bucketWidth;
-          float ep = minVal + (clusterEnds[i]+1)*bucketWidth;
-          float mp = (ep + sp)/2.0;
-          clusterCount[i] -= (uint8_t)abs(mp - bg_avg);
-        }
-
-        // sort clusters again
-        uint8_t sortedClusterIdx2[NUM_BUCKETS];
-        sortClustersByCount(currentCluster, clusterCount, sortedClusterIdx2);
-
-        if (clusterCount[(sortedClusterIdx2[0])] > clusterCount[(sortedClusterIdx2[1])]) {
-          // there's a winner now!
-          topCluster = sortedClusterIdx2[0];
-        } else {
-          // give up
-          topCluster = -1;
-        }
+        // give up
+        topCluster = -1;
       }
     }
 
