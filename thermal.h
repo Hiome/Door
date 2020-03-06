@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.3.4"
+#define FIRMWARE_VERSION        "V20.3.6"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -558,13 +558,55 @@ void clearPointsAfterDoorClose() {
   }
 }
 
+float calcBgAvg(uint8_t side) {
+  float bg_sum = 0;
+  uint8_t bg_cnt = 0;
+  for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
+    bg_sum += bgPixel(i);
+    bg_cnt++;
+  }
+  return bg_sum/((float)bg_cnt);
+}
+
+void sortClustersByCount(uint8_t clusters, int8_t (&clusterCount)[NUM_BUCKETS],
+                          uint8_t (&sortedClusters)[NUM_BUCKETS]) {
+  for (uint8_t i = 0; i <= clusters; i++) {
+    // sort clusters by clusterCount again
+    bool added = false;
+    for (uint8_t j=0; j<i; j++) {
+      if (clusterCount[i] > clusterCount[(sortedClusters[j])]) {
+        for (int8_t x=i; x>j; x--) {
+          sortedClusters[x] = sortedClusters[(x-1)];
+        }
+        sortedClusters[j] = i;
+        added = true;
+        break;
+      }
+    }
+    if (!added) {
+      // append i to end of array
+      sortedClusters[i] = i;
+    }
+  }
+}
+
 uint8_t bucketNum(float r, float width, float minVal, float maxVal) {
   if (r <= minVal + 0.1) return 0;
   if (r >= maxVal - 0.1) return NUM_BUCKETS-1;
   return (uint8_t)((r - minVal)/width);
 }
 
+// We need a measure of central tendency to summarize the current foreground temperatures.
+// A simple mean is skewed too easily, so how about mode? To find that, we group the data
+// into a histogram with 10 buckets and identify clusters of buckets. We choose the largest
+// cluster as most likely representing the background, and run an average over the points
+// in those buckets to determine a final number.
+// Ah, but what happens if two clusters are similar size? Glad you asked. Then we calculate
+// the mean for the background temps (we have limited compute cycles after all) and pick the
+// cluster that is closer to the known background. If there is *still* no clear winner, then
+// we give up and fallback to a mean of all temperatures.
 float trimMean(uint8_t side) {
+  // find the min and max values, which is needed to determine the bucket width
   float minVal = MAX_TEMP;
   float maxVal = MIN_TEMP;
   for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
@@ -573,55 +615,82 @@ float trimMean(uint8_t side) {
     maxVal = max(maxVal, raw_pixels[i]);
   }
 
-  uint8_t bin_counts[NUM_BUCKETS] = { 0 };
+  // place every point into a bucket
   float bucketWidth = (maxVal - minVal)/NUM_BUCKETS;
+  uint8_t bin_counts[NUM_BUCKETS] = { 0 };
   for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
     uint8_t bidx = bucketNum(raw_pixels[i], bucketWidth, minVal, maxVal);
     bin_counts[bidx]++;
   }
 
-  uint8_t maxBucketCount = 3;
-  uint8_t bucketStart = 0;
-  uint8_t bucketEnd = 0;
-  for (uint8_t i=0; i < NUM_BUCKETS; i++) {
-    if (bin_counts[i] == 0 && i == (bucketEnd + 1)) {
-      bucketEnd = i;
-    } else if (bin_counts[i] > maxBucketCount + 3) {
-      maxBucketCount = bin_counts[i];
-      bucketStart = i;
-      bucketEnd = i;
-    } else if (bin_counts[i] >= maxBucketCount - 3) {
-      if (i == (bucketEnd + 1)) {
-        bucketEnd = i;
-        maxBucketCount = max(bin_counts[i], maxBucketCount);
-      } else if (bin_counts[i] > maxBucketCount) {
-        maxBucketCount = bin_counts[i];
-        bucketStart = i;
-        bucketEnd = i;
-      } else if (bin_counts[i] == maxBucketCount) {
-        bucketStart = 10;
+  // cluster the buckets by distance
+  int8_t currentCluster = -1;
+  uint8_t clusterStarts[NUM_BUCKETS];
+  uint8_t clusterEnds[NUM_BUCKETS];
+  int8_t clusterCount[NUM_BUCKETS] = { 0 };
+  for (uint8_t i = 0; i < NUM_BUCKETS; i++) {
+    // bucket needs at least 3 points to be considered
+    if (bin_counts[i] <= 3) continue;
+
+    if (currentCluster == -1 || i - clusterEnds[currentCluster] > 2) {
+      // this is either the first sizeable bucket or too far from the current cluster.
+      // either way, start a new cluster
+      currentCluster++;
+      clusterStarts[currentCluster] = i;
+    }
+
+    clusterEnds[currentCluster] = i;
+    clusterCount[currentCluster] += bin_counts[i];
+  }
+
+  // clusters found!
+  if (currentCluster >= 0) {
+    int8_t topCluster;
+    if (currentCluster == 0) {
+      // only 1 cluster found, choose it and move along
+      topCluster = 0;
+    } else {
+      // multiple clusters found! Sort them by size to choose the largest
+      uint8_t sortedClusterIdx1[NUM_BUCKETS];
+      sortClustersByCount(currentCluster, clusterCount, sortedClusterIdx1);
+
+      if (clusterCount[(sortedClusterIdx1[0])] > clusterCount[(sortedClusterIdx1[1])] + 3) {
+        // there is a clear winner in the cluster wars
+        topCluster = sortedClusterIdx1[0];
+      } else {
+        // 2+ clusters of similar size, let's find the one more similar to the background
+        // first, calculate the background average
+        float bg_avg = calcBgAvg(side);
+        for (uint8_t i = 0; i <= currentCluster; i++) {
+          // then, decrease clusterCount by however far the point is from that bg average
+          float sp = minVal + (clusterStarts[i])*bucketWidth;
+          float ep = minVal + (clusterEnds[i]+1)*bucketWidth;
+          float mp = (ep + sp)/2.0;
+          clusterCount[i] -= (uint8_t)abs(mp - bg_avg);
+        }
+
+        // sort clusters again
+        uint8_t sortedClusterIdx2[NUM_BUCKETS];
+        sortClustersByCount(currentCluster, clusterCount, sortedClusterIdx2);
+
+        if (clusterCount[(sortedClusterIdx2[0])] > clusterCount[(sortedClusterIdx2[1])]) {
+          // there's a winner now!
+          topCluster = sortedClusterIdx2[0];
+        } else {
+          // give up
+          topCluster = -1;
+        }
       }
+    }
+
+    if (topCluster >= 0) {
+      // a cluster was chosen! Limit our search to those that fall in that cluster
+      maxVal = minVal + (clusterEnds[topCluster]+1)*bucketWidth + 0.1;
+      minVal = minVal + (clusterStarts[topCluster])*bucketWidth - 0.1;
     }
   }
 
-//  for (uint8_t i=0; i<NUM_BUCKETS; i++) {
-//    SERIAL_PRINT(i);
-//    SERIAL_PRINT(F(" ("));
-//    SERIAL_PRINT((minVal + i*bucketWidth));
-//    SERIAL_PRINT(F("-"));
-//    SERIAL_PRINT((minVal + (i+1)*bucketWidth));
-//    SERIAL_PRINT(F("): "));
-//    SERIAL_PRINTLN(bin_counts[i]);
-//  }
-
-//  float variance = (sq_sum - (sq(sum)/((float)cnt)))/((float)cnt);
-//  variance = sqrt(abs(variance));
-
-  if (bucketStart < 10 && maxBucketCount > 6) {
-    maxVal = minVal + (bucketEnd+1)*bucketWidth + 0.1;
-    minVal = minVal + bucketStart*bucketWidth - 0.1;
-  }
-
+  // compute mean of chosen points
   float sum = 0;
   uint8_t cnt = 0;
   for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
@@ -630,7 +699,7 @@ float trimMean(uint8_t side) {
     cnt++;
   }
 
-  if (!cnt) return 0;
+  if (!cnt) return 0; // no chosen points, skip this frame (should be impossible)
 
 //  SERIAL_PRINTLN(sum/((float)cnt));
   return sum/((float)cnt);
