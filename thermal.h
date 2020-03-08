@@ -188,22 +188,31 @@ float diffFromPoint(coord_t a, coord_t b) {
   return abs(raw_pixels[(a)] - raw_pixels[(b)]);
 }
 
-// calculate difference from foreground
-float fgDiff(coord_t i) {
+float fgDiffSigned(coord_t i) {
   if (((uint8_t)raw_pixels[(i)]) <= MIN_TEMP || ((uint8_t)raw_pixels[(i)]) >= MAX_TEMP) {
     return 0.0;
   }
-  float fgmt1 = abs(raw_pixels[(i)] - cavg1);
-  float fgmt2 = abs(raw_pixels[(i)] - cavg2);
-  return min(fgmt1, fgmt2);
+  float fgmt1 = raw_pixels[(i)] - cavg1;
+  float fgmt2 = raw_pixels[(i)] - cavg2;
+  return abs(fgmt1) < abs(fgmt2) ? fgmt1 : fgmt2;
+}
+
+// calculate difference from foreground
+float fgDiff(coord_t i) {
+  float fgd = fgDiffSigned(i);
+  return abs(fgd);
+}
+
+float bgDiffSigned(coord_t i) {
+  if (((uint8_t)raw_pixels[(i)]) <= MIN_TEMP || ((uint8_t)raw_pixels[(i)]) >= MAX_TEMP) {
+    return 0.0;
+  }
+  return raw_pixels[(i)] - bgPixel(i);
 }
 
 // calculate difference from background
 float bgDiff(coord_t i) {
-  if (((uint8_t)raw_pixels[(i)]) <= MIN_TEMP || ((uint8_t)raw_pixels[(i)]) >= MAX_TEMP) {
-    return 0.0;
-  }
-  float std = raw_pixels[(i)] - bgPixel(i);
+  float std = bgDiffSigned(i);
   return abs(std);
 }
 
@@ -406,7 +415,7 @@ typedef struct {
     }
 
     if (history >= MIN_HISTORY && (!crossed || !reverted) && starting_side() != side()) {
-      if (door_state != DOOR_OPEN && checkForDoorClose()) {
+      if (door_state != DOOR_OPEN && frames_since_door_open == 0) {
         // publish full event (not a2) even if door is closed
         publishPacket(DOOR_CLOSE_EVENT);
       } else {
@@ -820,16 +829,25 @@ bool isNeighborly(coord_t a, coord_t b) {
 }
 
 // find how many of this points neighbors have already been counted
-uint8_t findKnownNeighbors(uint8_t (&clusters)[AMG88xx_PIXEL_ARRAY_SIZE], coord_t p) {
-  uint8_t knownNeighbors = 0;
+uint8_t findKnownNeighbors(uint8_t (&clusters)[AMG88xx_PIXEL_ARRAY_SIZE], coord_t p,
+                            uint8_t total_masses) {
+  if (total_masses == 0) return 0;
+
   coord_t neighbors[8];
   uint8_t nc = loadNeighbors(p, neighbors);
-  for (uint8_t x = 0; x < nc; x++) {
-    coord_t n = neighbors[x];
-    if (clusters[n] > 0 && clusters[n] != clusters[p] && ((uint8_t)diffFromPoint(n,p)) < 4) {
-      knownNeighbors++;
+  uint8_t knownNeighbors = 0;
+  for (uint8_t i = 0; i < total_masses; i++) {
+    if (((uint8_t)diffFromPoint(points[i].current_position, p)) >= 5) continue;
+
+    uint8_t clusterCount = 0;
+    for (uint8_t x = 0; x < nc; x++) {
+      if (clusters[(neighbors[x])] == clusters[(points[i].current_position)]) {
+        clusterCount++;
+      }
     }
+    knownNeighbors = max(knownNeighbors, clusterCount);
   }
+
   return knownNeighbors;
 }
 
@@ -933,7 +951,8 @@ uint8_t findCurrentPoints() {
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
     uint8_t currBlobSize = 1;
-    bool addable = true;
+    bool addable = ((int8_t)fgDiffSigned(current_point)) > -5 ||
+                   ((int8_t)bgDiffSigned(current_point)) > -5;
 
     // scan all points added after current_point, since they must be part of same blob
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
@@ -968,8 +987,8 @@ uint8_t findCurrentPoints() {
         }
       }
 
-      if (blobPoint == current_point) {
-        uint8_t knownNeighbors = findKnownNeighbors(clusterNum, current_point);
+      if (addable && blobPoint == current_point) {
+        uint8_t knownNeighbors = findKnownNeighbors(clusterNum, current_point, total_masses);
         // this is a peak that is touching another blob, don't let it peak
         if (currBlobSize < knownNeighbors) {
           addable = false;
