@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.3.7"
+#define FIRMWARE_VERSION        "V20.3.8"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -881,7 +881,7 @@ uint8_t findCurrentPoints() {
     }
   }
 
-  // adjust sorted pixels based on position
+  // adjust sorted pixels based on neighbor count and position
   coord_t ordered_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
   coord_t sibling_indexes[AMG88xx_PIXEL_ARRAY_SIZE];
   for (uint8_t z=0; z<active_pixel_count; z++) {
@@ -898,8 +898,8 @@ uint8_t findCurrentPoints() {
         if (nci > (ncj + 1)) {
           // prefer the point that's more in middle of blob
           added = true;
-        } else if (nci >= ncj) {
-          // prefer point closer to middle of grid
+        } else if (nci >= ncj && diffFromPoint(ordered_indexes[j], i) < 0.2) {
+          // temps are equal, prefer point closer to middle of grid
           axis_t edge1 = AXIS(i);
           axis_t edge2 = AXIS(ordered_indexes[j]);
 
@@ -1092,7 +1092,7 @@ void forget_person(idx_t idx, Person (&temp_forgotten_people)[MAX_PEOPLE],
   Person p = known_people[(idx)];
   if (p.forgotten_count < MAX_FORGOTTEN_COUNT && p.confidence > 30 &&
         (p.checkForRevert() || axis_distance(p.starting_position, p.past_position) > 1) &&
-        p.max_fgm() > 1 && p.history <= p.count) {
+        p.avg_fgm > 1) {
     temp_forgotten_people[(temp_forgotten_num)] = p;
     temp_forgotten_num++;
   }
