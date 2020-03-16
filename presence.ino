@@ -63,7 +63,7 @@ void isBatteryConnected() {
     LOWPOWER_DELAY(SLEEP_30MS);
   }
   SERIAL_PRINTLN(total_change);
-  if (total_change > 100) battConnected = false;
+  if (total_change > 50) battConnected = false;
 }
 
 uint8_t packetCount = 1;

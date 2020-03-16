@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.3.8"
+#define FIRMWARE_VERSION        "V20.3.15"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -282,16 +282,23 @@ typedef struct {
   uint8_t   crossed           :4; // 0-9
   uint8_t   max_jump          :3; // 0-7
   bool      reverted          :1; // 0-1
+  
+  uint16_t  avg_bgm           :12;
+  uint8_t   avg_height        :4;
+
+  uint16_t  avg_fgm           :12;
+  uint8_t   avg_width         :4;
+
+  uint8_t   avg_neighbors;
+  uint8_t   avg_confidence;
 
   float     raw_temp;
   float     bgm;
   float     fgm;
-  float     avg_fgm;
 
   bool      real() { return past_position != UNDEF_POINT; };
   uint8_t   starting_side() { return SIDE(starting_position); };
   uint8_t   side() { return SIDE(past_position); };
-  float     max_fgm() { return max(avg_fgm, fgm); };
   float     total_distance() {
     return euclidean_distance(starting_position, past_position);
   };
@@ -309,16 +316,16 @@ typedef struct {
   #define METALENGTH  41
   void generateMeta(char *meta) {
     sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
-      confidence,                         // 3  100
-      floatToFint2(bgm),                  // 4  1020
-      floatToFint2(fgm),                  // 4  1020
+      avg_confidence,                     // 3  100
+      avg_bgm,                            // 4  1020
+      avg_fgm,                            // 4  1020
       starting_position,                  // 2  64
       past_position,                      // 2  64
       history,                            // 1  8
       count,                              // 5  60000
-      neighbors,                          // 1  8
-      height,                             // 1  7
-      width,                              // 1  7
+      avg_neighbors,                      // 1  8
+      avg_height,                         // 1  7
+      avg_width,                          // 1  7
       max_jump,                           // 1  5
       max_temp_drift,                     // 2  99
       forgotten_count                     // 1  3
@@ -451,10 +458,15 @@ const Person UNDEF_PERSON = {
   .crossed=0,
   .max_jump=0,
   .reverted=false,
+  .avg_bgm=0,
+  .avg_height=0,
+  .avg_fgm=0,
+  .avg_width=0,
+  .avg_neighbors=0,
+  .avg_confidence=0,
   .raw_temp=0,
   .bgm=0,
-  .fgm=0,
-  .avg_fgm=0
+  .fgm=0
 };
 
 uint8_t loadNeighbors(coord_t i, coord_t (&nArray)[8]) {
@@ -951,8 +963,9 @@ uint8_t findCurrentPoints() {
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
     uint8_t currBlobSize = 1;
-    bool addable = ((int8_t)fgDiffSigned(current_point)) > -5 ||
-                   ((int8_t)bgDiffSigned(current_point)) > -5;
+    int8_t fgdS = ((int8_t)fgDiffSigned(current_point));
+    int8_t bgdS = ((int8_t)bgDiffSigned(current_point));
+    bool addable = (fgdS > -5 || bgdS > -5) && abs(fgdS) > 1 && abs(bgdS) > 1;
 
     // scan all points added after current_point, since they must be part of same blob
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
@@ -1092,7 +1105,7 @@ void forget_person(idx_t idx, Person (&temp_forgotten_people)[MAX_PEOPLE],
   Person p = known_people[(idx)];
   if (p.forgotten_count < MAX_FORGOTTEN_COUNT && p.confidence > 30 &&
         (p.checkForRevert() || axis_distance(p.starting_position, p.past_position) > 1) &&
-        p.avg_fgm > 1) {
+        p.avg_fgm > 100) {
     temp_forgotten_people[(temp_forgotten_num)] = p;
     temp_forgotten_num++;
   }
@@ -1234,21 +1247,13 @@ bool processSensor() {
     // pair this person with a point in current frame
     for (idx_t j=0; j<total_masses; j++) {
       PossiblePerson pp = points[j];
-      float maxD;
-      float maxTfrd;
-      if (pp.side() != p.starting_side() && pointOnSmallBorder(pp.current_position) &&
-            p.avg_fgm < 2*p.fgm) {
-        // this point looks like it's leaving or new, limit to max allowed range of known pt
-        maxD = maxD2;
-        maxTfrd = maxT;
-      } else {
-        maxD = pp.max_distance();
-        maxD = max(maxD, maxD2); // choose larger range of 2 points as max distance
 
-        maxTfrd = pp.max_allowed_temp_drift();
-        maxTfrd = max(maxT, maxTfrd); // choose larger temp drift of 2 points as max drift
-      }
+      float maxD = pp.max_distance();
+      maxD = max(maxD, maxD2); // choose larger range of 2 points as max distance
       maxD = min(maxD, 5.0);   // don't let the D grow too big
+
+      float maxTfrd = pp.max_allowed_temp_drift();
+      maxTfrd = max(maxT, maxTfrd); // choose larger temp drift of 2 points as max drift
 
       float d = euclidean_distance(p.past_position, pp.current_position);
       if (d > maxD) continue;
@@ -1421,10 +1426,15 @@ bool processSensor() {
           p.raw_temp = pp.raw_temp();
           p.bgm = pp.bgm();
           p.fgm = pp.fgm();
-          p.avg_fgm = (0.33*p.fgm + 0.66*p.avg_fgm);
           p.neighbors = pp.neighbors;
           p.height = pp.height;
           p.width = pp.width;
+          p.avg_bgm = (floatToFint2(p.bgm) + p.avg_bgm*2)/3;
+          p.avg_fgm = (floatToFint2(p.fgm) + p.avg_fgm*2)/3;
+          p.avg_neighbors = (p.neighbors + p.avg_neighbors*2)/3;
+          p.avg_height = (p.height + p.avg_height*2)/3;
+          p.avg_width = (p.width + p.avg_width*2)/3;
+          p.avg_confidence = (p.confidence + p.avg_confidence*2)/3;
           p.count = min(p.count + 1, 60000);
           cycles_since_person = 0;
           known_people[idx] = p;
@@ -1532,10 +1542,15 @@ bool processSensor() {
             .crossed=cross,
             .max_jump=mj,
             .reverted=revert,
+            .avg_bgm=floatToFint2(b),
+            .avg_height=height,
+            .avg_fgm=floatToFint2(f),
+            .avg_width=width,
+            .avg_neighbors=n,
+            .avg_confidence=conf,
             .raw_temp=rt,
             .bgm=b,
-            .fgm=f,
-            .avg_fgm=f
+            .fgm=f
           };
           known_people[j] = p;
           break;
@@ -1680,6 +1695,9 @@ void initialize() {
 
   LOWPOWER_DELAY(SLEEP_1S);
   publish(FIRMWARE_VERSION, "0", RETRY_COUNT*2);
+
+  // check right on boot just in case this is a recovery attempt for a bricked sensor
+  checkForUpdates();
 
   // give sensor 16sec to stabilize
   LOWPOWER_DELAY(SLEEP_8S);
