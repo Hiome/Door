@@ -1683,7 +1683,8 @@ void runThermalLoop() {
     #ifdef TIME_CYCLES
       SERIAL_PRINTLN(millis());
     #endif
-  } else checkForUpdates();
+  }
+  checkForUpdates();
 }
 
 void initialize() {
