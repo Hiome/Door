@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.3.15"
+#define FIRMWARE_VERSION        "V20.3.22"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -188,31 +188,22 @@ float diffFromPoint(coord_t a, coord_t b) {
   return abs(raw_pixels[(a)] - raw_pixels[(b)]);
 }
 
-float fgDiffSigned(coord_t i) {
-  if (((uint8_t)raw_pixels[(i)]) <= MIN_TEMP || ((uint8_t)raw_pixels[(i)]) >= MAX_TEMP) {
-    return 0.0;
-  }
-  float fgmt1 = raw_pixels[(i)] - cavg1;
-  float fgmt2 = raw_pixels[(i)] - cavg2;
-  return abs(fgmt1) < abs(fgmt2) ? fgmt1 : fgmt2;
-}
-
 // calculate difference from foreground
 float fgDiff(coord_t i) {
-  float fgd = fgDiffSigned(i);
-  return abs(fgd);
-}
-
-float bgDiffSigned(coord_t i) {
   if (((uint8_t)raw_pixels[(i)]) <= MIN_TEMP || ((uint8_t)raw_pixels[(i)]) >= MAX_TEMP) {
     return 0.0;
   }
-  return raw_pixels[(i)] - bgPixel(i);
+  float fgmt1 = abs(raw_pixels[(i)] - cavg1);
+  float fgmt2 = abs(raw_pixels[(i)] - cavg2);
+  return min(fgmt1, fgmt2);
 }
 
 // calculate difference from background
 float bgDiff(coord_t i) {
-  float std = bgDiffSigned(i);
+  if (((uint8_t)raw_pixels[(i)]) <= MIN_TEMP || ((uint8_t)raw_pixels[(i)]) >= MAX_TEMP) {
+    return 0.0;
+  }
+  float std = raw_pixels[(i)] - bgPixel(i);
   return abs(std);
 }
 
@@ -235,7 +226,7 @@ uint8_t calcBgm(coord_t i) {
 
 float maxTempDiffForFgd(float f) {
   f *= 0.85;
-  return min(f, 5.0);
+  return min(f, 4.0);
 }
 
 float maxTempDiffForPoint(coord_t x) {
@@ -243,11 +234,15 @@ float maxTempDiffForPoint(coord_t x) {
 }
 
 typedef struct {
-  coord_t   current_position;
-  uint8_t   confidence;
-  uint8_t   neighbors;
-  uint8_t   height;
-  uint8_t   width;
+  coord_t   current_position;   //:6
+  uint8_t   confidence;         //:7
+
+  uint16_t  blobSize            :6;
+  uint8_t   noiseSize           :6;
+  uint8_t   neighbors           :4;
+
+  uint8_t   height              :4;
+  uint8_t   width               :4;
 
   uint8_t   side() { return SIDE(current_position); };
   float     raw_temp() { return raw_pixels[current_position]; };
@@ -257,8 +252,7 @@ typedef struct {
     return MAX_DISTANCE + (height+width+neighbors)/4.0 + (confidence/100.0);
   };
   float     max_allowed_temp_drift() {
-    float maxT = maxTempDiffForFgd(fgm());
-    return min(maxT, 4.0);
+    return maxTempDiffForFgd(fgm());
   };
 } PossiblePerson;
 
@@ -272,8 +266,8 @@ typedef struct {
   fint1_t   max_temp_drift;       //:6 0-60
   uint16_t  count;
 
-  uint8_t   history;           //:4; // 1-10 (could be 1-7)
-  uint8_t   neighbors;         //:4; // 0-8
+  uint8_t   history           :4; // 1-10 (could be 1-7)
+  uint8_t   neighbors         :4; // 0-8
 
   uint8_t   height            :3; // 0-7
   uint8_t   forgotten_count   :2; // 0-2
@@ -283,17 +277,17 @@ typedef struct {
   uint8_t   max_jump          :3; // 0-7
   bool      reverted          :1; // 0-1
   
-  uint16_t  avg_bgm           :12;
-  uint8_t   avg_height        :4;
+  uint32_t  avg_bgm           :11;
+  uint16_t  avg_fgm           :11;
+  uint8_t   avg_height        :3;
+  uint8_t   avg_width         :3;
+  uint8_t   avg_neighbors     :4;
 
-  uint16_t  avg_fgm           :12;
-  uint8_t   avg_width         :4;
-
-  uint8_t   avg_neighbors;
   uint8_t   avg_confidence;
+  uint8_t   blobSize;
+  uint8_t   noiseSize;
 
   float     raw_temp;
-  float     bgm;
   float     fgm;
 
   bool      real() { return past_position != UNDEF_POINT; };
@@ -306,16 +300,15 @@ typedef struct {
     return MAX_DISTANCE + (height+width+neighbors)/4.0 + (confidence/100.0);
   };
   float     max_allowed_temp_drift() {
-    float maxT = maxTempDiffForFgd(fgm);
-    return min(maxT, 4.0);
+    return maxTempDiffForFgd(fgm);
   };
   float     difference_from_point(coord_t a) {
     return abs(raw_pixels[(a)] - raw_temp);
   };
 
-  #define METALENGTH  41
+  #define METALENGTH  47
   void generateMeta(char *meta) {
-    sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
+    sprintf(meta, "%ux%lux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
       avg_confidence,                     // 3  100
       avg_bgm,                            // 4  1020
       avg_fgm,                            // 4  1020
@@ -323,13 +316,15 @@ typedef struct {
       past_position,                      // 2  64
       history,                            // 1  8
       count,                              // 5  60000
+      blobSize,                           // 2  60
       avg_neighbors,                      // 1  8
       avg_height,                         // 1  7
       avg_width,                          // 1  7
       max_jump,                           // 1  5
+      noiseSize,                          // 2  60
       max_temp_drift,                     // 2  99
       forgotten_count                     // 1  3
-    );                                    // + 12 'x' + 1 null => 41 total
+    );                                    // + 14 'x' + 1 null => 47 total
   };
 
   void revert() {
@@ -459,13 +454,14 @@ const Person UNDEF_PERSON = {
   .max_jump=0,
   .reverted=false,
   .avg_bgm=0,
-  .avg_height=0,
   .avg_fgm=0,
+  .avg_height=0,
   .avg_width=0,
   .avg_neighbors=0,
   .avg_confidence=0,
+  .blobSize=0,
+  .noiseSize=0,
   .raw_temp=0,
-  .bgm=0,
   .fgm=0
 };
 
@@ -581,12 +577,10 @@ void clearPointsAfterDoorClose() {
 
 float calcBgAvg(uint8_t side) {
   float bg_sum = 0;
-  uint8_t bg_cnt = 0;
   for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
     bg_sum += bgPixel(i);
-    bg_cnt++;
   }
-  return bg_sum/((float)bg_cnt);
+  return bg_sum/32.0;
 }
 
 void sortClustersByCount(uint8_t clusters, uint8_t (&clusterCount)[NUM_BUCKETS],
@@ -774,18 +768,19 @@ float calculateNewBackground(coord_t i) {
   // implicit alpha of 0.001 because avg_pixels is raw_pixels*1000.0
   float std = raw_pixels[(i)] - bgPixel(i);
   float fgd = fgDiff(i);
+  float bgd = abs(std);
 
   if (door_state != DOOR_CLOSED && frames_since_door_open < 3 && fgd < 0.6) {
     // door just opened, learn new bg very rapidly
     return std * 300.0; // alpha = 0.3
   }
 
-  if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && fgd < 0.8) {
+  if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && (fgd < 0.8 || bgd > max(2*fgd, 3))){
     // Learn new bg quickly but cautiously
     return std * 50.0; // alpha = 0.05
   }
 
-  if (cycles_since_person == 0 && abs(std) > 0.5 && fgd/global_fgm > 0.3) {
+  if (cycles_since_person == 0 && bgd > 0.5 && fgd/global_fgm > 0.3) {
     float mt = maxTempDiffForFgd(fgd);
     for (idx_t x=0; x<MAX_PEOPLE; x++) {
       if (known_people[x].real() && known_people[x].count > 5 &&
@@ -963,9 +958,7 @@ uint8_t findCurrentPoints() {
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
     uint8_t currBlobSize = 1;
-    int8_t fgdS = ((int8_t)fgDiffSigned(current_point));
-    int8_t bgdS = ((int8_t)bgDiffSigned(current_point));
-    bool addable = (fgdS > -5 || bgdS > -5) && abs(fgdS) > 1 && abs(bgdS) > 1;
+    bool addable = true;
 
     // scan all points added after current_point, since they must be part of same blob
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
@@ -1000,16 +993,16 @@ uint8_t findCurrentPoints() {
         }
       }
 
-      if (addable && blobPoint == current_point) {
-        uint8_t knownNeighbors = findKnownNeighbors(clusterNum, current_point, total_masses);
-        // this is a peak that is touching another blob, don't let it peak
-        if (currBlobSize < knownNeighbors) {
-          addable = false;
-          SERIAL_PRINT(F("skipped "));
-          SERIAL_PRINT(current_point);
-          SERIAL_PRINTLN(F(" because too close to blob"));
-        }
-      }
+//      if (addable && blobPoint == current_point) {
+//        uint8_t knownNeighbors = findKnownNeighbors(clusterNum,current_point,total_masses);
+//        // this is a peak that is touching another blob, don't let it peak
+//        if (currBlobSize < knownNeighbors) {
+//          addable = false;
+//          SERIAL_PRINT(F("skipped "));
+//          SERIAL_PRINT(current_point);
+//          SERIAL_PRINTLN(F(" because too close to blob"));
+//        }
+//      }
     }
 
     // check if point is too small/large to be a valid person
@@ -1038,7 +1031,7 @@ uint8_t findCurrentPoints() {
         }
       }
 
-      if (blobSize > ((uint8_t)(10.0*fgd))) {
+      if (blobSize > 60 || blobSize > ((uint8_t)(10.0*fgd))) {
         SERIAL_PRINT(F("skipped "));
         SERIAL_PRINT(current_point);
         SERIAL_PRINTLN(F(" because blob is too large"));
@@ -1049,12 +1042,14 @@ uint8_t findCurrentPoints() {
       uint8_t width = maxNAxis - minNAxis;
       uint8_t dimension = max(height, width) + 1;
       uint8_t boundingBox = min(dimension, 5);
+      uint8_t bgd = (uint8_t)bgDiff(current_point);
+      uint8_t tgd = min((uint8_t)fgd, bgd);
       // ignore a blob that fills less than 1/3 of its bounding box
       // a blob with 9 points will always pass density test
-      if ((blobSize+(uint8_t)fgd)*3 >= sq(boundingBox)) {
+      if ((blobSize+tgd)*3 >= sq(boundingBox)) {
         uint8_t noiseSize = 0;
         float mt_constrained = mt*0.7;
-        mt_constrained = constrain(mt, 0.51, 1.51);
+        mt_constrained = constrain(mt_constrained, 0.51, 1.51);
         for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
           if (clusterNum[n] == clusterIdx) continue;
   
@@ -1062,9 +1057,22 @@ uint8_t findCurrentPoints() {
           if (dp > mt_constrained) continue;
 
           if (norm_pixels[n] < CONFIDENCE_THRESHOLD && dp > 0.75) continue;
-  
-          uint8_t di = ((uint8_t)(euclidean_distance(n, current_point) + 0.1));
-          if (di >= dimension+2) continue;
+
+          if (clusterNum[n] && dimension < 4) {
+            bool skipable = false;
+            for (idx_t a = 0; a < total_masses; a++) {
+              if (clusterNum[n] == clusterNum[points[a].current_position]) {
+                skipable = true;
+                break;
+              }
+            }
+            if (skipable) {
+              // condisider any point as noise, except for valid people more than
+              // dimension+3 radius away.
+              uint8_t di = ((uint8_t)(euclidean_distance(n, current_point) + 0.1));
+              if (di >= dimension+3) continue;
+            }
+          }
 
           noiseSize++;
         }
@@ -1076,6 +1084,8 @@ uint8_t findCurrentPoints() {
           PossiblePerson pp = {
             .current_position=current_point,
             .confidence=norm_pixels[current_point],
+            .blobSize=blobSize,
+            .noiseSize=noiseSize,
             .neighbors=neighbors,
             .height=height,
             .width=width
@@ -1424,17 +1434,18 @@ bool processSensor() {
           }
           p.confidence = pp.confidence;
           p.raw_temp = pp.raw_temp();
-          p.bgm = pp.bgm();
           p.fgm = pp.fgm();
           p.neighbors = pp.neighbors;
           p.height = pp.height;
           p.width = pp.width;
-          p.avg_bgm = (floatToFint2(p.bgm) + p.avg_bgm*2)/3;
+          p.avg_bgm = (floatToFint2(pp.bgm()) + p.avg_bgm*2)/3;
           p.avg_fgm = (floatToFint2(p.fgm) + p.avg_fgm*2)/3;
           p.avg_neighbors = (p.neighbors + p.avg_neighbors*2)/3;
           p.avg_height = (p.height + p.avg_height*2)/3;
           p.avg_width = (p.width + p.avg_width*2)/3;
           p.avg_confidence = (p.confidence + p.avg_confidence*2)/3;
+          p.blobSize = (pp.blobSize + p.blobSize*2)/3;
+          p.noiseSize = (pp.noiseSize + p.noiseSize*2)/3;
           p.count = min(p.count + 1, 60000);
           cycles_since_person = 0;
           known_people[idx] = p;
@@ -1543,13 +1554,14 @@ bool processSensor() {
             .max_jump=mj,
             .reverted=revert,
             .avg_bgm=floatToFint2(b),
-            .avg_height=height,
             .avg_fgm=floatToFint2(f),
+            .avg_height=height,
             .avg_width=width,
             .avg_neighbors=n,
             .avg_confidence=conf,
+            .blobSize=points[i].blobSize,
+            .noiseSize=points[i].noiseSize,
             .raw_temp=rt,
-            .bgm=b,
             .fgm=f
           };
           known_people[j] = p;

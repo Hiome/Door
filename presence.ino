@@ -68,7 +68,7 @@ void isBatteryConnected() {
 
 uint8_t packetCount = 1;
 uint8_t publish(const char* msg, const char* meta, uint8_t retries) {
-  char sendBuf[55];
+  char sendBuf[56];
   int8_t len = sprintf(sendBuf, "%s;%s%u%u", msg, meta, checkBattery(), packetCount);
   if (len <= 0) return 0;
 
