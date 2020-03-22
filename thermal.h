@@ -958,28 +958,57 @@ uint8_t findCurrentPoints() {
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
     uint8_t currBlobSize = 1;
-    bool addable = true;
 
     // scan all points added after current_point, since they must be part of same blob
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
       coord_t blobPoint = ordered_indexes_temp[x];
+      float mtb = maxTempDiffForPoint(blobPoint);
 
       if (currBlobSize > 3) {
         // find how many neighbors this point has
         uint8_t fnc = 0;
+        coord_t foundNeighbor = UNDEF_POINT;
         coord_t blobNeighbors[8];
         uint8_t nc = loadNeighbors(blobPoint, blobNeighbors);
         for (uint8_t bn = 0; bn < nc; bn++) {
           if (clusterNum[blobNeighbors[bn]] == clusterIdx) {
             fnc++;
             if (fnc == 2) break;
+            foundNeighbor = blobNeighbors[bn];
           }
         }
-        // stop traversing if this point only has one connection to this blob
-        if (fnc == 1) continue;
+        if (fnc == 1) {
+          // if point only has 1 connection to this blob, maybe it's time to stop expanding
+          bool skippable = true;
+          for (uint8_t bn = 0; bn < nc; bn++) {
+            if (clusterNum[blobNeighbors[bn]] == 0 &&
+                  diffFromPoint(blobNeighbors[bn], blobPoint) < mtb) {
+              // keep expanding if there are actually more connections to the blob
+              if (isNeighborly(blobNeighbors[bn], foundNeighbor)) {
+                // shortcut big loop if we know this new point is touching the known neighbor
+                skippable = false;
+                break;
+              } else {
+                // scan all neighbors of new point to see if it's touching this blob
+                coord_t blobNeighbors2[8];
+                uint8_t nc2 = loadNeighbors(blobNeighbors[bn], blobNeighbors2);
+                for (uint8_t bn2 = 0; bn2 < nc2; bn2++) {
+                  // don't double count the current point
+                  if (blobNeighbors2[bn2] == blobPoint) continue;
+                  // check the other neighbors for a connection
+                  if (clusterNum[blobNeighbors2[bn2]] == clusterIdx) {
+                    // it is! We must keep expanding this blob then
+                    skippable = false;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+          if (skippable) continue;
+        }
       }
 
-      float mtb = maxTempDiffForPoint(blobPoint);
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
         // scan all known points after current_point to find neighbors to point x
         if (ordered_indexes[k] != UNDEF_POINT &&
@@ -992,118 +1021,94 @@ uint8_t findCurrentPoints() {
           currBlobSize++;
         }
       }
-
-//      if (addable && blobPoint == current_point) {
-//        uint8_t knownNeighbors = findKnownNeighbors(clusterNum,current_point,total_masses);
-//        // this is a peak that is touching another blob, don't let it peak
-//        if (currBlobSize < knownNeighbors) {
-//          addable = false;
-//          SERIAL_PRINT(F("skipped "));
-//          SERIAL_PRINT(current_point);
-//          SERIAL_PRINTLN(F(" because too close to blob"));
-//        }
-//      }
     }
 
     // check if point is too small/large to be a valid person
-    if (addable) {
-      uint8_t blobSize = 1;
-      axis_t minAxis = AXIS(current_point);
-      axis_t maxAxis = minAxis;
-      axis_t minNAxis = NOT_AXIS(current_point);
-      axis_t maxNAxis = minNAxis;
-      uint8_t neighbors = 0;
-      float fgd = fgDiff(current_point);
-      float mt = maxTempDiffForFgd(fgd);
-      for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
-        if (clusterNum[n] == clusterIdx && n != current_point) {
-          float dp = diffFromPoint(n, current_point);
-          if (dp > mt) continue;
+    uint8_t blobSize = 1;
+    axis_t minAxis = AXIS(current_point);
+    axis_t maxAxis = minAxis;
+    axis_t minNAxis = NOT_AXIS(current_point);
+    axis_t maxNAxis = minNAxis;
+    uint8_t neighbors = 0;
+    float fgd = fgDiff(current_point);
+    float mt = maxTempDiffForFgd(fgd);
+    for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
+      if (clusterNum[n] == clusterIdx && n != current_point) {
+        float dp = diffFromPoint(n, current_point);
+        if (dp > mt) continue;
 
-          blobSize++;
-          axis_t axisn = AXIS(n);
-          minAxis = min(minAxis, axisn);
-          maxAxis = max(maxAxis, axisn);
-          axis_t naxisn = NOT_AXIS(n);
-          minNAxis = min(minNAxis, naxisn);
-          maxNAxis = max(maxNAxis, naxisn);
-          if (isNeighborly(n, current_point)) neighbors++;
+        blobSize++;
+        axis_t axisn = AXIS(n);
+        minAxis = min(minAxis, axisn);
+        maxAxis = max(maxAxis, axisn);
+        axis_t naxisn = NOT_AXIS(n);
+        minNAxis = min(minNAxis, naxisn);
+        maxNAxis = max(maxNAxis, naxisn);
+        if (isNeighborly(n, current_point)) neighbors++;
+      }
+    }
+
+    if (blobSize > 60 || blobSize > ((uint8_t)(10.0*fgd))) {
+      SERIAL_PRINT(F("skipped "));
+      SERIAL_PRINT(current_point);
+      SERIAL_PRINTLN(F(" because blob is too large"));
+      continue;
+    }
+
+    uint8_t height = maxAxis - minAxis;
+    uint8_t width = maxNAxis - minNAxis;
+    uint8_t dimension = max(height, width) + 1;
+    uint8_t boundingBox = min(dimension, 5);
+    uint8_t bgd = (uint8_t)bgDiff(current_point);
+    uint8_t tgd = min((uint8_t)fgd, bgd);
+    // ignore a blob that fills less than 1/3 of its bounding box
+    // a blob with 9 points will always pass density test
+    if ((blobSize+tgd)*3 >= sq(boundingBox)) {
+      uint8_t noiseSize = 0;
+      float mt_constrained = mt*0.7;
+      mt_constrained = constrain(mt_constrained, 0.51, 1.51);
+      for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
+        if (clusterNum[n] == clusterIdx) continue;
+
+        float dp = diffFromPoint(n, current_point);
+        if (dp > mt_constrained) continue;
+
+        if (norm_pixels[n] < CONFIDENCE_THRESHOLD && dp > 0.75) continue;
+
+        if (clusterNum[n] && dimension < 4) {
+          uint8_t di = ((uint8_t)(euclidean_distance(n, current_point) + 0.1));
+          if (di >= dimension+3) continue;
         }
+
+        noiseSize++;
       }
 
-      if (blobSize > 60 || blobSize > ((uint8_t)(10.0*fgd))) {
+      if (noiseSize <= blobSize) {
+        SERIAL_PRINT(F("added "));
+        SERIAL_PRINTLN(current_point);
+
+        PossiblePerson pp = {
+          .current_position=current_point,
+          .confidence=norm_pixels[current_point],
+          .blobSize=blobSize,
+          .noiseSize=noiseSize,
+          .neighbors=neighbors,
+          .height=height,
+          .width=width
+        };
+        points[total_masses] = pp;
+        total_masses++;
+        if (total_masses == MAX_PEOPLE) break;
+      } else {
         SERIAL_PRINT(F("skipped "));
         SERIAL_PRINT(current_point);
-        SERIAL_PRINTLN(F(" because blob is too large"));
-        continue;
+        SERIAL_PRINT(F(" because noise is "));
+        SERIAL_PRINTLN(noiseSize);
       }
-
-      uint8_t height = maxAxis - minAxis;
-      uint8_t width = maxNAxis - minNAxis;
-      uint8_t dimension = max(height, width) + 1;
-      uint8_t boundingBox = min(dimension, 5);
-      uint8_t bgd = (uint8_t)bgDiff(current_point);
-      uint8_t tgd = min((uint8_t)fgd, bgd);
-      // ignore a blob that fills less than 1/3 of its bounding box
-      // a blob with 9 points will always pass density test
-      if ((blobSize+tgd)*3 >= sq(boundingBox)) {
-        uint8_t noiseSize = 0;
-        float mt_constrained = mt*0.7;
-        mt_constrained = constrain(mt_constrained, 0.51, 1.51);
-        for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
-          if (clusterNum[n] == clusterIdx) continue;
-  
-          float dp = diffFromPoint(n, current_point);
-          if (dp > mt_constrained) continue;
-
-          if (norm_pixels[n] < CONFIDENCE_THRESHOLD && dp > 0.75) continue;
-
-          if (clusterNum[n] && dimension < 4) {
-            bool skipable = false;
-            for (idx_t a = 0; a < total_masses; a++) {
-              if (clusterNum[n] == clusterNum[points[a].current_position]) {
-                skipable = true;
-                break;
-              }
-            }
-            if (skipable) {
-              // condisider any point as noise, except for valid people more than
-              // dimension+3 radius away.
-              uint8_t di = ((uint8_t)(euclidean_distance(n, current_point) + 0.1));
-              if (di >= dimension+3) continue;
-            }
-          }
-
-          noiseSize++;
-        }
-
-        if (noiseSize <= blobSize) {
-          SERIAL_PRINT(F("added "));
-          SERIAL_PRINTLN(current_point);
-
-          PossiblePerson pp = {
-            .current_position=current_point,
-            .confidence=norm_pixels[current_point],
-            .blobSize=blobSize,
-            .noiseSize=noiseSize,
-            .neighbors=neighbors,
-            .height=height,
-            .width=width
-          };
-          points[total_masses] = pp;
-          total_masses++;
-          if (total_masses == MAX_PEOPLE) break;
-        } else {
-          SERIAL_PRINT(F("skipped "));
-          SERIAL_PRINT(current_point);
-          SERIAL_PRINT(F(" because noise is "));
-          SERIAL_PRINTLN(noiseSize);
-        }
-      } else {
-          SERIAL_PRINT(F("skipped "));
-          SERIAL_PRINT(current_point);
-          SERIAL_PRINTLN(F(" because density is too low"));
-      }
+    } else {
+        SERIAL_PRINT(F("skipped "));
+        SERIAL_PRINT(current_point);
+        SERIAL_PRINTLN(F(" because density is too low"));
     }
   }
 
@@ -1559,8 +1564,8 @@ bool processSensor() {
             .avg_width=width,
             .avg_neighbors=n,
             .avg_confidence=conf,
-            .blobSize=points[i].blobSize,
-            .noiseSize=points[i].noiseSize,
+            .blobSize=(uint8_t)points[i].blobSize,
+            .noiseSize=(uint8_t)points[i].noiseSize,
             .raw_temp=rt,
             .fgm=f
           };
