@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.3.23"
+#define FIRMWARE_VERSION        "V20.3.24"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -125,6 +125,10 @@ float euclidean_distance(coord_t p1, coord_t p2) {
   int8_t yd = ((int8_t)yCoord(p2)) - ((int8_t)yCoord(p1));
   int8_t xd = ((int8_t)xCoord(p2)) - ((int8_t)xCoord(p1));
   return (float)sqrt(sq(yd) + sq(xd)) + 0.05;
+}
+
+uint8_t int_distance(coord_t a, coord_t b) {
+  return ((uint8_t)(euclidean_distance((a), (b)) + 0.1));
 }
 
 uint8_t axis_distance(coord_t p1, coord_t p2) {
@@ -308,9 +312,9 @@ typedef struct {
 
   #define METALENGTH  47
   void generateMeta(char *meta) {
-    sprintf(meta, "%ux%lux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
+    sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
       avg_confidence,                     // 3  100
-      avg_bgm,                            // 4  1020
+      (uint16_t)avg_bgm,                  // 4  1020
       avg_fgm,                            // 4  1020
       starting_position,                  // 2  64
       past_position,                      // 2  64
@@ -636,7 +640,8 @@ float trimMean(uint8_t side) {
   for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
     uint8_t bidx = bucketNum(raw_pixels[i], bucketWidth, minVal, maxVal);
     bin_counts[bidx]++;
-    if (bgDiff(i) < 1) bin_counts[bidx]++; // double weight for points close to background
+    // double weight for points close to background
+    if (((uint8_t)bgDiff(i)) == 0) bin_counts[bidx]++;
   }
 
   uint8_t sortedBins[NUM_BUCKETS];
@@ -768,36 +773,43 @@ float calculateNewBackground(coord_t i) {
   // implicit alpha of 0.001 because avg_pixels is raw_pixels*1000.0
   float std = raw_pixels[(i)] - bgPixel(i);
   float fgd = fgDiff(i);
-  float bgd = abs(std);
+  uint8_t bgd = (uint8_t)(abs(std));
 
-  if (door_state != DOOR_CLOSED && frames_since_door_open < 3 && fgd < 0.6) {
-    // door just opened, learn new bg very rapidly
-    return std * 300.0; // alpha = 0.3
+  if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) {
+    // door just changed
+    if (fgd < 0.6) {
+      // learn new bg very rapidly
+      return std * 300.0; // alpha = 0.3
+    }
+  
+    if (fgd < 0.8 || bgd > max(((uint8_t)(3.0*fgd)), 4)) {
+      // Learn new bg quickly but cautiously
+      return std * 100.0; // alpha = 0.1
+    }
+  } else {
+    // keep learning high in low foreground situations
+    if (fgd < 0.6) {
+      return std * 100.0; // alpha = 0.1
+    }
+  
+    if (fgd < 0.8 || bgd > max(((uint8_t)(3.0*fgd)), 4)) {
+      return std * 50.0; // alpha = 0.05
+    }
   }
 
-  if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && (fgd < 0.8 || bgd > max(2*fgd, 3))){
-    // Learn new bg quickly but cautiously
-    return std * 50.0; // alpha = 0.05
-  }
-
-  if (cycles_since_person == 0 && bgd > 0.5 && fgd/global_fgm > 0.3) {
+  if (cycles_since_person == 0 && bgd >= 1 && ((uint8_t)fgd) >= 1) {
     float mt = maxTempDiffForFgd(fgd);
     for (idx_t x=0; x<MAX_PEOPLE; x++) {
       if (known_people[x].real() && known_people[x].count > 5 &&
             known_people[x].count < 8000 && known_people[x].confidence > 50 &&
             diffFromPoint(known_people[x].past_position, (i)) < mt &&
-            ((uint8_t)euclidean_distance(known_people[x].past_position, (i))) < 3 &&
+            int_distance(known_people[x].past_position, (i)) < 3 &&
             ((uint8_t)known_people[x].total_distance()) > 1) {
         // point has moved or is significantly higher than variance, decrease alpha.
         // due to rounding, this means std needs to be at least 5 for bg to update.
         return std * 0.1; // alpha = 0.0001
       }
     }
-  }
-
-  if (fgd < 0.5) {
-    // foreground is uniform, learn it as the background
-    return std * 50.0; // alpha = 0.05
   }
 
   return std; // alpha = 0.001
@@ -832,30 +844,7 @@ void updateBgAverage() {
 }
 
 bool isNeighborly(coord_t a, coord_t b) {
-  return ((uint8_t)(euclidean_distance(a, b) + 0.1)) == 1;
-}
-
-// find how many of this points neighbors have already been counted
-uint8_t findKnownNeighbors(uint8_t (&clusters)[AMG88xx_PIXEL_ARRAY_SIZE], coord_t p,
-                            uint8_t total_masses) {
-  if (total_masses == 0) return 0;
-
-  coord_t neighbors[8];
-  uint8_t nc = loadNeighbors(p, neighbors);
-  uint8_t knownNeighbors = 0;
-  for (uint8_t i = 0; i < total_masses; i++) {
-    if (((uint8_t)diffFromPoint(points[i].current_position, p)) >= 5) continue;
-
-    uint8_t clusterCount = 0;
-    for (uint8_t x = 0; x < nc; x++) {
-      if (clusters[(neighbors[x])] == clusters[(points[i].current_position)]) {
-        clusterCount++;
-      }
-    }
-    knownNeighbors = max(knownNeighbors, clusterCount);
-  }
-
-  return knownNeighbors;
+  return int_distance(a, b) == 1;
 }
 
 uint8_t findCurrentPoints() {
@@ -958,11 +947,13 @@ uint8_t findCurrentPoints() {
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
     uint8_t currBlobSize = 1;
+    float fgd = fgDiff(current_point);
+    float mt = maxTempDiffForFgd(fgd);
 
     // scan all points added after current_point, since they must be part of same blob
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
       coord_t blobPoint = ordered_indexes_temp[x];
-      float mtb = maxTempDiffForPoint(blobPoint);
+      float mtb = blobPoint == current_point ? mt : maxTempDiffForPoint(blobPoint);
 
       if (currBlobSize > 3) {
         // find how many neighbors this point has
@@ -1012,8 +1003,9 @@ uint8_t findCurrentPoints() {
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
         // scan all known points after current_point to find neighbors to point x
         if (ordered_indexes[k] != UNDEF_POINT &&
-            diffFromPoint(ordered_indexes[k], blobPoint) < mtb &&
-            isNeighborly(ordered_indexes[k], blobPoint)) {
+            isNeighborly(ordered_indexes[k], blobPoint) &&
+            (diffFromPoint(ordered_indexes[k], blobPoint) < mtb ||
+              diffFromPoint(ordered_indexes[k], current_point) < mt)) {
           clusterNum[ordered_indexes[k]] = clusterIdx;
           ordered_indexes_temp[sorted_size] = ordered_indexes[k];
           sorted_size++;
@@ -1030,8 +1022,6 @@ uint8_t findCurrentPoints() {
     axis_t minNAxis = NOT_AXIS(current_point);
     axis_t maxNAxis = minNAxis;
     uint8_t neighbors = 0;
-    float fgd = fgDiff(current_point);
-    float mt = maxTempDiffForFgd(fgd);
     for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
       if (clusterNum[n] == clusterIdx && n != current_point) {
         float dp = diffFromPoint(n, current_point);
@@ -1075,9 +1065,8 @@ uint8_t findCurrentPoints() {
 
         if (norm_pixels[n] < CONFIDENCE_THRESHOLD && dp > 0.75) continue;
 
-        if (clusterNum[n] && dimension < 4) {
-          uint8_t di = ((uint8_t)(euclidean_distance(n, current_point) + 0.1));
-          if (di >= dimension+3) continue;
+        if (clusterNum[n] && dimension < 4 && int_distance(n, current_point) >= dimension+3){
+          continue;
         }
 
         noiseSize++;
@@ -1132,7 +1121,7 @@ bool otherPersonExists(coord_t i) {
   for (idx_t x=0; x<MAX_PEOPLE; x++) {
     Person p = known_people[x];
     if (p.real() && ((p.count > 3 && p.history > 1) || p.crossed) && p.confidence > 60 &&
-          p.neighbors > 2 && ((uint8_t)euclidean_distance(i, p.past_position)) < 5) {
+          p.neighbors > 2 && int_distance(i, p.past_position) < 5) {
       return true;
     }
   }
@@ -1449,7 +1438,7 @@ bool processSensor() {
           p.avg_height = (p.height + p.avg_height*2)/3;
           p.avg_width = (p.width + p.avg_width*2)/3;
           p.avg_confidence = (p.confidence + p.avg_confidence*2)/3;
-          p.blobSize = (pp.blobSize + p.blobSize*2)/3;
+          p.blobSize = ((uint8_t)pp.blobSize + p.blobSize*2)/3;
           p.noiseSize = (pp.noiseSize + p.noiseSize*2)/3;
           p.count = min(p.count + 1, 60000);
           cycles_since_person = 0;
