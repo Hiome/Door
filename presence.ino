@@ -49,16 +49,17 @@ bool battConnected = true;
 uint16_t checkBattery() {
   if (!battConnected) return 0;
   // https://lowpowerlab.com/forum/index.php/topic,1206.0.html
-  return (uint16_t)(analogRead(BATT)*0.644);
+  return (uint16_t)analogRead(BATT);
 }
 
 void isBatteryConnected() {
   uint16_t total_change = 0;
   uint16_t b = checkBattery();
-  for (uint8_t k=0; k<10; k++) {
+  for (uint8_t k=0; k<20; k++) {
     uint16_t b2 = checkBattery();
     int16_t bd = (int16_t)b - (int16_t)b2;
     total_change += abs(bd);
+    if (total_change > 50) break;
     b = b2;
     LOWPOWER_DELAY(SLEEP_30MS);
   }
@@ -68,7 +69,7 @@ void isBatteryConnected() {
 
 uint8_t packetCount = 1;
 uint8_t publish(const char* msg, const char* meta, uint8_t retries) {
-  char sendBuf[56];
+  char sendBuf[57];
   int8_t len = sprintf(sendBuf, "%s;%s%u%u", msg, meta, checkBattery(), packetCount);
   if (len <= 0) return 0;
 
