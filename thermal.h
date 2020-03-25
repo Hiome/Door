@@ -636,7 +636,7 @@ float trimMean(uint8_t side) {
 
   // place every point into a bucket
   float bucketWidth = (maxVal - minVal)/NUM_BUCKETS;
-  uint8_t bin_counts[NUM_BUCKETS] = { 0 };
+  int8_t bin_counts[NUM_BUCKETS] = { 0 };
   for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
     uint8_t bidx = bucketNum(raw_pixels[i], bucketWidth, minVal, maxVal);
     bin_counts[bidx]++;
@@ -654,25 +654,28 @@ float trimMean(uint8_t side) {
   uint8_t clusterCount[NUM_BUCKETS];
   for (uint8_t i = 0; i < NUM_BUCKETS; i++) {
     uint8_t binIndex = sortedBins[i];
-    if (bin_counts[binIndex] == 0) continue;
+    if (bin_counts[binIndex] < 3) continue;
 
     currentCluster++;
     clusterStarts[currentCluster] = binIndex;
     clusterEnds[currentCluster] = binIndex;
     clusterCount[currentCluster] = bin_counts[binIndex];
+    bin_counts[binIndex] = -1;
 
     for (int8_t j = binIndex-1; j >= 0; j--) {
-      if (bin_counts[j] >= bin_counts[binIndex]/2) {
+      if (bin_counts[j] < 0) break; // entering another cluster's territory
+      if (bin_counts[j] > bin_counts[binIndex]/2) {
         clusterStarts[currentCluster] = j;
         clusterCount[currentCluster] += bin_counts[j];
-        bin_counts[j] = 0;
+        bin_counts[j] = -1;
       } else if (clusterStarts[currentCluster] - j > 2) break;
     }
     for (uint8_t j = binIndex+1; j < NUM_BUCKETS; j++) {
-      if (bin_counts[j] >= bin_counts[binIndex]/2) {
+      if (bin_counts[j] < 0) break; // entering another cluster's territory
+      if (bin_counts[j] > bin_counts[binIndex]/2) {
         clusterEnds[currentCluster] = j;
         clusterCount[currentCluster] += bin_counts[j];
-        bin_counts[j] = 0;
+        bin_counts[j] = -1;
       } else if (j - clusterEnds[currentCluster] > 2) break;
     }
   }
@@ -688,7 +691,7 @@ float trimMean(uint8_t side) {
       uint8_t sortedClusters[NUM_BUCKETS];
       sortClustersByCount(currentCluster+1, clusterCount, sortedClusters);
 
-      if (clusterCount[(sortedClusters[0])] > clusterCount[(sortedClusters[1])]) {
+      if (clusterCount[(sortedClusters[0])] > clusterCount[(sortedClusters[1])] + 4) {
         // there is a clear winner in the cluster wars
         topCluster = sortedClusters[0];
       } else {
