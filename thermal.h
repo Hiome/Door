@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.3.24"
+#define FIRMWARE_VERSION        "V20.3.25"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -230,7 +230,7 @@ uint8_t calcBgm(coord_t i) {
 
 float maxTempDiffForFgd(float f) {
   f *= 0.85;
-  return min(f, 4.0);
+  return min(f, 5.0);
 }
 
 float maxTempDiffForPoint(coord_t x) {
@@ -1487,8 +1487,8 @@ bool processSensor() {
         coord_t a = sp - GRID_EXTENT;
         coord_t b = sp + GRID_EXTENT;
         bool djo = doorJustOpened();
-        if (djo && spAxis == 4 && height > 0 && door_side == SIDE(sp)) {
-          if (SIDE1(sp)) {
+        if ((djo || conf > 80) && spAxis == 4 && height > 0 && door_side == SIDE(sp)) {
+          if (door_side == 1) {
             if (compareNeighboringPixels(b,a,sp,f)) {
               sp += GRID_EXTENT;
               h++;
