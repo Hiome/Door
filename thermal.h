@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.3.25"
+#define FIRMWARE_VERSION        "V20.3.25b"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -587,7 +587,7 @@ float calcBgAvg(uint8_t side) {
   return bg_sum/32.0;
 }
 
-void sortClustersByCount(uint8_t clusters, uint8_t (&clusterCount)[NUM_BUCKETS],
+void sortClustersByCount(uint8_t clusters, int8_t (&clusterCount)[NUM_BUCKETS],
                           uint8_t (&sortedClusters)[NUM_BUCKETS]) {
   for (uint8_t i = 0; i < clusters; i++) {
     // sort clusters by clusterCount again
@@ -620,10 +620,6 @@ uint8_t bucketNum(float r, float width, float minVal, float maxVal) {
 // into a histogram with 10 buckets and identify clusters of buckets. We choose the largest
 // cluster as most likely representing the background, and run an average over the points
 // in those buckets to determine a final number.
-// Ah, but what happens if two clusters are similar size? Glad you asked. Then we calculate
-// the mean for the background temps (we have limited compute cycles after all) and pick the
-// cluster that is closer to the known background. If there is *still* no clear winner, then
-// we give up and fallback to a mean of all temperatures.
 float trimMean(uint8_t side) {
   // find the min and max values, which is needed to determine the bucket width
   float minVal = MAX_TEMP;
@@ -651,7 +647,7 @@ float trimMean(uint8_t side) {
   int8_t currentCluster = -1;
   uint8_t clusterStarts[NUM_BUCKETS];
   uint8_t clusterEnds[NUM_BUCKETS];
-  uint8_t clusterCount[NUM_BUCKETS];
+  int8_t clusterCount[NUM_BUCKETS];
   for (uint8_t i = 0; i < NUM_BUCKETS; i++) {
     uint8_t binIndex = sortedBins[i];
     if (bin_counts[binIndex] < 3) continue;
@@ -682,10 +678,10 @@ float trimMean(uint8_t side) {
 
   // clusters found!
   if (currentCluster >= 0) {
-    int8_t topCluster;
     if (currentCluster == 0) {
       // only 1 cluster found, choose it and move along
-      topCluster = 0;
+      maxVal = minVal + (clusterEnds[0]+1)*bucketWidth + 0.1;
+      minVal = minVal + (clusterStarts[0])*bucketWidth - 0.1;
     } else {
       // multiple clusters found! Sort them by size to choose the largest
       uint8_t sortedClusters[NUM_BUCKETS];
@@ -693,17 +689,9 @@ float trimMean(uint8_t side) {
 
       if (clusterCount[(sortedClusters[0])] > clusterCount[(sortedClusters[1])] + 4) {
         // there is a clear winner in the cluster wars
-        topCluster = sortedClusters[0];
-      } else {
-        // give up
-        topCluster = -1;
+        maxVal = minVal + (clusterEnds[sortedClusters[0]]+1)*bucketWidth + 0.1;
+        minVal = minVal + (clusterStarts[sortedClusters[0]])*bucketWidth - 0.1;
       }
-    }
-
-    if (topCluster >= 0) {
-      // a cluster was chosen! Limit our search to those that fall in that cluster
-      maxVal = minVal + (clusterEnds[topCluster]+1)*bucketWidth + 0.1;
-      minVal = minVal + (clusterStarts[topCluster])*bucketWidth - 0.1;
     }
   }
 
