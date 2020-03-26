@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.3.25b"
+#define FIRMWARE_VERSION        "V20.3.26"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -280,7 +280,7 @@ typedef struct {
   uint8_t   crossed           :4; // 0-9
   uint8_t   max_jump          :3; // 0-7
   bool      reverted          :1; // 0-1
-  
+
   uint32_t  avg_bgm           :11;
   uint16_t  avg_fgm           :11;
   uint8_t   avg_height        :3;
@@ -687,10 +687,12 @@ float trimMean(uint8_t side) {
       uint8_t sortedClusters[NUM_BUCKETS];
       sortClustersByCount(currentCluster+1, clusterCount, sortedClusters);
 
-      if (clusterCount[(sortedClusters[0])] > clusterCount[(sortedClusters[1])] + 4) {
+      if (clusterCount[(sortedClusters[0])]/2 >= clusterCount[(sortedClusters[1])]) {
         // there is a clear winner in the cluster wars
         maxVal = minVal + (clusterEnds[sortedClusters[0]]+1)*bucketWidth + 0.1;
         minVal = minVal + (clusterStarts[sortedClusters[0]])*bucketWidth - 0.1;
+      } else {
+        SERIAL_PRINTLN(F("WARN: bg cluster not big enough"));
       }
     }
   }
@@ -704,7 +706,10 @@ float trimMean(uint8_t side) {
     cnt++;
   }
 
-  if (!cnt) return 0; // no chosen points, skip this frame (should be impossible)
+  if (!cnt) {
+    SERIAL_PRINTLN(F("skip frame"));
+    return 0; // no chosen points, skip this frame (should be impossible)
+  }
 
 //  SERIAL_PRINTLN(sum/((float)cnt));
   return sum/((float)cnt);
@@ -1478,7 +1483,7 @@ bool processSensor() {
         coord_t a = sp - GRID_EXTENT;
         coord_t b = sp + GRID_EXTENT;
         bool djo = doorJustOpened();
-        if ((djo || conf > 80) && spAxis == 4 && height > 0 && door_side == SIDE(sp)) {
+        if (djo && spAxis == 4 && height > 0 && door_side == SIDE(sp)) {
           if (door_side == 1) {
             if (compareNeighboringPixels(b,a,sp,f)) {
               sp += GRID_EXTENT;
@@ -1510,6 +1515,17 @@ bool processSensor() {
             }
             side1Point = 0;
             side2Point = 0;
+          }
+        } else if (!djo && conf > 80 && spAxis == 4 && height > 0) {
+          // catch entries on door open for people who did not setup the door contact magnet
+          if (SIDE1(sp)) {
+            if (compareNeighboringPixels(b,a,sp,f)) {
+              sp += GRID_EXTENT;
+              h++;
+            }
+          } else if (compareNeighboringPixels(a,b,sp,f)) {
+            sp -= GRID_EXTENT;
+            h++;
           }
         }
       }
@@ -1580,7 +1596,8 @@ bool processSensor() {
   // wrap up with debugging output
 
   #ifdef PRINT_RAW_DATA
-    if (total_masses >= 0) {
+    //if (total_masses > 0) { // ignore frames where nothing happened
+    if (true) {
       for (idx_t i = 0; i<MAX_PEOPLE; i++) {
         Person p = known_people[i];
         if (p.real()) {
