@@ -52,19 +52,26 @@ uint16_t checkBattery() {
   return (uint16_t)analogRead(BATT);
 }
 
+#define MAX_VOLTAGE_DRIFT   50
+#define MAX_ALLOWED_VOLTAGE 700
+
 void isBatteryConnected() {
   uint16_t total_change = 0;
   uint16_t b = checkBattery();
   for (uint8_t k=0; k<20; k++) {
     uint16_t b2 = checkBattery();
+    if (b2 > MAX_ALLOWED_VOLTAGE) {
+      battConnected = false;
+      return;
+    }
     int16_t bd = (int16_t)b - (int16_t)b2;
     total_change += abs(bd);
-    if (total_change > 50) break;
+    if (total_change > MAX_VOLTAGE_DRIFT) break;
     b = b2;
     LOWPOWER_DELAY(SLEEP_30MS);
   }
   SERIAL_PRINTLN(total_change);
-  if (total_change > 50) battConnected = false;
+  if (total_change > MAX_VOLTAGE_DRIFT) battConnected = false;
 }
 
 uint8_t packetCount = 1;

@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.3.27"
+#define FIRMWARE_VERSION        "V20.3.27b"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -994,24 +994,25 @@ uint8_t findCurrentPoints() {
                   diffFromPoint(blobNeighbors[bn], blobPoint) < mtb) {
               // keep expanding if there are actually more connections to the blob
               if (isNeighborly(blobNeighbors[bn], foundNeighbor)) {
-                // shortcut big loop if we know this new point is touching the known neighbor
                 skippable = false;
                 break;
-              } else {
-                // scan all neighbors of new point to see if it's touching this blob
-                coord_t blobNeighbors2[8];
-                uint8_t nc2 = loadNeighbors(blobNeighbors[bn], blobNeighbors2);
-                for (uint8_t bn2 = 0; bn2 < nc2; bn2++) {
-                  // don't double count the current point
-                  if (blobNeighbors2[bn2] == blobPoint) continue;
-                  // check the other neighbors for a connection
-                  if (clusterNum[blobNeighbors2[bn2]] == clusterIdx) {
-                    // it is! We must keep expanding this blob then
-                    skippable = false;
-                    break;
-                  }
-                }
               }
+//              else {
+//                // scan all neighbors of new point to see if it's touching this blob
+//                coord_t blobNeighbors2[8];
+//                uint8_t nc2 = loadNeighbors(blobNeighbors[bn], blobNeighbors2);
+//                for (uint8_t bn2 = 0; bn2 < nc2; bn2++) {
+//                  // don't double count the current point
+//                  if (blobNeighbors2[bn2] == blobPoint) continue;
+//                  // check the other neighbors for a connection
+//                  if (clusterNum[blobNeighbors2[bn2]] == clusterIdx) {
+//                    // it is! We must keep expanding this blob then
+//                    skippable = false;
+//                    break;
+//                  }
+//                }
+//                if (!skippable) break;
+//              }
             }
           }
           if (skippable) continue;
@@ -1057,7 +1058,7 @@ uint8_t findCurrentPoints() {
     }
 
     float bgd = bgDiff(current_point);
-    if (blobSize > 60 || blobSize > floatToFint1(max(fgd, bgd))) {
+    if (currBlobSize > 60 || blobSize > floatToFint1(max(fgd, bgd))) {
       SERIAL_PRINT(F("skipped "));
       SERIAL_PRINT(current_point);
       SERIAL_PRINTLN(F(" because blob is too large"));
@@ -1070,7 +1071,7 @@ uint8_t findCurrentPoints() {
     uint8_t boundingBox = min(dimension, 5);
     // ignore a blob that fills less than 1/3 of its bounding box
     // a blob with 9 points will always pass density test
-    if ((blobSize + min((uint8_t)fgd, (uint8_t)bgd))*3 >= sq(boundingBox)) {
+    if ((currBlobSize + min((uint8_t)fgd, (uint8_t)bgd))*3 >= sq(boundingBox)) {
       uint8_t noiseSize = 0;
       float mt_constrained = mt*0.7;
       mt_constrained = constrain(mt_constrained, 0.51, 1.51);

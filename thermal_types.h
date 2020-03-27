@@ -17,25 +17,25 @@ typedef uint16_t fint2_t;
 typedef uint16_t fint3_t;
 
 float fint1ToFloat(fint1_t a) {
-  return (static_cast<float>(a))/10.0;
+  return ((float)a)/10.0;
 }
 
 fint1_t floatToFint1(float a) {
-  return (static_cast<fint1_t>(a*10.0));
+  return ((fint1_t)(a*10.0));
 }
 
 float fint2ToFloat(fint2_t a) {
-  return (static_cast<float>(a))/100.0;
+  return ((float)a)/100.0;
 }
 
 fint2_t floatToFint2(float a) {
-  return (static_cast<fint2_t>(a*100.0));
+  return ((fint2_t)(a*100.0));
 }
 
 float fint3ToFloat(fint3_t a) {
-  return (static_cast<float>(a))/1000.0;
+  return ((float)a)/1000.0;
 }
 
 fint3_t floatToFint3(float a) {
-  return (static_cast<fint3_t>(a*1000.0));
+  return ((fint3_t)(a*1000.0));
 }
