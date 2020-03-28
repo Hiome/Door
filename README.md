@@ -29,7 +29,7 @@ git clone git@gitlab.com:hiome/Door.git
 4. Plug in sensor and flash it!
 
 
-## compile.sh
+## AVRil
 
 To compile code, install arduino-cli
 
@@ -41,6 +41,6 @@ arduino-cli core update-index --additional-urls https://lowpowerlab.github.io/Mo
 arduino-cli core install arduino:avr
 ```
 
-Then run `./verify.sh` from this directory to make sure it all worked.
+Then run `bin/avril verify` from this directory to make sure it all worked.
 
-When you're ready to generate hex files, run `./compile.sh`. Make sure `OUTPUT_DIR` is set correctly in script.
+When you're ready to generate hex files, run `bin/avril compile`. Make sure `OUTPUT_DIR` is set correctly in script.

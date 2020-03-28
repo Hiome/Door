@@ -2,7 +2,22 @@
 
 set -e
 
+printSettings() {
+  echo ""
+  echo "👇 VERIFYING WITH THESE SETTINGS..."
+  echo ""
+  cat config.h
+  echo ""
+}
+
+if [[ $1 == 'config' ]]; then
+  nano config.h
+  exit 0
+fi
+
 if [[ $1 == 'verify' ]]; then
+  printSettings
+
   arduino-cli compile --fqbn Moteino:avr:Moteino --warnings "all" presence.ino
 
   echo ""
@@ -23,6 +38,8 @@ if [[ $1 == 'listen' ]]; then
 fi
 
 if [[ $1 == 'upload' ]]; then
+  printSettings
+
   arduino-cli compile --fqbn Moteino:avr:Moteino --warnings "all" presence.ino
   UID_FILE=~/uid.txt ~/Code/core-updater/OTA.py -s /dev/cu.usbserial-AL05VI82 -b 19200 -f presence.ino.Moteino.hex -t $2
   exit 0
