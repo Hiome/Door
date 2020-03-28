@@ -1,0 +1,33 @@
+#!/bin/bash
+
+set -e
+
+if [[ $1 == 'verify' ]]; then
+  arduino-cli compile --fqbn Moteino:avr:Moteino --warnings "all" presence.ino
+
+  echo ""
+  echo "✅ Verified on `date`"
+  echo ""
+
+  exit 0
+fi
+
+if [[ $1 == 'compile' ]]; then
+  ./compile_all.sh
+  exit 0
+fi
+
+if [[ $1 == 'listen' ]]; then
+  ./read_sensor.py
+  exit 0
+fi
+
+if [[ $1 == 'upload' ]]; then
+  arduino-cli compile --fqbn Moteino:avr:Moteino --warnings "all" presence.ino
+  UID_FILE=~/uid.txt ~/Code/core-updater/OTA.py -s /dev/cu.usbserial-AL05VI82 -b 19200 -f presence.ino.Moteino.hex -t $2
+  exit 0
+fi
+
+echo "AVRil CLI"
+echo "Available commands: verify, compile, upload <id>"
+exit 1
