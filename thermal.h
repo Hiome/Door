@@ -1,10 +1,11 @@
 #ifdef ENABLE_SERIAL
   #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
+//  #define PRINT_CLUSTERS
 //  #define TEST_PCBA           // uncomment to print raw amg sensor data
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.3.27b"
+#define FIRMWARE_VERSION        "V20.3.28"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -43,7 +44,7 @@ float global_fgm = 0;
 float cavg1 = 0;
 float cavg2 = 0;
 
-#ifdef PRINT_RAW_DATA
+#ifdef ENABLE_SERIAL
 
 // Replace above progmem with following functions to save 146 bytes of storage space
 axis_t xCoord(coord_t p) {
@@ -651,6 +652,18 @@ float trimMean(uint8_t side) {
     if (((uint8_t)bgDiff(i)) == 0) bin_counts[bidx]++;
   }
 
+  #ifdef PRINT_CLUSTERS
+    SERIAL_PRINT(minVal);
+    SERIAL_PRINT(F("-"));
+    SERIAL_PRINTLN(maxVal);
+    SERIAL_PRINTLN(F("bin"));
+    for (uint8_t i = 0; i<NUM_BUCKETS; i++) {
+      SERIAL_PRINT(i);
+      SERIAL_PRINT(F(":"));
+      SERIAL_PRINTLN(bin_counts[i]);
+    }
+  #endif
+
   uint8_t sortedBins[NUM_BUCKETS];
   sortClustersByCount(NUM_BUCKETS, bin_counts, sortedBins);
 
@@ -661,14 +674,14 @@ float trimMean(uint8_t side) {
   int8_t clusterCount[NUM_BUCKETS];
   for (uint8_t i = 0; i < NUM_BUCKETS; i++) {
     uint8_t binIndex = sortedBins[i];
-    if (bin_counts[binIndex] < 2) continue;
+    if (bin_counts[binIndex] < 3) continue;
 
     currentCluster++;
     clusterStarts[currentCluster] = binIndex;
     clusterEnds[currentCluster] = binIndex;
     clusterCount[currentCluster] = bin_counts[binIndex];
-    bin_counts[binIndex] = -1;
     uint8_t bucketSizeMin = min(4, bin_counts[binIndex]/2);
+    bin_counts[binIndex] = -1;
 
     for (int8_t j = binIndex-1; j >= 0; j--) {
       if (bin_counts[j] < 0) break; // entering another cluster's territory
@@ -691,6 +704,15 @@ float trimMean(uint8_t side) {
       } else if (j - clusterEnds[currentCluster] > 2) break;
     }
   }
+
+  #ifdef PRINT_CLUSTERS
+    SERIAL_PRINTLN(F("cls"));
+    for (uint8_t i = 0; i<=currentCluster; i++) {
+      SERIAL_PRINT(i);
+      SERIAL_PRINT(F(":"));
+      SERIAL_PRINTLN(clusterCount[i]);
+    }
+  #endif
 
   // clusters found!
   if (currentCluster >= 0) {
@@ -912,8 +934,10 @@ uint8_t findCurrentPoints() {
         if (nci > (ncj + 1)) {
           // prefer the point that's more in middle of blob
           added = true;
-        } else if (nci >= ncj && diffFromPoint(ordered_indexes[j], i) < 0.2) {
-          // temps are equal, prefer point closer to middle of grid
+        } else if (nci >= ncj) {
+          // prefer point closer to middle of grid
+          // it is tempting to limit this to only when temp doesn't change, but beware!
+          // that forces the blob to sometimes make large leaps that get blocked
           axis_t edge1 = AXIS(i);
           axis_t edge2 = AXIS(ordered_indexes[j]);
 
@@ -1061,7 +1085,7 @@ uint8_t findCurrentPoints() {
     if (currBlobSize > 60 || blobSize > floatToFint1(max(fgd, bgd))) {
       SERIAL_PRINT(F("skipped "));
       SERIAL_PRINT(current_point);
-      SERIAL_PRINTLN(F(" because blob is too large"));
+      SERIAL_PRINTLN(F(" -toobig"));
       continue;
     }
 
@@ -1111,13 +1135,13 @@ uint8_t findCurrentPoints() {
       } else {
         SERIAL_PRINT(F("skipped "));
         SERIAL_PRINT(current_point);
-        SERIAL_PRINT(F(" because noise is "));
+        SERIAL_PRINT(F(" -noise="));
         SERIAL_PRINTLN(noiseSize);
       }
     } else {
       SERIAL_PRINT(F("skipped "));
       SERIAL_PRINT(current_point);
-      SERIAL_PRINTLN(F(" because density is too low"));
+      SERIAL_PRINTLN(F(" -nodensity"));
     }
   }
 
@@ -1366,10 +1390,10 @@ bool processSensor() {
                 known_people[idx].count > 1 && known_people[idx].confidence > 50) {
             if (SIDE1(known_people[idx].starting_position)) {
               side1Point = max(known_people[idx].confidence, side1Point);
-              SERIAL_PRINTLN(F("side1Point"));
+              SERIAL_PRINTLN(F("s1Pt"));
             } else {
               side2Point = max(known_people[idx].confidence, side2Point);
-              SERIAL_PRINTLN(F("side2Point"));
+              SERIAL_PRINTLN(F("s2Pt"));
             }
           }
           FORGET_POINT;
@@ -1387,14 +1411,14 @@ bool processSensor() {
           PossiblePerson pp = points[i];
 
           float tempDiff = p.difference_from_point(pp.current_position);
+          uint8_t axisJump = max_axis_jump(p.past_position, pp.current_position);
           if (!p.suspicious && pp.side() != p.starting_side() &&
-                tempDiff > p.max_allowed_temp_drift() + 1) {
+                (tempDiff > p.max_allowed_temp_drift() + 1 || axisJump > 3)) {
             p.suspicious = true;
             p.publishPacket(SUSPICIOUS_EVENT);
           }
 
           if (p.past_position != pp.current_position) {
-            uint8_t axisJump = max_axis_jump(p.past_position, pp.current_position);
             p.max_jump = max(axisJump, p.max_jump);
 
             if (AXIS(pp.current_position) == AXIS(p.starting_position) ||
