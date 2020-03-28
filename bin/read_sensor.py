@@ -11,7 +11,7 @@ ser = serial.Serial('/dev/cu.usbserial-AL05MEZR', baudrate=115200, timeout=None,
 
 try:
   while True:
-    data = ser.readline()
+    data = ser.readline().strip()
     print str(datetime.datetime.now().time()) + ': ' + data
 finally:
   ser.close()
