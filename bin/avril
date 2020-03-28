@@ -2,23 +2,25 @@
 
 set -e
 
+DIR_PATH=$(dirname "${BASH_SOURCE[0]}")
+
 printSettings() {
   echo ""
-  echo "👇 VERIFYING WITH THESE SETTINGS..."
+  echo "👇 Using these settings..."
   echo ""
-  cat config.h
+  cat $DIR_PATH/../config.h | sed -n '/\/\//!p' # strip comments
   echo ""
 }
 
 if [[ $1 == 'config' ]]; then
-  nano config.h
+  nano $DIR_PATH/../config.h
   exit 0
 fi
 
 if [[ $1 == 'verify' ]]; then
   printSettings
 
-  arduino-cli compile --fqbn Moteino:avr:Moteino --warnings "all" presence.ino
+  arduino-cli compile --fqbn Moteino:avr:Moteino --warnings "all" $DIR_PATH/../presence.ino
 
   echo ""
   echo "✅ Verified on `date`"
@@ -28,23 +30,47 @@ if [[ $1 == 'verify' ]]; then
 fi
 
 if [[ $1 == 'compile' ]]; then
-  ./compile_all.sh
+  $DIR_PATH/compile_all.sh
   exit 0
 fi
 
 if [[ $1 == 'listen' ]]; then
-  ./read_sensor.py
+  $DIR_PATH/read_sensor.py
   exit 0
 fi
 
 if [[ $1 == 'upload' ]]; then
   printSettings
 
-  arduino-cli compile --fqbn Moteino:avr:Moteino --warnings "all" presence.ino
-  UID_FILE=~/uid.txt ~/Code/core-updater/OTA.py -s /dev/cu.usbserial-AL05VI82 -b 19200 -f presence.ino.Moteino.hex -t $2
+  arduino-cli compile --fqbn Moteino:avr:Moteino --warnings "all" $DIR_PATH/../presence.ino
+
+  if [ -z "$2" ]; then
+    nodeid=$(cat $DIR_PATH/../config.h | sed -nE 's/#define NODEID +([[:digit:]]+)/\1/p')
+  else
+    nodeid=$2
+  fi
+  echo ""
+  echo "🚀 Uploading to node $nodeid..."
+  echo ""
+
+  UID_FILE=$DIR_PATH/uid.txt ~/Code/core-updater/OTA.py -s /dev/cu.usbserial-AL05VI82 -b 19200 -f $DIR_PATH/../presence.ino.Moteino.hex -t $nodeid
+  exit 0
+fi
+
+if [[ $1 == 'flash' ]]; then
+  if [ -z "$2" ]; then
+    echo "Pass a file type like door/r3_alpha/2 or using the following sample command to flash it yourself:"
+    echo "UID_FILE=$DIR_PATH/uid.txt ~/Code/core-updater/OTA.py -s /dev/cu.usbserial-AL05VI82 -b 19200 -f ~/Code/core-firmware/door/r3_alpha/2.hex -t 13"
+    exit 1
+  fi
+
+  echo "💥 Flashing ~/Code/core-firmware/$2.hex to node 13 in 5 seconds..."
+  sleep 5
+
+  UID_FILE=$DIR_PATH/uid.txt ~/Code/core-updater/OTA.py -s /dev/cu.usbserial-AL05VI82 -b 19200 -f ~/Code/core-firmware/$2 -t 13
   exit 0
 fi
 
 echo "AVRil CLI"
-echo "Available commands: verify, compile, upload <id>"
+echo "Available commands: config, verify, compile, listen, upload <2>, flash <door/r3_alpha/2>"
 exit 1
