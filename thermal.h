@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.3.29b"
+#define FIRMWARE_VERSION        "V20.3.29c"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -785,7 +785,8 @@ float calculateNewBackground(coord_t i) {
   uint8_t bgd = (uint8_t)(abs(std));
   if (bgd == 0) return std; // alpha = 0.001
 
-  float fgd = fgDiff(i);
+  float cavg = SIDE1(i) ? cavg1 : cavg2;
+  float fgd = abs(raw_pixels[(i)] - cavg);
 
   if (bgd > 1 && (fgd < 0.8 || bgd > max(((uint8_t)(3*fgd)), 4))) {
     // rapidly update when background changes quickly
@@ -1026,8 +1027,7 @@ uint8_t findCurrentPoints() {
       }
     }
 
-    float bgd = bgDiff(current_point);
-    if (totalBlobSize > 60 || blobSize > floatToFint1(max(fgd, bgd))) {
+    if (totalBlobSize > 60) {
       SERIAL_PRINT(F("x "));
       SERIAL_PRINT(current_point);
       SERIAL_PRINTLN(F(" toobig"));
@@ -1038,9 +1038,10 @@ uint8_t findCurrentPoints() {
     uint8_t width = maxNAxis - minNAxis;
     uint8_t dimension = max(height, width) + 1;
     uint8_t boundingBox = min(dimension, 5);
+    uint8_t bgd = (uint8_t)bgDiff(current_point);
     // ignore a blob that fills less than 1/3 of its bounding box
     // a blob with 9 points will always pass density test
-    if ((totalBlobSize + min((uint8_t)fgd, (uint8_t)bgd))*3 >= sq(boundingBox)) {
+    if ((totalBlobSize + min((uint8_t)fgd, bgd))*3 >= sq(boundingBox)) {
       uint8_t noiseSize = 0;
       float mt_constrained = mt*0.7;
       mt_constrained = constrain(mt_constrained, 0.51, 1.51);
