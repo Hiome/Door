@@ -47,9 +47,13 @@ void beatHeart(uint32_t maxBeats) {
 
 bool battConnected = true;
 uint16_t checkBattery() {
+  #ifdef ENABLE_SERIAL
+  return 0;
+  #else
   if (!battConnected) return 0;
   // https://lowpowerlab.com/forum/index.php/topic,1206.0.html
   return (uint16_t)analogRead(BATT);
+  #endif
 }
 
 #define MAX_VOLTAGE_DRIFT   50
@@ -87,7 +91,7 @@ uint8_t publish(const char* msg, const char* meta, uint8_t retries) {
     SERIAL_PRINT(sendBuf);
     if (!success) SERIAL_PRINT(F(" x"));
     SERIAL_PRINTLN(F("\n\n"));
-    SERIAL_FLUSH;
+//    SERIAL_FLUSH;
   #endif
 
   if (success) heartbeats = 0;
@@ -136,7 +140,9 @@ void setup() {
 
   if (flash.initialize()) flash.sleep();
 
+  #ifndef ENABLE_SERIAL
   isBatteryConnected();
+  #endif
 
   initialize();
 

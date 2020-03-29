@@ -1,7 +1,6 @@
 #ifdef ENABLE_SERIAL
   #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 //  #define PRINT_CLUSTERS
-//  #define TEST_PCBA           // uncomment to print raw amg sensor data
 //  #define TIME_CYCLES
 #endif
 
@@ -113,6 +112,11 @@ const axis_t ycoordinates[AMG88xx_PIXEL_ARRAY_SIZE] PROGMEM = {
   #error Double check all your code, this is untested
 #endif
 
+float calcMaxDistance(uint8_t height, uint8_t width, uint8_t neighbors, uint8_t confidence) {
+  return MAX_DISTANCE + (height+width+neighbors)/8.0 + (confidence/100.0);
+}
+#define MAX_DIST_FORMULA ( calcMaxDistance(height, width, neighbors, confidence) )
+
 uint8_t SIDE(coord_t p) {
   return SIDE1(p) ? 1 : 2;
 }
@@ -160,8 +164,7 @@ uint8_t frames_since_door_open = 0;
 uint8_t door_side = 1;
 
 #define FRD_EVENT         0
-#define DOOR_CLOSE_EVENT  1
-#define SUSPICIOUS_EVENT  2
+#define SUSPICIOUS_EVENT  1
 
 uint8_t readDoorState() {
   #ifdef RECESSED
@@ -184,6 +187,12 @@ uint8_t readDoorState() {
 bool doorJustOpened() {
   if (door_state != DOOR_CLOSED) return frames_since_door_open < MAX_DOOR_CHANGE_FRAMES;
   else return readDoorState() != DOOR_CLOSED;
+}
+
+bool doorJustClosed() {
+  if (frames_since_door_open == 0) return door_state != DOOR_OPEN;
+  else if (door_state == DOOR_OPEN) return readDoorState() != DOOR_OPEN;
+  return false;
 }
 
 float bgPixel(coord_t x) {
@@ -255,7 +264,7 @@ typedef struct {
   float     bgm() { return bgDiff(current_position); };
   float     fgm() { return fgDiff(current_position); };
   float     max_distance() {
-    return MAX_DISTANCE + (height+width+neighbors)/4.0 + (confidence/100.0);
+    return MAX_DIST_FORMULA;
   };
   float     max_allowed_temp_drift() {
     return maxTempDiffForFgd(fgm());
@@ -267,13 +276,13 @@ PossiblePerson points[MAX_PEOPLE];
 typedef struct {
   coord_t   past_position;        //:7 0-63 + UNDEF_POINT
   coord_t   starting_position;    //:6 0-63
-  coord_t   max_position;         //:6 0-63
+  coord_t   suspicious_position;  //:7 0-63 + UNDEF_POINT
   uint8_t   confidence;           //:7 0-100
   fint1_t   max_temp_drift;       //:6 0-60
   uint16_t  count;
 
   uint8_t   history           :3; // 1-7
-  bool      suspicious        :1; // 0-1
+  bool      retreating        :1; // 0-1
   uint8_t   neighbors         :4; // 0-8
 
   uint8_t   height            :3; // 0-7
@@ -298,13 +307,14 @@ typedef struct {
   float     fgm;
 
   bool      real() { return past_position != UNDEF_POINT; };
+  bool      suspicious() { return suspicious_position != UNDEF_POINT; };
   uint8_t   starting_side() { return SIDE(starting_position); };
   uint8_t   side() { return SIDE(past_position); };
   float     total_distance() {
     return euclidean_distance(starting_position, past_position);
   };
   float     max_distance() {
-    return MAX_DISTANCE + (height+width+neighbors)/4.0 + (confidence/100.0);
+    return MAX_DIST_FORMULA;
   };
   float     max_allowed_temp_drift() {
     return maxTempDiffForFgd(fgm);
@@ -334,33 +344,22 @@ typedef struct {
     );                                    // + 14 'x' + 1 null => 47 total
   };
 
-  void revert() {
-    char rBuf[3];
+  uint8_t _publishFrd(const char* msg, uint8_t retries) {
     char meta[METALENGTH];
     generateMeta(meta);
-    sprintf(rBuf, "r%u", crossed);
-    publish(rBuf, meta, RETRY_COUNT);
+    return publish(msg, meta, retries);
   };
 
-  bool checkForDoorClose() {
-    // This could possibly fail if person's hand is on door knob opening door and sensor
-    // detects that as a person. We'll see hand go from 1->2, and then get dropped as door
-    // opens, and this if block will prevent it from reverting properly.
-    if (confidence > 60) {
-      if (frames_since_door_open == 0) {
-        return door_state != DOOR_OPEN;
-      } else if (door_state == DOOR_OPEN) {
-        // door is still open, but did it change mid-frame?
-        return door_state != readDoorState();
-      }
-    }
-    return false;
+  void revert() {
+    char rBuf[3];
+    sprintf(rBuf, "r%u", crossed);
+    _publishFrd(rBuf, RETRY_COUNT);
   };
 
   bool checkForRevert() {
-    if (!real() || !crossed) return false;
+    if (!real() || !crossed || suspicious()) return false;
 
-    if (checkForDoorClose()) {
+    if (confidence > 60 && doorJustClosed()) {
       if ((side() != door_side || !pointOnBorder(past_position)) &&
           ((reverted && starting_side() != door_side) ||
           (!reverted && starting_side() == door_side))) {
@@ -383,61 +382,47 @@ typedef struct {
   };
 
   void publishPacket(uint8_t eventType) {
-    char meta[METALENGTH];
-    generateMeta(meta);
+    if (eventType == SUSPICIOUS_EVENT) {
+      _publishFrd("s", 3);
+      return;
+    }
+
     uint8_t old_crossed = crossed;
     if (SIDE1(past_position)) {
-      if (eventType == FRD_EVENT) {
-        crossed = publish(door_state == DOOR_OPEN ? "1" : "a1", meta, RETRY_COUNT);
-        if (!crossed) return;
-        // artificially shift starting point ahead 1 row so that
-        // if user turns around now, algorithm considers it an exit
-        int8_t s = ((int8_t)past_position) - ((int8_t)GRID_EXTENT);
-        starting_position = max(s, 0);
-      } else if (eventType == DOOR_CLOSE_EVENT && door_side == 2) {
-        publish("1", meta, RETRY_COUNT);
-        return;
-      } else if (eventType == SUSPICIOUS_EVENT) {
-        publish("s", meta, 3);
-        return;
-      }
+      crossed = _publishFrd("1", RETRY_COUNT);
+      if (!crossed) return;
+      // artificially shift starting point ahead 1 row so that
+      // if user turns around now, algorithm considers it an exit
+      int8_t s = ((int8_t)past_position) - ((int8_t)GRID_EXTENT);
+      starting_position = max(s, 0);
     } else {
-      if (eventType == FRD_EVENT) {
-        crossed = publish(door_state == DOOR_OPEN ? "2" : "a2", meta, RETRY_COUNT);
-        if (!crossed) return;
-        uint8_t s = past_position + GRID_EXTENT;
-        starting_position = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
-      } else if (eventType == DOOR_CLOSE_EVENT && door_side == 1) {
-        publish("2", meta, RETRY_COUNT);
-        return;
-      } else if (eventType == SUSPICIOUS_EVENT) {
-        publish("s", meta, 3);
-        return;
-      }
+      crossed = _publishFrd("2", RETRY_COUNT);
+      if (!crossed) return;
+      uint8_t s = past_position + GRID_EXTENT;
+      starting_position = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
     }
-    if (old_crossed) crossed = 0;
-    reverted = false;
-    history = 1;
-    suspicious = false;
-    max_jump = 0;
     max_temp_drift = 0;
+    forgotten_count = 0;
+    max_jump = 0;
     count = 1;
+    history = 1;
+    retreating = false;
+    reverted = false;
+    suspicious_position = UNDEF_POINT;
+    if (old_crossed) crossed = 0;
   };
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
   bool publishMaybeEvent() {
-    if (!real() || confidence < CONFIDENCE_THRESHOLD) {
+    if (!real()) return false;
+
+    if (door_state != DOOR_OPEN && frames_since_door_open == 0 && door_side == side()) {
       return false;
     }
 
-    if ((history >= MIN_HISTORY || (history == 2 && confidence > 80)) &&
+    if ((history >= MIN_HISTORY || (history == 2 && avg_fgm > 200 && avg_bgm > 200)) &&
         (!crossed || !reverted) && starting_side() != side()) {
-      if (door_state != DOOR_OPEN && frames_since_door_open == 0) {
-        // publish full event (not a2) even if door is closed
-        publishPacket(DOOR_CLOSE_EVENT);
-      } else {
-        publishPacket(FRD_EVENT);
-      }
+      publishPacket(FRD_EVENT);
       return true;
     }
 
@@ -454,14 +439,13 @@ Person forgotten_people[MAX_PEOPLE];
 const Person UNDEF_PERSON = {
   .past_position=UNDEF_POINT,
   // (╯°□°）╯︵ ┻━┻  avr-gcc doesn't implement non-trivial designated initializers...
-  // comment out rest of this to save some RAM in exchange for lots of compiler warnings
   .starting_position=UNDEF_POINT,
-  .max_position=UNDEF_POINT,
+  .suspicious_position=UNDEF_POINT,
   .confidence=0,
   .max_temp_drift=0,
   .count=1,
   .history=1,
-  .suspicious=false,
+  .retreating=false,
   .neighbors=0,
   .height=0,
   .forgotten_count=MAX_FORGOTTEN_COUNT,
@@ -543,8 +527,8 @@ uint8_t neighborsCount(coord_t i,float mt,uint8_t (&norm_pixels)[AMG88xx_PIXEL_A
 void publishEvents() {
   for (idx_t i=0; i<MAX_PEOPLE; i++) {
     Person p = known_people[i];
-    if (p.real() && p.starting_side() != p.side() && (!p.crossed || !p.reverted) &&
-        p.history > MIN_HISTORY && p.confidence > CONFIDENCE_THRESHOLD) {
+    if (p.real() && p.history > MIN_HISTORY && (!p.crossed || !p.reverted) &&
+        p.starting_side() != p.side()) {
       p.publishPacket(FRD_EVENT);
       known_people[i] = p; // update known_people array
     }
@@ -569,18 +553,18 @@ bool checkDoorState() {
 }
 
 void clearPointsAfterDoorClose() {
-  #ifdef RECESSED
-    uint8_t old_door = door_state;
-  #endif
+//  #ifdef RECESSED
+//    uint8_t old_door = door_state;
+//  #endif
 
   if (checkDoorState()) {
     cycles_since_forgotten = MAX_EMPTY_CYCLES;
     side1Point = 0;
     side2Point = 0;
 
-    #ifdef RECESSED
-      if (door_state == DOOR_OPEN && old_door == DOOR_AJAR) return;
-    #endif
+//    #ifdef RECESSED
+//      if (door_state == DOOR_OPEN && old_door == DOOR_AJAR) return;
+//    #endif
 
     for (idx_t i = 0; i<MAX_PEOPLE; i++) {
       known_people[i].forget();
@@ -589,14 +573,6 @@ void clearPointsAfterDoorClose() {
       forgotten_people[i] = UNDEF_PERSON;
     }
   }
-}
-
-float calcBgAvg(uint8_t side) {
-  float bg_sum = 0;
-  for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
-    bg_sum += bgPixel(i);
-  }
-  return bg_sum/32.0;
 }
 
 void sortClustersByCount(uint8_t clusters, int8_t (&clusterCount)[NUM_BUCKETS],
@@ -751,7 +727,7 @@ float trimMean(uint8_t side) {
   }
 
   if (!cnt) {
-    SERIAL_PRINTLN(F("skip frame"));
+    SERIAL_PRINTLN(F("xxx"));
     return 0; // no chosen points, skip this frame (should be impossible)
   }
 
@@ -790,13 +766,6 @@ bool normalizePixels() {
 
   if (((int8_t)cavg1) == 0 || ((int8_t)cavg2) == 0) return false;
 
-  #ifdef TEST_PCBA
-    SERIAL_PRINT(F("thermistor "));
-    SERIAL_PRINTLN(amg.readThermistor());
-    SERIAL_PRINT(F("mean "));
-    SERIAL_PRINTLN((cavg1 + cavg2)/2);
-  #endif
-
   // calculate CSM gradients
   global_bgm = 0; // needed to skip bgm check in first calculateFgm
   calculateFgm();
@@ -815,33 +784,22 @@ float calculateNewBackground(coord_t i) {
   float fgd = fgDiff(i);
   uint8_t bgd = (uint8_t)(abs(std));
 
-  if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) {
-    // door just changed
-    if (fgd < 0.6) {
-      // learn new bg very rapidly
-      return std * 300.0; // alpha = 0.3
-    }
-  
-    if (fgd < 0.8 || bgd > max(((uint8_t)(3.0*fgd)), 4)) {
-      // Learn new bg quickly but cautiously
-      return std * 100.0; // alpha = 0.1
-    }
-  } else {
-    // keep learning high in low foreground situations
-    if (fgd < 0.6) {
-      return std * 100.0; // alpha = 0.1
-    }
-  
-    if (fgd < 0.8 || bgd > max(((uint8_t)(3.0*fgd)), 4)) {
-      return std * 50.0; // alpha = 0.05
-    }
+  uint16_t alpha = 0;
+  if (fgd < 0.8) {
+    alpha = 100 * bgd;
+  } else if (bgd > max(((uint8_t)(3*fgd)), 4)) {
+    alpha = 50 * bgd;
+  }
+  if (alpha) {
+    if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) alpha *= 2;
+    return std * min(alpha, 900);
   }
 
   if (cycles_since_person == 0 && bgd >= 1 && ((uint8_t)fgd) >= 1) {
     float mt = maxTempDiffForFgd(fgd);
     for (idx_t x=0; x<MAX_PEOPLE; x++) {
       if (known_people[x].real() && known_people[x].count > 5 &&
-            known_people[x].count < 8000 && known_people[x].confidence > 50 &&
+            known_people[x].count < 8000 &&
             diffFromPoint(known_people[x].past_position, (i)) < mt &&
             int_distance(known_people[x].past_position, (i)) < 3 &&
             ((uint8_t)known_people[x].total_distance()) > 1) {
@@ -856,22 +814,7 @@ float calculateNewBackground(coord_t i) {
 }
 
 void updateBgAverage() {
-  // if door is covering sensor, don't update background averages
-  #ifdef RECESSED
-    if (door_state == DOOR_CLOSED) return;
-  #else // wired
-    if (door_state == DOOR_AJAR) return;
-  #endif
-
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    #ifdef RECESSED
-      // ignore points where door is blocking sensor
-      if (door_state == DOOR_AJAR && SIDE(i) == door_side) continue;
-    #else // wired
-      // ignore sensor staring at back of door for wired sensors
-      if (door_state == DOOR_CLOSED && SIDE(i) != door_side) continue;
-    #endif
-
     // ignore extreme raw pixels
     if (((uint8_t)raw_pixels[(i)]) < MIN_TEMP || ((uint8_t)raw_pixels[(i)]) > MAX_TEMP) {
       continue;
@@ -928,7 +871,7 @@ uint8_t findCurrentPoints() {
     uint8_t nci = neighborsCount(i, mt, norm_pixels);
     for (uint8_t j=0; j<z; j++) {
       coord_t oj = sibling_indexes[j];
-      if (norm_pixels[i] > norm_pixels[oj]/2 && diffFromPoint(oj, i) < min(fgd-0.1, 0.6)) {
+      if ((norm_pixels[i]*2) > norm_pixels[oj] && diffFromPoint(oj, i) < min(fgd-0.1, 0.6)) {
         float mt2 = maxTempDiffForPoint(ordered_indexes[j]);
         uint8_t ncj = neighborsCount(ordered_indexes[j], mt2, norm_pixels);
         if (nci > (ncj + 1)) {
@@ -988,16 +931,17 @@ uint8_t findCurrentPoints() {
     ordered_indexes_temp[sorted_size] = current_point;
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
-    uint8_t currBlobSize = 1;
     float fgd = fgDiff(current_point);
     float mt = maxTempDiffForFgd(fgd);
 
     // scan all points added after current_point, since they must be part of same blob
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
       coord_t blobPoint = ordered_indexes_temp[x];
-      float mtb = blobPoint == current_point ? mt : maxTempDiffForPoint(blobPoint);
-
-      if (currBlobSize > 3) {
+      float mtb;
+      if (blobPoint == current_point) {
+        mtb = mt;
+      } else {
+        mtb = maxTempDiffForPoint(blobPoint);
         // find how many neighbors this point has
         uint8_t fnc = 0;
         coord_t foundNeighbor = UNDEF_POINT;
@@ -1053,13 +997,13 @@ uint8_t findCurrentPoints() {
           ordered_indexes_temp[sorted_size] = ordered_indexes[k];
           sorted_size++;
           ordered_indexes[k] = UNDEF_POINT;
-          currBlobSize++;
         }
       }
     }
 
     // check if point is too small/large to be a valid person
     uint8_t blobSize = 1;
+    uint8_t totalBlobSize = 1;
     axis_t minAxis = AXIS(current_point);
     axis_t maxAxis = minAxis;
     axis_t minNAxis = NOT_AXIS(current_point);
@@ -1067,6 +1011,8 @@ uint8_t findCurrentPoints() {
     uint8_t neighbors = 0;
     for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
       if (clusterNum[n] == clusterIdx && n != current_point) {
+        totalBlobSize++;
+
         float dp = diffFromPoint(n, current_point);
         if (dp > mt) continue;
 
@@ -1082,10 +1028,10 @@ uint8_t findCurrentPoints() {
     }
 
     float bgd = bgDiff(current_point);
-    if (currBlobSize > 60 || blobSize > floatToFint1(max(fgd, bgd))) {
-      SERIAL_PRINT(F("skipped "));
+    if (totalBlobSize > 60 || blobSize > floatToFint1(max(fgd, bgd))) {
+      SERIAL_PRINT(F("x "));
       SERIAL_PRINT(current_point);
-      SERIAL_PRINTLN(F(" -toobig"));
+      SERIAL_PRINTLN(F(" toobig"));
       continue;
     }
 
@@ -1095,7 +1041,7 @@ uint8_t findCurrentPoints() {
     uint8_t boundingBox = min(dimension, 5);
     // ignore a blob that fills less than 1/3 of its bounding box
     // a blob with 9 points will always pass density test
-    if ((currBlobSize + min((uint8_t)fgd, (uint8_t)bgd))*3 >= sq(boundingBox)) {
+    if ((totalBlobSize + min((uint8_t)fgd, (uint8_t)bgd))*3 >= sq(boundingBox)) {
       uint8_t noiseSize = 0;
       float mt_constrained = mt*0.7;
       mt_constrained = constrain(mt_constrained, 0.51, 1.51);
@@ -1106,8 +1052,8 @@ uint8_t findCurrentPoints() {
         if (dp > mt_constrained) continue;
 
         if (norm_pixels[n] < CONFIDENCE_THRESHOLD) {
-          // only count 0 confidence points within 0.75º (regardless of distance)
-          if (dp > 0.75) continue;
+          // only count 0 confidence points within 0.3º (regardless of distance)
+          if (dp > 0.3) continue;
         } else if (dimension < 5 && int_distance(n, current_point) >= dimension+2) {
           // only count points with confidence within dimension+2 distance
           continue;
@@ -1117,7 +1063,7 @@ uint8_t findCurrentPoints() {
       }
 
       if (noiseSize <= blobSize) {
-        SERIAL_PRINT(F("added "));
+        SERIAL_PRINT(F("+ "));
         SERIAL_PRINTLN(current_point);
 
         PossiblePerson pp = {
@@ -1133,15 +1079,15 @@ uint8_t findCurrentPoints() {
         total_masses++;
         if (total_masses == MAX_PEOPLE) break;
       } else {
-        SERIAL_PRINT(F("skipped "));
+        SERIAL_PRINT(F("x "));
         SERIAL_PRINT(current_point);
-        SERIAL_PRINT(F(" -noise="));
+        SERIAL_PRINT(F(" noise="));
         SERIAL_PRINTLN(noiseSize);
       }
     } else {
-      SERIAL_PRINT(F("skipped "));
+      SERIAL_PRINT(F("x "));
       SERIAL_PRINT(current_point);
-      SERIAL_PRINTLN(F(" -nodensity"));
+      SERIAL_PRINTLN(F(" nodensity"));
     }
   }
 
@@ -1151,11 +1097,15 @@ uint8_t findCurrentPoints() {
 void forget_person(idx_t idx, Person (&temp_forgotten_people)[MAX_PEOPLE],
                     idx_t (&pairs)[MAX_PEOPLE], uint8_t &temp_forgotten_num) {
   Person p = known_people[(idx)];
-  if (p.forgotten_count < MAX_FORGOTTEN_COUNT && p.confidence > 30 &&
-        (p.checkForRevert() || axis_distance(p.starting_position, p.past_position) > 1) &&
-        p.avg_fgm > 100) {
-    temp_forgotten_people[(temp_forgotten_num)] = p;
-    temp_forgotten_num++;
+  if (p.confidence > 30 &&
+      (p.checkForRevert() || axis_distance(p.starting_position, p.past_position) > 1)) {
+    if (p.forgotten_count < MAX_FORGOTTEN_COUNT) {
+      temp_forgotten_people[(temp_forgotten_num)] = p;
+      temp_forgotten_num++;
+    } else {
+      // we're giving up on this point, but at least publish what we have
+      p.publishMaybeEvent();
+    }
   }
   pairs[(idx)] = UNDEF_INDEX;
   known_people[(idx)] = UNDEF_PERSON;
@@ -1210,7 +1160,7 @@ idx_t findClosestPerson(Person (&arr)[MAX_PEOPLE], coord_t i, float maxDistance)
 bool remember_person(Person (&arr)[MAX_PEOPLE], coord_t point, uint8_t &h, coord_t &sp,
         uint8_t &mj, fint1_t &md, uint8_t &cross, bool &revert, uint16_t &c, uint8_t &fc,
         uint8_t height, uint8_t width, uint8_t neighbors, uint8_t conf) {
-  float maxD = MAX_DISTANCE + (height+width+neighbors)/4.0 + (conf/100.0);
+  float maxD = calcMaxDistance(height, width, neighbors, conf);
   idx_t pi = findClosestPerson(arr, point, maxD);
   if (pi != UNDEF_INDEX) {
     Person p = arr[pi];
@@ -1299,7 +1249,7 @@ bool processSensor() {
 
       float maxD = pp.max_distance();
       maxD = max(maxD, maxD2); // choose larger range of 2 points as max distance
-      maxD = min(maxD, 6.0);   // don't let the D grow too big
+//      maxD = min(maxD, 5.5);   // don't let the D grow too big
 
       float maxTfrd = pp.max_allowed_temp_drift();
       maxTfrd = max(maxT, maxTfrd); // choose larger temp drift of 2 points as max drift
@@ -1411,10 +1361,15 @@ bool processSensor() {
           PossiblePerson pp = points[i];
 
           float tempDiff = p.difference_from_point(pp.current_position);
+          fint1_t td = floatToFint1(tempDiff);
+          p.max_temp_drift = max(p.max_temp_drift, td);
+
           uint8_t axisJump = max_axis_jump(p.past_position, pp.current_position);
-          if (!p.suspicious && pp.side() != p.starting_side() &&
-                (tempDiff > p.max_allowed_temp_drift() + 1 || axisJump > 3)) {
-            p.suspicious = true;
+          if (((!p.suspicious() && pp.side() != p.starting_side()) ||
+                (p.suspicious() && pp.side() == p.starting_side())) &&
+                (axisJump > 3 || tempDiff >= (p.max_allowed_temp_drift() + 1)) &&
+                (uint8_t)pp.fgm() >= 2 && (uint8_t)pp.bgm() >= 2) {
+            p.suspicious_position = p.suspicious() ? UNDEF_POINT : pp.current_position;
             p.publishPacket(SUSPICIOUS_EVENT);
           }
 
@@ -1427,7 +1382,7 @@ bool processSensor() {
                 (SIDE2(p.starting_position) &&
                   AXIS(pp.current_position) > AXIS(p.past_position))) {
               // point moved backwards
-              if (!p.suspicious && ((SIDE1(p.starting_position) &&
+              if (!p.suspicious() && ((SIDE1(p.starting_position) &&
                     AXIS(pp.current_position) <= AXIS(p.starting_position)) ||
                   (SIDE2(p.starting_position) &&
                     AXIS(pp.current_position) >= AXIS(p.starting_position)))) {
@@ -1437,26 +1392,31 @@ bool processSensor() {
                   // past_position needs to be set before checkForRevert
                   p.past_position = pp.current_position;
                   p.checkForRevert();
-                  p.crossed = 0;
-                  p.reverted = false;
                   p.count = 0;
+                  p.crossed = 0;
+                  p.forgotten_count = 0;
+                  p.reverted = false;
                 }
                 // reset start position, unless point is in a revert crisis
                 if (!p.reverted) {
                   p.starting_position = pp.current_position;
-                  p.max_position = pp.current_position;
+                  p.retreating = false;
                 }
                 p.history = 1;
                 p.max_jump = 0;
                 p.max_temp_drift = 0;
               } else if (AXIS(p.past_position) != AXIS(pp.current_position)) {
-                bool retreating = axis_distance(p.max_position, pp.current_position) > 1;
-                if (retreating && p.suspicious && pp.side() == p.starting_side()) {
-                  p.starting_position = p.max_position;
-                  p.max_position = pp.current_position;
-                  p.history = 2;
+                if (p.suspicious() && pp.side() == p.starting_side() &&
+                    axis_distance(p.suspicious_position, pp.current_position) > 3) {
+                  p.max_jump = 0;
+                  p.max_temp_drift = 0;
+                  p.forgotten_count = 0;
                   p.crossed = 0;
+                  p.history = 3;
                   p.reverted = false;
+                  p.retreating = false;
+                  p.starting_position = p.suspicious_position;
+                  p.suspicious_position = UNDEF_POINT;
                 } else if (p.history > 1) {
                   // point moved backwards a little bit, decrement history
                   uint8_t sad = axis_distance(p.starting_position, pp.current_position) + 1;
@@ -1464,20 +1424,20 @@ bool processSensor() {
                   // earlier if condition. Make sure history is never higher than 1 x row.
                   uint8_t newHistory = p.history;
                   // only subtract history if we move back more than 1 row
-                  if (retreating && (p.history > 2 || pp.side() == p.starting_side())) {
+                  if ((p.history > 2 || pp.side() == p.starting_side()) && (p.retreating ||
+                        axis_distance(p.past_position, pp.current_position) > 1)) {
                     newHistory--;
                   }
+                  p.retreating = true;
                   p.history = min(newHistory, sad);
                 }
               }
-            } else if (AXIS(pp.current_position) != AXIS(p.past_position) &&
-                      // don't give credit to a point that's just coming back to its max pos
-                      (AXIS(pp.current_position) != AXIS(p.max_position) ||
-                      // unless it had fallen back more than 1 row and been punished before
-                        axis_distance(p.max_position, p.past_position) > 1)) {
+            } else if (AXIS(p.past_position) != AXIS(pp.current_position)) {
               // "always forward, forward always" - Luke Cage
-              p.history++;
-              p.max_position = pp.current_position;
+              if (!p.retreating || axis_distance(p.past_position, pp.current_position) > 1) {
+                p.history++;
+              }
+              p.retreating = false;
               if (pp.side() != p.side() || p.history > 6) {
                 // point just crossed threshold, let's reduce its history to force
                 // it to spend another cycle on this side before we count the event
@@ -1486,25 +1446,37 @@ bool processSensor() {
             }
             p.past_position = pp.current_position;
           }
-          if (p.count) {
-            fint1_t td = floatToFint1(tempDiff);
-            p.max_temp_drift = max(p.max_temp_drift, td);
-          }
+          // update current state
           p.confidence = pp.confidence;
           p.raw_temp = pp.raw_temp();
           p.fgm = pp.fgm();
           p.neighbors = pp.neighbors;
           p.height = pp.height;
           p.width = pp.width;
-          p.avg_bgm = (floatToFint2(pp.bgm()) + p.avg_bgm*2)/3;
-          p.avg_fgm = (floatToFint2(p.fgm) + p.avg_fgm*2)/3;
-          p.avg_neighbors = (p.neighbors + p.avg_neighbors*2)/3;
-          p.avg_height = (p.height + p.avg_height*2)/3;
-          p.avg_width = (p.width + p.avg_width*2)/3;
-          p.avg_confidence = (p.confidence + p.avg_confidence*2)/3;
-          p.blobSize = ((uint8_t)pp.blobSize + p.blobSize*2)/3;
-          p.noiseSize = (pp.noiseSize + p.noiseSize*2)/3;
-          p.count = min(p.count + 1, 60000);
+          if (p.count) {
+            // update running averages
+            #define UPDATE_RUNNING_AVG(o,n) ( o = ((n) + (o*2))/3 )
+            UPDATE_RUNNING_AVG(p.avg_bgm, floatToFint2(pp.bgm()));
+            UPDATE_RUNNING_AVG(p.avg_fgm, floatToFint2(p.fgm));
+            UPDATE_RUNNING_AVG(p.avg_height, p.height);
+            UPDATE_RUNNING_AVG(p.avg_width, p.width);
+            UPDATE_RUNNING_AVG(p.avg_neighbors, p.neighbors);
+            UPDATE_RUNNING_AVG(p.avg_confidence, p.confidence);
+            UPDATE_RUNNING_AVG(p.blobSize, (uint8_t)pp.blobSize);
+            UPDATE_RUNNING_AVG(p.noiseSize, pp.noiseSize);
+            p.count = min(p.count + 1, 60000);
+          } else {
+            // reset all averages, this is a brand new point
+            p.avg_bgm = floatToFint2(pp.bgm());
+            p.avg_fgm = floatToFint2(p.fgm);
+            p.avg_height = p.height;
+            p.avg_width = p.width;
+            p.avg_neighbors = p.neighbors;
+            p.avg_confidence = p.confidence;
+            p.blobSize = (uint8_t)pp.blobSize;
+            p.noiseSize = pp.noiseSize;
+            p.count = 1;
+          }
           cycles_since_person = 0;
           known_people[idx] = p;
           break;
@@ -1610,12 +1582,12 @@ bool processSensor() {
           Person p = {
             .past_position=points[i].current_position,
             .starting_position=sp,
-            .max_position=points[i].current_position,
+            .suspicious_position=UNDEF_POINT,
             .confidence=conf,
             .max_temp_drift=md,
             .count=c,
             .history=h,
-            .suspicious=false,
+            .retreating=false,
             .neighbors=n,
             .height=height,
             .forgotten_count=fc,
@@ -1685,6 +1657,7 @@ bool processSensor() {
       SERIAL_PRINT(cavg1);
       SERIAL_PRINT(F(", "));
       SERIAL_PRINTLN(cavg2);
+//      SERIAL_PRINTLN(amg.readThermistor());
       SERIAL_PRINTLN(global_bgm);
       SERIAL_PRINTLN(global_fgm);
 //      float avg_avg = 0;
