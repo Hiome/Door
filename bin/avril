@@ -53,7 +53,7 @@ if [[ $1 == 'upload' ]]; then
   echo "🚀 Uploading to node $nodeid..."
   echo ""
 
-  UID_FILE=$DIR_PATH/uid.txt ~/Code/core-updater/OTA.py -s /dev/cu.usbserial-AL05VI82 -b 19200 -f $DIR_PATH/../presence.ino.Moteino.hex -t $nodeid
+  UID_FILE=$DIR_PATH/uid.txt ~/Code/core-updater/OTA.py -s /dev/cu.usbserial-AL05VI82 -b 19200 -f $DIR_PATH/../presence.ino.Moteino.avr.Moteino.hex -t $nodeid
   exit 0
 fi
 
