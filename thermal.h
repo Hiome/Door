@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.3.29"
+#define FIRMWARE_VERSION        "V20.3.29b"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -113,7 +113,7 @@ const axis_t ycoordinates[AMG88xx_PIXEL_ARRAY_SIZE] PROGMEM = {
 #endif
 
 float calcMaxDistance(uint8_t height, uint8_t width, uint8_t neighbors, uint8_t confidence) {
-  return MAX_DISTANCE + (height+width+neighbors)/8.0 + (confidence/100.0);
+  return MAX_DISTANCE + (height+width+neighbors)/4.0 + (confidence/100.0);
 }
 #define MAX_DIST_FORMULA ( calcMaxDistance(height, width, neighbors, confidence) )
 
@@ -781,21 +781,20 @@ bool normalizePixels() {
 float calculateNewBackground(coord_t i) {
   // implicit alpha of 0.001 because avg_pixels is raw_pixels*1000.0
   float std = raw_pixels[(i)] - bgPixel(i);
-  float fgd = fgDiff(i);
+
   uint8_t bgd = (uint8_t)(abs(std));
+  if (bgd == 0) return std; // alpha = 0.001
 
-  uint16_t alpha = 0;
-  if (fgd < 0.8) {
-    alpha = 100 * bgd;
-  } else if (bgd > max(((uint8_t)(3*fgd)), 4)) {
-    alpha = 50 * bgd;
-  }
-  if (alpha) {
+  float fgd = fgDiff(i);
+
+  if (bgd > 1 && (fgd < 0.8 || bgd > max(((uint8_t)(3*fgd)), 4))) {
+    // rapidly update when background changes quickly
+    uint16_t alpha = 50 * bgd;
     if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) alpha *= 2;
-    return std * min(alpha, 900);
+    return std * min(alpha, 600);
   }
 
-  if (cycles_since_person == 0 && bgd >= 1 && ((uint8_t)fgd) >= 1) {
+  if (cycles_since_person == 0 && ((uint8_t)fgd) >= 1) {
     float mt = maxTempDiffForFgd(fgd);
     for (idx_t x=0; x<MAX_PEOPLE; x++) {
       if (known_people[x].real() && known_people[x].count > 5 &&
