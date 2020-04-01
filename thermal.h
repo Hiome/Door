@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.3.29c"
+#define FIRMWARE_VERSION        "V20.4.1"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -778,51 +778,35 @@ bool normalizePixels() {
   return true;
 }
 
-float calculateNewBackground(coord_t i) {
-  // implicit alpha of 0.001 because avg_pixels is raw_pixels*1000.0
-  float std = raw_pixels[(i)] - bgPixel(i);
-
-  uint8_t bgd = (uint8_t)(abs(std));
-  if (bgd == 0) return std; // alpha = 0.001
-
-  float cavg = SIDE1(i) ? cavg1 : cavg2;
-  float fgd = abs(raw_pixels[(i)] - cavg);
-
-  if (bgd > 1 && (fgd < 0.8 || bgd > max(((uint8_t)(3*fgd)), 4))) {
-    // rapidly update when background changes quickly
-    uint16_t alpha = 50 * bgd;
-    if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) alpha *= 2;
-    return std * min(alpha, 600);
-  }
-
-  if (cycles_since_person == 0 && ((uint8_t)fgd) >= 1) {
-    float mt = maxTempDiffForFgd(fgd);
-    for (idx_t x=0; x<MAX_PEOPLE; x++) {
-      if (known_people[x].real() && known_people[x].count > 5 &&
-            known_people[x].count < 8000 &&
-            diffFromPoint(known_people[x].past_position, (i)) < mt &&
-            int_distance(known_people[x].past_position, (i)) < 3 &&
-            ((uint8_t)known_people[x].total_distance()) > 1) {
-        // point has moved or is significantly higher than variance, decrease alpha.
-        // due to rounding, this means std needs to be at least 5 for bg to update.
-        return std * 0.1; // alpha = 0.0001
-      }
-    }
-  }
-
-  return std; // alpha = 0.001
-}
-
 void updateBgAverage() {
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    #ifdef RECESSED
+      if (door_state == DOOR_OPEN && frames_since_door_open == 0) {
+        avg_pixels[i] = SIDE1(i) ? floatToFint3(cavg1) : floatToFint3(cavg2);
+        continue;
+      }
+    #else
+      if (door_state == DOOR_OPEN && frames_since_door_open == 0 && SIDE2(i)) {
+        avg_pixels[i] = floatToFint3(cavg2);
+        continue;
+      }
+    #endif
+
     // ignore extreme raw pixels
-    if (((uint8_t)raw_pixels[(i)]) < MIN_TEMP || ((uint8_t)raw_pixels[(i)]) > MAX_TEMP) {
+    if (((uint8_t)raw_pixels[(i)]) <= MIN_TEMP || ((uint8_t)raw_pixels[(i)]) >= MAX_TEMP) {
       continue;
     }
 
-    int32_t temp = ((int32_t)avg_pixels[i]) + ((int32_t)round(calculateNewBackground(i)));
-    if (temp < (((int32_t)MIN_TEMP)*1000) || temp > (((int32_t)MAX_TEMP)*1000)) continue;
-    avg_pixels[i] = temp;
+    float std = raw_pixels[(i)] - bgPixel(i);
+    if (abs(std) < 0.5) {
+      // yes we can use += here and rely on type promotion, but I want to be absolutely
+      // explicit that we need to use int32_t and not int16_t to avoid overflow
+      avg_pixels[i] = (int32_t)avg_pixels[i] + (int32_t)(10*std);
+    } else {
+      // increment/decrement average by 0.001. Every 1º change will take 100 sec to learn.
+      // This scales linearly so something that's 5º warmer will require ~8 min to learn.
+      avg_pixels[i] = (int32_t)avg_pixels[i] + (std < 0 ? -1 : 1);
+    }
   }
 }
 
@@ -1249,7 +1233,7 @@ bool processSensor() {
 
       float maxD = pp.max_distance();
       maxD = max(maxD, maxD2); // choose larger range of 2 points as max distance
-//      maxD = min(maxD, 5.5);   // don't let the D grow too big
+      maxD = min(maxD, 5.5);   // don't let the D grow too big
 
       float maxTfrd = pp.max_allowed_temp_drift();
       maxTfrd = max(maxT, maxTfrd); // choose larger temp drift of 2 points as max drift
@@ -1407,7 +1391,7 @@ bool processSensor() {
                 p.max_temp_drift = 0;
               } else if (AXIS(p.past_position) != AXIS(pp.current_position)) {
                 if (p.suspicious() && pp.side() == p.starting_side() &&
-                    axis_distance(p.suspicious_position, pp.current_position) > 3) {
+                    axis_distance(p.suspicious_position, pp.current_position) >= 3) {
                   p.max_jump = 0;
                   p.max_temp_drift = 0;
                   p.forgotten_count = 0;
@@ -1782,14 +1766,12 @@ void initialize() {
     }
 
     for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-      if (((uint8_t)raw_pixels[i]) < MIN_TEMP || ((uint8_t)raw_pixels[i]) > MAX_TEMP) {
+      if (((uint8_t)raw_pixels[i]) <= MIN_TEMP || ((uint8_t)raw_pixels[i]) >= MAX_TEMP) {
         continue;
       }
       float std = raw_pixels[i] - bgPixel(i);
       // alpha of 0.3
-      int32_t temp = ((int32_t)avg_pixels[i]) + ((int32_t)(300.0 * std));
-      if (temp < (((int32_t)MIN_TEMP)*1000) || temp > (((int32_t)MAX_TEMP)*1000)) continue;
-      avg_pixels[i] = temp;
+      avg_pixels[i] = ((int32_t)avg_pixels[i]) + ((int32_t)(300.0 * std));
     }
   }
 }
