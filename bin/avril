@@ -64,10 +64,11 @@ if [[ $1 == 'flash' ]]; then
     exit 1
   fi
 
-  echo "💥 Flashing ~/Code/core-firmware/$2.hex to node 13 in 5 seconds..."
-  sleep 5
+  echo "💥 Flashing ~/Code/core-firmware/$2.hex to node 13..."
+  sleep 1
 
-  UID_FILE=$DIR_PATH/uid.txt ~/Code/core-updater/OTA.py -s /dev/cu.usbserial-AL05VI82 -b 19200 -f ~/Code/core-firmware/$2 -t 13
+  UID_FILE=$DIR_PATH/uid.txt ~/Code/core-updater/OTA.py -s /dev/cu.usbserial-AL05VI82 -b 19200 -f ~/Code/core-firmware/$2.hex -t 13
+  say all done
   exit 0
 fi
 
