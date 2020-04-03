@@ -1,10 +1,10 @@
 #ifdef ENABLE_SERIAL
   #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
-//  #define PRINT_CLUSTERS
+  #define PRINT_CLUSTERS
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.4.1"
+#define FIRMWARE_VERSION        "V20.4.2"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -625,7 +625,9 @@ float trimMean(uint8_t side) {
     uint8_t bidx = bucketNum(raw_pixels[i], bucketWidth, minVal, maxVal);
     bin_counts[bidx]++;
     // double weight for points close to background
-    if (((uint8_t)bgDiff(i)) == 0) bin_counts[bidx]++;
+    if (frames_since_door_open >= MAX_DOOR_CHANGE_FRAMES && ((uint8_t)bgDiff(i)) == 0) {
+      bin_counts[bidx]++;
+    }
   }
 
   #ifdef PRINT_CLUSTERS
@@ -660,24 +662,26 @@ float trimMean(uint8_t side) {
     bin_counts[binIndex] = -1;
 
     for (int8_t j = binIndex-1; j >= 0; j--) {
-      if (bin_counts[j] < 0) break; // entering another cluster's territory
+      // entered another cluster's territory or hit 3 empty buckets
+      if (bin_counts[j] < 0 || clusterStarts[currentCluster] - j == 4) break;
       if (bin_counts[j] >= bucketSizeMin) {
         while (clusterStarts[currentCluster] > j) {
           clusterStarts[currentCluster]--;
           clusterCount[currentCluster] += bin_counts[(clusterStarts[currentCluster])];
           bin_counts[(clusterStarts[currentCluster])] = -1;
         }
-      } else if (clusterStarts[currentCluster] - j > 2) break;
+      }
     }
     for (uint8_t j = binIndex+1; j < NUM_BUCKETS; j++) {
-      if (bin_counts[j] < 0) break; // entering another cluster's territory
+      // entered another cluster's territory or hit 3 empty buckets
+      if (bin_counts[j] < 0 || j - clusterEnds[currentCluster] == 4) break;
       if (bin_counts[j] >= bucketSizeMin) {
         while (clusterEnds[currentCluster] < j) {
           clusterEnds[currentCluster]++;
           clusterCount[currentCluster] += bin_counts[(clusterEnds[currentCluster])];
           bin_counts[(clusterEnds[currentCluster])] = -1;
         }
-      } else if (j - clusterEnds[currentCluster] > 2) break;
+      }
     }
   }
 
@@ -693,7 +697,7 @@ float trimMean(uint8_t side) {
   // clusters found!
   if (currentCluster >= 0) {
     if (currentCluster == 0) {
-      if (clusterCount[0] > 15) {
+      if (clusterCount[0] > 20) {
         // only 1 cluster found, choose it and move along
         maxVal = minVal + (clusterEnds[0]+1)*bucketWidth + 0.1;
         minVal = minVal + (clusterStarts[0])*bucketWidth - 0.1;
@@ -705,8 +709,7 @@ float trimMean(uint8_t side) {
       // multiple clusters found! Sort them by size to choose the largest
       uint8_t sortedClusters[NUM_BUCKETS];
       sortClustersByCount(currentCluster+1, clusterCount, sortedClusters);
-
-      if (clusterCount[(sortedClusters[0])] >= max(16, clusterCount[(sortedClusters[1])]*2)){
+      if (clusterCount[(sortedClusters[0])] > max(20, clusterCount[(sortedClusters[1])]*2)) {
         // there is a clear winner in the cluster wars
         maxVal = minVal + (clusterEnds[sortedClusters[0]]+1)*bucketWidth + 0.1;
         minVal = minVal + (clusterStarts[sortedClusters[0]])*bucketWidth - 0.1;
@@ -781,12 +784,12 @@ bool normalizePixels() {
 void updateBgAverage() {
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     #ifdef RECESSED
-      if (door_state == DOOR_OPEN && frames_since_door_open == 0) {
+      if (frames_since_door_open < 2) {
         avg_pixels[i] = SIDE1(i) ? floatToFint3(cavg1) : floatToFint3(cavg2);
         continue;
       }
     #else
-      if (door_state == DOOR_OPEN && frames_since_door_open == 0 && SIDE2(i)) {
+      if (frames_since_door_open < 2 && SIDE2(i)) {
         avg_pixels[i] = floatToFint3(cavg2);
         continue;
       }
@@ -1224,35 +1227,35 @@ bool processSensor() {
 
     idx_t min_index = UNDEF_INDEX;
     float min_score = 100;
-    float maxT = p.max_allowed_temp_drift();
-    float maxD2 = p.max_distance();
+    float maxTperson = p.max_allowed_temp_drift();
+    float maxDperson = p.max_distance();
 
     // pair this person with a point in current frame
     for (idx_t j=0; j<total_masses; j++) {
       PossiblePerson pp = points[j];
 
-      float maxD = pp.max_distance();
-      maxD = max(maxD, maxD2); // choose larger range of 2 points as max distance
-      maxD = min(maxD, 5.5);   // don't let the D grow too big
-
-      float maxTfrd = pp.max_allowed_temp_drift();
-      maxTfrd = max(maxT, maxTfrd); // choose larger temp drift of 2 points as max drift
+      float maxDpoint = pp.max_distance();
+      // choose larger range of 2 points as max distance
+      maxDpoint = max(maxDpoint, maxDperson);
+      maxDpoint = min(maxDpoint, 5.5); // don't let the D grow too big
 
       float d = euclidean_distance(p.past_position, pp.current_position);
-      if (d > maxD) continue;
+      if (d > maxDpoint) continue;
 
       // can't shift more than 2-5º at once
+      float maxTpoint = pp.max_allowed_temp_drift();
       float tempDiff = p.difference_from_point(pp.current_position);
-      if (tempDiff > maxTfrd) continue;
+      if (tempDiff > max(maxTperson, maxTpoint)) continue;
 
-      float score = sq(d/maxD) + sq(max(tempDiff, 1)/maxTfrd);
+      float score = sq(d/maxDperson) + sq(max(tempDiff, 1)/maxTperson);
       if (!p.crossed || pointOnSmallBorder(p.starting_position)) {
         score -= (0.02*((float)pp.neighbors));
       }
 
-      if (score > 1.8) continue; // distance is high AND temp diff is high AND conf is low
+      // distance is high AND temp diff is high
+      if (d > 2 && score > 1.8) continue;
 
-      if (score <= (min_score - 0.05) || (score <= (min_score + 0.05) &&
+      if (score <= (min_score - 0.1) || (score <= (min_score + 0.1) &&
             tempDiff < p.difference_from_point(points[min_index].current_position))) {
         // either score is less than min score, or if it's similar,
         // choose the point with more similar raw temp
@@ -1287,30 +1290,21 @@ bool processSensor() {
           // prefer people with more similar temps
           float tempDiff = p.difference_from_point(points[i].current_position);
           tempDiff = max(tempDiff, 1);
-          float maxT2 = p.max_allowed_temp_drift();
-          maxT2 = max(maxT, maxT2);
-          score -= sq(tempDiff/maxT2);
+          score -= sq(tempDiff/maxT);
 
           // prefer people who didn't take crazy leaps to get here
           float d = euclidean_distance(p.past_position, points[i].current_position);
-          float maxD2 = p.max_distance();
-          maxD2 = max(maxD, maxD2);
-          score -= sq(d/maxD2);
+          score -= sq(d/maxD);
 
-          // prefer people who have been around longer
-          score += ((p.total_distance() + p.history)/10.0);
-
-          if (score >= max_score + 0.05) {
+          if (score >= max_score + 0.1) {
             max_score = score;
             max_idx = idx;
-          } else if (score >= max_score - 0.05 ) {
-            // if 2 competing points have the same score, pick the closer one
-            float d2 = euclidean_distance(known_people[max_idx].past_position,
-                                          points[i].current_position);
-            if (d+0.05 < d2 || (d-d2 < 0.05 && p.history>known_people[max_idx].history)) {
-              max_score = score;
-              max_idx = idx;
-            }
+          } else if (score >= max_score - 0.1 &&
+              (p.total_distance() + p.history) >
+                (known_people[max_idx].total_distance() + known_people[max_idx].history)) {
+            // if 2 competing points have the same score, pick the one with more history
+            max_score = score;
+            max_idx = idx;
           }
         }
       }
