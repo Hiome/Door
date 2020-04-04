@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.4.3"
+#define FIRMWARE_VERSION        "V20.4.4"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -424,6 +424,10 @@ typedef struct {
         (!crossed || !reverted) && starting_side() != side()) {
       publishPacket(FRD_EVENT);
       return true;
+    } else if (suspicious() && starting_side() == side()) {
+      starting_position = suspicious_position;
+      publishPacket(FRD_EVENT);
+      return true;
     }
 
     return false;
@@ -575,167 +579,56 @@ void clearPointsAfterDoorClose() {
   }
 }
 
-void sortClustersByCount(uint8_t clusters, int8_t (&clusterCount)[NUM_BUCKETS],
-                          uint8_t (&sortedClusters)[NUM_BUCKETS]) {
-  for (uint8_t i = 0; i < clusters; i++) {
-    // sort clusters by clusterCount again
-    bool added = false;
-    for (uint8_t j=0; j<i; j++) {
-      if (clusterCount[i] > clusterCount[(sortedClusters[j])]) {
-        for (int8_t x=i; x>j; x--) {
-          sortedClusters[x] = sortedClusters[(x-1)];
-        }
-        sortedClusters[j] = i;
-        added = true;
-        break;
-      }
-    }
-    if (!added) {
-      // append i to end of array
-      sortedClusters[i] = i;
-    }
-  }
-}
-
-uint8_t bucketNum(float r, float width, float minVal, float maxVal) {
-  if (r <= minVal + 0.1) return 0;
-  if (r >= maxVal - 0.1) return NUM_BUCKETS-1;
-  return (uint8_t)((r - minVal)/width);
-}
-
-// We need a measure of central tendency to summarize the current foreground temperatures.
-// A simple mean is skewed too easily, so how about mode? To find that, we group the data
-// into a histogram with 10 buckets and identify clusters of buckets. We choose the largest
-// cluster as most likely representing the background, and run an average over the points
-// in those buckets to determine a final number.
 float trimMean(uint8_t side) {
-  // find the min and max values, which is needed to determine the bucket width
-  float minVal = MAX_TEMP;
-  float maxVal = MIN_TEMP;
-  for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
-    if (((uint8_t)raw_pixels[i]) < MIN_TEMP || ((uint8_t)raw_pixels[i]) > MAX_TEMP) continue;
-    minVal = min(minVal, raw_pixels[i]);
-    maxVal = max(maxVal, raw_pixels[i]);
-  }
-
-  // place every point into a bucket
-  float bucketWidth = (maxVal - minVal)/NUM_BUCKETS;
-  int8_t bin_counts[NUM_BUCKETS] = { 0 };
-  for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
-    uint8_t bidx = bucketNum(raw_pixels[i], bucketWidth, minVal, maxVal);
-    bin_counts[bidx]++;
-    // double weight for points close to background
-    if (frames_since_door_open >= MAX_DOOR_CHANGE_FRAMES && ((uint8_t)bgDiff(i)) == 0) {
-      bin_counts[bidx]++;
-    }
-  }
-
-  #ifdef PRINT_CLUSTERS
-    SERIAL_PRINT(minVal);
-    SERIAL_PRINT(F("-"));
-    SERIAL_PRINTLN(maxVal);
-    SERIAL_PRINTLN(F("bin"));
-    for (uint8_t i = 0; i<NUM_BUCKETS; i++) {
-      SERIAL_PRINT(i);
-      SERIAL_PRINT(F(":"));
-      SERIAL_PRINTLN(bin_counts[i]);
-    }
-  #endif
-
-  uint8_t sortedBins[NUM_BUCKETS];
-  sortClustersByCount(NUM_BUCKETS, bin_counts, sortedBins);
-
-  // cluster the buckets by distance
-  int8_t currentCluster = -1;
-  uint8_t clusterStarts[NUM_BUCKETS];
-  uint8_t clusterEnds[NUM_BUCKETS];
-  int8_t clusterCount[NUM_BUCKETS];
-  for (uint8_t i = 0; i < NUM_BUCKETS; i++) {
-    uint8_t binIndex = sortedBins[i];
-    if (bin_counts[binIndex] < 3) continue;
-
-    currentCluster++;
-    clusterStarts[currentCluster] = binIndex;
-    clusterEnds[currentCluster] = binIndex;
-    clusterCount[currentCluster] = bin_counts[binIndex];
-    uint8_t bucketSizeMin = min(4, bin_counts[binIndex]/2);
-    bin_counts[binIndex] = -1;
-
-    for (int8_t j = binIndex-1; j >= 0; j--) {
-      // entered another cluster's territory or hit 3 empty buckets
-      if (bin_counts[j] < 0 || clusterStarts[currentCluster] - j == 4) break;
-      if (bin_counts[j] >= bucketSizeMin) {
-        while (clusterStarts[currentCluster] > j) {
-          clusterStarts[currentCluster]--;
-          clusterCount[currentCluster] += bin_counts[(clusterStarts[currentCluster])];
-          bin_counts[(clusterStarts[currentCluster])] = -1;
+  coord_t sortedPixels[AMG88xx_PIXEL_ARRAY_SIZE/2];
+  uint8_t total = 0;
+  uint8_t baseline = side==1 ? 0 : 32;
+  for (coord_t i=baseline; i<(32 + baseline); i++) {
+    // sort clusters by raw temp
+    if (((uint8_t)raw_pixels[i]) > MIN_TEMP && ((uint8_t)raw_pixels[i]) < MAX_TEMP) {
+      uint8_t adjI = i - baseline;
+      bool added = false;
+      for (uint8_t j=0; j<adjI; j++) {
+        if (raw_pixels[i] > raw_pixels[(sortedPixels[j])]) {
+          for (int8_t x=adjI; x>j; x--) {
+            sortedPixels[x] = sortedPixels[(x-1)];
+          }
+          sortedPixels[j] = i;
+          added = true;
+          break;
         }
       }
-    }
-    for (uint8_t j = binIndex+1; j < NUM_BUCKETS; j++) {
-      // entered another cluster's territory or hit 3 empty buckets
-      if (bin_counts[j] < 0 || j - clusterEnds[currentCluster] == 4) break;
-      if (bin_counts[j] >= bucketSizeMin) {
-        while (clusterEnds[currentCluster] < j) {
-          clusterEnds[currentCluster]++;
-          clusterCount[currentCluster] += bin_counts[(clusterEnds[currentCluster])];
-          bin_counts[(clusterEnds[currentCluster])] = -1;
-        }
+      if (!added) {
+        // append i to end of array
+        sortedPixels[adjI] = i;
       }
+      total++;
     }
   }
 
-  #ifdef PRINT_CLUSTERS
-    SERIAL_PRINTLN(F("cls"));
-    for (uint8_t i = 0; i<=currentCluster; i++) {
-      SERIAL_PRINT(i);
-      SERIAL_PRINT(F(":"));
-      SERIAL_PRINTLN(clusterCount[i]);
-    }
-  #endif
+  SERIAL_PRINTLN(total);
 
-  // clusters found!
-  if (currentCluster >= 0) {
-    if (currentCluster == 0) {
-      if (clusterCount[0] > 20) {
-        // only 1 cluster found, choose it and move along
-        maxVal = minVal + (clusterEnds[0]+1)*bucketWidth + 0.1;
-        minVal = minVal + (clusterStarts[0])*bucketWidth - 0.1;
-      } else {
-        SERIAL_PRINT(side);
-        SERIAL_PRINTLN(F("bg2sm"));
-      }
-    } else {
-      // multiple clusters found! Sort them by size to choose the largest
-      uint8_t sortedClusters[NUM_BUCKETS];
-      sortClustersByCount(currentCluster+1, clusterCount, sortedClusters);
-      if (clusterCount[(sortedClusters[0])] > max(20, clusterCount[(sortedClusters[1])]*2)) {
-        // there is a clear winner in the cluster wars
-        maxVal = minVal + (clusterEnds[sortedClusters[0]]+1)*bucketWidth + 0.1;
-        minVal = minVal + (clusterStarts[sortedClusters[0]])*bucketWidth - 0.1;
-      } else {
-        SERIAL_PRINT(side);
-        SERIAL_PRINTLN(F("bg2sm"));
-      }
+  float avg = 0;
+  uint8_t newTotal = 0;
+  for (idx_t i = 3; i < total-3; i++) {
+    // only take mean of middle 80% of pixels
+    avg += raw_pixels[(sortedPixels[i])];
+    newTotal++;
+    if ((uint8_t)bgDiff(sortedPixels[i]) == 0) {
+      // double weight of points with low background diff
+      avg += raw_pixels[(sortedPixels[i])];
+      newTotal++;
     }
   }
 
-  // compute mean of chosen points
-  float sum = 0;
-  uint8_t cnt = 0;
-  for (coord_t i=(side==1 ? 0 : 32); i<(side==1 ? 32 : AMG88xx_PIXEL_ARRAY_SIZE); i++) {
-    if (raw_pixels[i] < minVal || raw_pixels[i] > maxVal) continue;
-    sum += raw_pixels[i];
-    cnt++;
-  }
+  SERIAL_PRINTLN(newTotal);
 
-  if (!cnt) {
+  if (!newTotal) {
     SERIAL_PRINTLN(F("xxx"));
     return 0; // no chosen points, skip this frame (should be impossible)
   }
 
-//  SERIAL_PRINTLN(sum/((float)cnt));
-  return sum/((float)cnt);
+  return avg/newTotal;
 }
 
 // calculate foreground gradient scale
@@ -1536,7 +1429,7 @@ bool processSensor() {
             side1Point = 0;
             side2Point = 0;
           }
-        } else if (!djo && conf > 80 && spAxis == 4 && height > 0) {
+        } else if (!djo && (uint8_t)b > 1 && (uint8_t)f > 1 && spAxis == 4 && height > 0) {
           // catch entries on door open for people who did not setup the door contact magnet
           if (SIDE1(sp)) {
             if (compareNeighboringPixels(b,a,sp,f)) {
