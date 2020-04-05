@@ -4,7 +4,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.4.5"
+#define FIRMWARE_VERSION        "V20.4.6"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal/types.h"

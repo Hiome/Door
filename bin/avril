@@ -4,11 +4,17 @@ set -e
 
 DIR_PATH=$(dirname "${BASH_SOURCE[0]}")
 
-printSettings() {
+verify() {
   echo ""
   echo "👇 Using these settings..."
   echo ""
   cat $DIR_PATH/../config.h | sed -n '/\/\//!p' # strip comments
+  echo ""
+
+  arduino-cli compile --fqbn Moteino:avr:Moteino --warnings "all" $DIR_PATH/../presence.ino
+
+  echo ""
+  echo "✅ Verified on `date`"
   echo ""
 }
 
@@ -18,14 +24,7 @@ if [[ $1 == 'config' ]]; then
 fi
 
 if [[ $1 == 'verify' ]]; then
-  printSettings
-
-  arduino-cli compile --fqbn Moteino:avr:Moteino --warnings "all" $DIR_PATH/../presence.ino
-
-  echo ""
-  echo "✅ Verified on `date`"
-  echo ""
-
+  verify
   exit 0
 fi
 
@@ -40,15 +39,9 @@ if [[ $1 == 'listen' ]]; then
 fi
 
 if [[ $1 == 'upload' ]]; then
-  printSettings
+  verify
 
-  arduino-cli compile --fqbn Moteino:avr:Moteino --warnings "all" $DIR_PATH/../presence.ino
-
-  if [ -z "$2" ]; then
-    nodeid=$(cat $DIR_PATH/../config.h | sed -nE 's/#define NODEID +([[:digit:]]+)/\1/p')
-  else
-    nodeid=$2
-  fi
+  nodeid=$(cat $DIR_PATH/../config.h | sed -nE 's/#define NODEID +([[:digit:]]+)/\1/p')
   echo ""
   echo "🚀 Uploading to node $nodeid..."
   echo ""
@@ -59,7 +52,7 @@ fi
 
 if [[ $1 == 'flash' ]]; then
   if [ -z "$2" ]; then
-    echo "Pass a file type like door/r3_alpha/2 or using the following sample command to flash it yourself:"
+    echo "Pass a file type like door/r3_alpha/2 or use the following sample command to flash it yourself:"
     echo "UID_FILE=$DIR_PATH/uid.txt ~/Code/core-updater/OTA.py -s /dev/cu.usbserial-AL05VI82 -b 19200 -f ~/Code/core-firmware/door/r3_alpha/2.hex -t 13"
     exit 1
   fi
@@ -73,5 +66,5 @@ if [[ $1 == 'flash' ]]; then
 fi
 
 echo "AVRil CLI"
-echo "Available commands: config, verify, compile, listen, upload <2>, flash <door/r3_alpha/2>"
+echo "Available commands: config, verify, compile, listen, upload, flash <door/r3_alpha/2>"
 exit 1
