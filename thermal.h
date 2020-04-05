@@ -1,10 +1,9 @@
 #ifdef ENABLE_SERIAL
   #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
-  #define PRINT_CLUSTERS
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.4.4"
+#define FIRMWARE_VERSION        "V20.4.5"
 #define YAXIS                        // axis along which we expect points to move (x or y)
 
 #include "thermal_types.h"
@@ -28,7 +27,6 @@ const uint8_t CONFIDENCE_THRESHOLD   = 5;    // min 5% confidence required
 const uint8_t MIN_TEMP               = 2;    // ignore all points colder than 2º C
 const uint8_t MAX_TEMP               = 45;   // ignore all points hotter than 45ºC
 const uint8_t NUM_BUCKETS            = 10;   // 3 + log2(n) * log(n) where n = distinct rows
-const float   MAX_DISTANCE           = 2.0;  // max distance that a point is allowed to move
 const float   BACKGROUND_GRADIENT    = 2.0;
 const float   FOREGROUND_GRADIENT    = 2.0;
 const coord_t UNDEF_POINT            = AMG88xx_PIXEL_ARRAY_SIZE + 10;
@@ -113,7 +111,7 @@ const axis_t ycoordinates[AMG88xx_PIXEL_ARRAY_SIZE] PROGMEM = {
 #endif
 
 float calcMaxDistance(uint8_t height, uint8_t width, uint8_t neighbors, uint8_t confidence) {
-  return MAX_DISTANCE + (height+width+neighbors)/4.0 + (confidence/100.0);
+  return 3.0 + (height+width+neighbors)/4.0 + (confidence/100.0);
 }
 #define MAX_DIST_FORMULA ( calcMaxDistance(height, width, neighbors, confidence) )
 
@@ -276,9 +274,9 @@ PossiblePerson points[MAX_PEOPLE];
 typedef struct {
   coord_t   past_position;        //:7 0-63 + UNDEF_POINT
   coord_t   starting_position;    //:6 0-63
-  coord_t   suspicious_position;  //:7 0-63 + UNDEF_POINT
+  coord_t   max_position;         //:6 0-63
   uint8_t   confidence;           //:7 0-100
-  fint1_t   max_temp_drift;       //:6 0-60
+  fint1_t   max_temp_drift;
   uint16_t  count;
 
   uint8_t   history           :3; // 1-7
@@ -307,7 +305,6 @@ typedef struct {
   float     fgm;
 
   bool      real() { return past_position != UNDEF_POINT; };
-  bool      suspicious() { return suspicious_position != UNDEF_POINT; };
   uint8_t   starting_side() { return SIDE(starting_position); };
   uint8_t   side() { return SIDE(past_position); };
   float     total_distance() {
@@ -357,7 +354,7 @@ typedef struct {
   };
 
   bool checkForRevert() {
-    if (!real() || !crossed || suspicious()) return false;
+    if (!real() || !crossed) return false;
 
     if (confidence > 60 && doorJustClosed()) {
       if ((side() != door_side || !pointOnBorder(past_position)) &&
@@ -408,7 +405,7 @@ typedef struct {
     history = 1;
     retreating = false;
     reverted = false;
-    suspicious_position = UNDEF_POINT;
+    max_position = past_position;
     if (old_crossed) crossed = 0;
   };
 
@@ -420,13 +417,14 @@ typedef struct {
       return false;
     }
 
-    if ((history >= MIN_HISTORY || (history == 2 && avg_fgm > 200 && avg_bgm > 200)) &&
+    if ((history >= MIN_HISTORY || (history == 2 && avg_fgm > 150 && avg_bgm > 150)) &&
         (!crossed || !reverted) && starting_side() != side()) {
       publishPacket(FRD_EVENT);
       return true;
-    } else if (suspicious() && starting_side() == side()) {
-      starting_position = suspicious_position;
-      publishPacket(FRD_EVENT);
+    } else if (axis_distance(max_position, past_position) >= 2 &&
+                avg_fgm > 150 && avg_bgm > 150) {
+      starting_position = max_position;
+      publishPacket(SUSPICIOUS_EVENT);
       return true;
     }
 
@@ -443,16 +441,16 @@ Person forgotten_people[MAX_PEOPLE];
 const Person UNDEF_PERSON = {
   .past_position=UNDEF_POINT,
   // (╯°□°）╯︵ ┻━┻  avr-gcc doesn't implement non-trivial designated initializers...
-  .starting_position=UNDEF_POINT,
-  .suspicious_position=UNDEF_POINT,
+  .starting_position=0,
+  .max_position=0,
   .confidence=0,
   .max_temp_drift=0,
-  .count=1,
-  .history=1,
+  .count=0,
+  .history=0,
   .retreating=false,
   .neighbors=0,
   .height=0,
-  .forgotten_count=MAX_FORGOTTEN_COUNT,
+  .forgotten_count=0,
   .width=0,
   .crossed=0,
   .max_jump=0,
@@ -683,11 +681,9 @@ float calculateNewBackground(coord_t i) {
   float cavg = SIDE1(i) ? cavg1 : cavg2;
   float fgd = abs(raw_pixels[(i)] - cavg);
 
-  if ((uint8_t)bgd > 1 && (fgd < 0.8 || bgd > max(3*fgd, 4))) {
+  if ((uint8_t)bgd > 1 && (fgd < 0.5 || bgd > max(5*fgd, 5))) {
     // rapidly update when background changes quickly
-    uint16_t alpha = 20 * (uint8_t)bgd;
-    if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) alpha *= 2;
-    return std * min(alpha, 300);
+    return std * (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES ? 50 : 10);
   }
 
   // increment/decrement average by 0.001. Every 1º change will take 100 sec to learn.
@@ -1039,9 +1035,9 @@ idx_t findClosestPerson(Person (&arr)[MAX_PEOPLE], coord_t i, float maxDistance)
   return pidx;
 }
 
-bool remember_person(Person (&arr)[MAX_PEOPLE], coord_t point, uint8_t &h, coord_t &sp,
-        uint8_t &mj, fint1_t &md, uint8_t &cross, bool &revert, uint16_t &c, uint8_t &fc,
-        uint8_t height, uint8_t width, uint8_t neighbors, uint8_t conf) {
+void remember_person(Person (&arr)[MAX_PEOPLE], coord_t point, uint8_t &h, coord_t &sp,
+        coord_t &mp, uint8_t &mj, fint1_t &md, uint8_t &cross, bool &revert, uint16_t &c,
+        uint8_t &fc, uint8_t height, uint8_t width, uint8_t neighbors, uint8_t conf) {
   float maxD = calcMaxDistance(height, width, neighbors, conf);
   idx_t pi = findClosestPerson(arr, point, maxD);
   if (pi != UNDEF_INDEX) {
@@ -1051,14 +1047,14 @@ bool remember_person(Person (&arr)[MAX_PEOPLE], coord_t point, uint8_t &h, coord
     if ((SIDE1(p.starting_position) && ppaxis-1 > AXIS(point)) ||
         (SIDE2(p.starting_position) && ppaxis+1 < AXIS(point))) {
       // this point is moved behind previous position, just start over
-      return false;
+      return;
     }
 
     if (p.history <= MIN_HISTORY && p.side() != p.starting_side() &&
           pointOnSmallBorder(p.past_position) &&
           p.history <= (MIN_HISTORY+1 - normalizeAxis(ppaxis))) {
       // impossible for this person to ever do anything useful with its life, kill it
-      return false;
+      return;
     }
 
     // point is ahead of starting point at least
@@ -1071,14 +1067,16 @@ bool remember_person(Person (&arr)[MAX_PEOPLE], coord_t point, uint8_t &h, coord
     uint8_t axisJump = max_axis_jump(p.past_position, point);
     mj = max(axisJump, p.max_jump);
 
+    if ((SIDE1(sp) && AXIS(mp) < AXIS(p.max_position)) ||
+        (SIDE2(sp) && AXIS(mp) > AXIS(p.max_position))) {
+      mp = p.max_position;
+    }
     cross = p.crossed;
     revert = p.reverted;
     c = p.count + 1;
     fc = p.forgotten_count + 1;
     arr[pi] = UNDEF_PERSON;
-    return true;
   }
-  return false;
 }
 
 bool processSensor() {
@@ -1233,20 +1231,11 @@ bool processSensor() {
           // closest point matched, update trackers
           PossiblePerson pp = points[i];
 
-          float tempDiff = p.difference_from_point(pp.current_position);
-          fint1_t td = floatToFint1(tempDiff);
+          fint1_t td = floatToFint1(p.difference_from_point(pp.current_position));
           p.max_temp_drift = max(p.max_temp_drift, td);
 
-          uint8_t axisJump = max_axis_jump(p.past_position, pp.current_position);
-          if (((!p.suspicious() && pp.side() != p.starting_side()) ||
-                (p.suspicious() && pp.side() == p.starting_side())) &&
-                (axisJump > 3 || tempDiff >= (p.max_allowed_temp_drift() + 1)) &&
-                (uint8_t)pp.fgm() >= 2 && (uint8_t)pp.bgm() >= 2) {
-            p.suspicious_position = p.suspicious() ? UNDEF_POINT : pp.current_position;
-            p.publishPacket(SUSPICIOUS_EVENT);
-          }
-
           if (p.past_position != pp.current_position) {
+            uint8_t axisJump = max_axis_jump(p.past_position, pp.current_position);
             p.max_jump = max(axisJump, p.max_jump);
 
             if (AXIS(pp.current_position) == AXIS(p.starting_position) ||
@@ -1255,10 +1244,10 @@ bool processSensor() {
                 (SIDE2(p.starting_position) &&
                   AXIS(pp.current_position) > AXIS(p.past_position))) {
               // point moved backwards
-              if (!p.suspicious() && ((SIDE1(p.starting_position) &&
+              if ((SIDE1(p.starting_position) &&
                     AXIS(pp.current_position) <= AXIS(p.starting_position)) ||
                   (SIDE2(p.starting_position) &&
-                    AXIS(pp.current_position) >= AXIS(p.starting_position)))) {
+                    AXIS(pp.current_position) >= AXIS(p.starting_position))) {
                 // reset history if point is further back than where it started
                 if (!p.crossed || pointOnEdge(pp.current_position)) {
                   // reset everything, unless point is crossed and could still move back.
@@ -1278,40 +1267,34 @@ bool processSensor() {
                 p.history = 1;
                 p.max_jump = 0;
                 p.max_temp_drift = 0;
-              } else if (AXIS(p.past_position) != AXIS(pp.current_position)) {
-                if (p.suspicious() && pp.side() == p.starting_side() &&
-                    axis_distance(p.suspicious_position, pp.current_position) >= 3) {
-                  p.max_jump = 0;
-                  p.max_temp_drift = 0;
-                  p.forgotten_count = 0;
-                  p.crossed = 0;
-                  p.history = 3;
-                  p.reverted = false;
-                  p.retreating = false;
-                  p.starting_position = p.suspicious_position;
-                  p.suspicious_position = UNDEF_POINT;
-                } else if (p.history > 1) {
-                  // point moved backwards a little bit, decrement history
-                  uint8_t sad = axis_distance(p.starting_position, pp.current_position) + 1;
-                  // Starting Axis Distance must be greater than 0, or else it would be in
-                  // earlier if condition. Make sure history is never higher than 1 x row.
-                  uint8_t newHistory = p.history;
-                  // only subtract history if we move back more than 1 row
-                  if ((p.history > 2 || pp.side() == p.starting_side()) && (p.retreating ||
-                        axis_distance(p.past_position, pp.current_position) > 1)) {
-                    newHistory--;
-                  }
-                  p.retreating = true;
-                  p.history = min(newHistory, sad);
+              } else if (p.history > 1 && AXIS(p.past_position)!=AXIS(pp.current_position)) {
+                // point moved backwards a little bit, decrement history
+                uint8_t sad = axis_distance(p.starting_position, pp.current_position) + 1;
+                // Starting Axis Distance must be greater than 0, or else it would be in
+                // earlier if condition. Make sure history is never higher than 1 x row.
+                uint8_t newHistory = p.history;
+                // only subtract history if we move back more than 1 row
+                if ((p.history > 2 || pp.side() == p.starting_side()) && (p.retreating ||
+                      axis_distance(p.past_position, pp.current_position) > 1)) {
+                  newHistory--;
                 }
+                p.retreating = true;
+                p.history = min(newHistory, sad);
               }
             } else if (AXIS(p.past_position) != AXIS(pp.current_position)) {
               // "always forward, forward always" - Luke Cage
+              if ((SIDE1(p.starting_position) &&
+                    AXIS(pp.current_position) > AXIS(p.max_position)) ||
+                  (SIDE2(p.starting_position) &&
+                    AXIS(pp.current_position) < AXIS(p.max_position))) {
+                // we beat our previous max position record
+                p.max_position = pp.current_position;
+              }
               if (!p.retreating || axis_distance(p.past_position, pp.current_position) > 1) {
                 p.history++;
               }
               p.retreating = false;
-              if (pp.side() != p.side() || p.history > 6) {
+              if (pp.side() != p.side() || p.history > 5) {
                 // point just crossed threshold, let's reduce its history to force
                 // it to spend another cycle on this side before we count the event
                 p.history = min(p.history, MIN_HISTORY);
@@ -1358,6 +1341,7 @@ bool processSensor() {
     } else if (taken[i] == 0) {
       // new point appeared (no past point found), start tracking it
       coord_t sp = points[i].current_position;
+      coord_t mp = sp;
       uint8_t mj = 0;
       fint1_t md = 0;
       uint8_t cross = 0;
@@ -1372,42 +1356,35 @@ bool processSensor() {
       uint8_t h = 1;
       uint16_t c = 1;
       uint8_t fc = 0;
-      bool retroMatched = false;
 
       if (temp_forgotten_num > 0 && !pointOnEdge(points[i].current_position)) {
         // first let's check points on death row from this frame for a match
-        if (remember_person(temp_forgotten_people, points[i].current_position, h, sp, mj,
-              md, cross, revert, c, fc, height, width, n, conf)) {
-          retroMatched = true;
-        }
+        remember_person(temp_forgotten_people, points[i].current_position, h, sp, mp, mj,
+              md, cross, revert, c, fc, height, width, n, conf);
       }
 
-      if (!retroMatched && cycles_since_forgotten < MAX_EMPTY_CYCLES) {
+      if (c == 1 && cycles_since_forgotten < MAX_EMPTY_CYCLES) {
         // second let's check past forgotten points for a match
-        if (remember_person(forgotten_people, points[i].current_position, h, sp, mj,
-              md, cross, revert, c, fc, height, width, n, conf)) {
-          retroMatched = true;
-        }
+        remember_person(forgotten_people, points[i].current_position, h, sp, mp, mj,
+              md, cross, revert, c, fc, height, width, n, conf);
       }
 
       axis_t spAxis = normalizeAxis(AXIS(sp));
-      if (!retroMatched && spAxis >= 3) {
+      if (c == 1 && spAxis >= 3 && b > 1.5 && f > 1.5) {
         // if point is right in middle, drag it to the side it appears to be coming from
         coord_t a = sp - GRID_EXTENT;
         coord_t b = sp + GRID_EXTENT;
         bool djo = doorJustOpened();
-        if (djo && spAxis == 4 && height > 0 && door_side == SIDE(sp)) {
+        if (djo && spAxis == 4 && SIDE(sp) == door_side) {
           if (door_side == 1) {
-            if (compareNeighboringPixels(b,a,sp,f)) {
-              sp += GRID_EXTENT;
-              h++;
-            }
-          } else if (compareNeighboringPixels(a,b,sp,f)) {
+            sp += GRID_EXTENT;
+          } else {
             sp -= GRID_EXTENT;
-            h++;
           }
+          h++;
         } else if (!djo && (side1Point || side2Point) && otherPersonExists(sp)) {
           // there's another person in the frame, assume this is a split of that person
+          // TODO look into this logic tomorrow
           if (side1Point > (side2Point+10) && (spAxis == 4 ||
                 compareNeighboringPixels(a,b,sp,f))) {
             if (SIDE2(sp)) {
@@ -1429,7 +1406,7 @@ bool processSensor() {
             side1Point = 0;
             side2Point = 0;
           }
-        } else if (!djo && (uint8_t)b > 1 && (uint8_t)f > 1 && spAxis == 4 && height > 0) {
+        } else if (!djo && spAxis == 4 && height > 0) {
           // catch entries on door open for people who did not setup the door contact magnet
           if (SIDE1(sp)) {
             if (compareNeighboringPixels(b,a,sp,f)) {
@@ -1455,7 +1432,7 @@ bool processSensor() {
           Person p = {
             .past_position=points[i].current_position,
             .starting_position=sp,
-            .suspicious_position=UNDEF_POINT,
+            .max_position=mp,
             .confidence=conf,
             .max_temp_drift=md,
             .count=c,
