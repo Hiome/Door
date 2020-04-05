@@ -1,3 +1,12 @@
+/*
+ *  Check VL53L0X sensors repeatedly for human presence and direction of movement.
+ *  Reads sensor data and streams any changes over an RFM69 radio.
+ *  
+ *  Copyright 2018 Neil Gupta
+ *  All rights reserved.
+ *  
+ */
+
 #define FIRMWARE_VERSION     "V0.3"
 #define BATTERY_POWERED
 #define TIMEOUT_THRESHOLD    3000

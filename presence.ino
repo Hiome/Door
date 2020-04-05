@@ -1,8 +1,7 @@
 /*
- *  Check VL53L0X sensors repeatedly for human presence and direction of movement.
- *  Reads sensor data and streams any changes over an RFM69 radio.
+ *  Hiome sensor base
  *  
- *  Copyright 2018 Neil Gupta
+ *  Copyright 2020 Hiome Inc.
  *  All rights reserved.
  *  
  */
@@ -112,8 +111,6 @@ uint8_t publish(const char* msg, const char* meta, uint8_t retries) {
   #include "lidar.h"
 #elif defined MOTION
   #include "motion.h"
-#elif defined DOOR
-  #include "door.h"
 #elif defined THERMAL
   #include "thermal.h"
 #elif defined BED
