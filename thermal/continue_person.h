@@ -1,3 +1,4 @@
+// a person and point have been paired together! Update the person's stats accordingly
 for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
   Person p = known_people[idx];
   if (p.real() && pairs[idx] == i) {

@@ -1,3 +1,10 @@
+float   raw_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
+fint3_t avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
+float global_bgm = 0;
+float global_fgm = 0;
+float cavg1 = 0;
+float cavg2 = 0;
+
 float bgPixel(coord_t x) {
   return fint3ToFloat(avg_pixels[(x)]);
 }
@@ -175,5 +182,33 @@ void updateBgAverage() {
     // yes we can use += here and rely on type promotion, but I want to be absolutely
     // explicit that we need to use int32_t and not int16_t to avoid overflow
     avg_pixels[i] = ((int32_t)avg_pixels[i]) + ((int32_t)round(calculateNewBackground(i)));
+  }
+}
+
+void startBgAverage() {
+  for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    raw_pixels[i] = 0.0;
+  }
+
+  amg.readPixels(raw_pixels);
+
+  for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    avg_pixels[i] = floatToFint3(constrain(raw_pixels[i], MIN_TEMP, MAX_TEMP));
+  }
+
+  for (uint8_t k=0; k < 10; k++) {
+    while (!amg.readPixels(raw_pixels)) {
+      // wait for pixels to change
+      LOWPOWER_DELAY(SLEEP_30MS);
+    }
+
+    for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+      if (((uint8_t)raw_pixels[i]) <= MIN_TEMP || ((uint8_t)raw_pixels[i]) >= MAX_TEMP) {
+        continue;
+      }
+      float std = raw_pixels[i] - bgPixel(i);
+      // alpha of 0.3
+      avg_pixels[i] = ((int32_t)avg_pixels[i]) + ((int32_t)(300.0 * std));
+    }
   }
 }

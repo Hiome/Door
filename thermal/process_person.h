@@ -1,3 +1,4 @@
+// find which point this person is most interested in pairing with
 Person p = known_people[idx];
 if (!p.real()) continue;
 

@@ -31,14 +31,8 @@ const float   FOREGROUND_GRADIENT    = 2.0;
 const coord_t UNDEF_POINT            = AMG88xx_PIXEL_ARRAY_SIZE + 10;
 const idx_t   UNDEF_INDEX            = UNDEF_POINT;
 
-float   raw_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
-fint3_t avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 uint8_t side1Point = 0;
 uint8_t side2Point = 0;
-float global_bgm = 0;
-float global_fgm = 0;
-float cavg1 = 0;
-float cavg2 = 0;
 uint8_t cycles_since_forgotten = MAX_EMPTY_CYCLES;
 
 #include "thermal/coordinates.h"
@@ -83,9 +77,9 @@ bool processSensor() {
     }
 
     if (taken[i] == 1) {
-      #include "thermal/wed_point.h"
+      #include "thermal/continue_person.h"
     } else if (taken[i] == 0) {
-      #include "thermal/create_point.h"
+      #include "thermal/create_person.h"
     }
   }
 
@@ -178,31 +172,7 @@ void initialize() {
     forgotten_people[i] = UNDEF_PERSON;
   }
 
-  for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    raw_pixels[i] = 0.0;
-  }
-
-  amg.readPixels(raw_pixels);
-
-  for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    avg_pixels[i] = floatToFint3(constrain(raw_pixels[i], MIN_TEMP, MAX_TEMP));
-  }
-
-  for (uint8_t k=0; k < 10; k++) {
-    while (!amg.readPixels(raw_pixels)) {
-      // wait for pixels to change
-      LOWPOWER_DELAY(SLEEP_30MS);
-    }
-
-    for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-      if (((uint8_t)raw_pixels[i]) <= MIN_TEMP || ((uint8_t)raw_pixels[i]) >= MAX_TEMP) {
-        continue;
-      }
-      float std = raw_pixels[i] - bgPixel(i);
-      // alpha of 0.3
-      avg_pixels[i] = ((int32_t)avg_pixels[i]) + ((int32_t)(300.0 * std));
-    }
-  }
+  startBgAverage();
 }
 
 void loop_frd() {
