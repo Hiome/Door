@@ -33,8 +33,7 @@ for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
 }
 
 // once we've chosen our winning point, forget the rest...
-bool holyMatrimony = points[i].confidence > 50 && points[i].neighbors >= 4 &&
-                      !pointOnSmallBorder(points[i].current_position);
+bool holyMatrimony = points[i].confidence > 50 && points[i].neighbors >= 4;
 for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
   if (known_people[idx].real() && pairs[idx] == i && idx != max_idx) {
     // does this look like two blobs combining into one?

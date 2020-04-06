@@ -1,5 +1,6 @@
 float calcMaxDistance(uint8_t height, uint8_t width, uint8_t neighbors, uint8_t confidence) {
-  return 3.0 + (height+width+neighbors)/4.0 + (confidence/100.0);
+  float d = 3.0 + (height+width+neighbors)/4.0 + (confidence/100.0);
+  return min(d, 5.5);
 }
 #define MAX_DIST_FORMULA ( calcMaxDistance(height, width, neighbors, confidence) )
 
@@ -181,9 +182,11 @@ typedef struct {
       publishPacket(FRD_EVENT);
       return true;
     } else if (avg_fgm > 150 && avg_bgm > 150 &&
-                (!crossed || SIDE(max_position) != starting_side()) &&
-                axis_distance(max_position, past_position) >= 2) {
-      starting_position = max_position;
+                axis_distance(max_position, starting_position) >= 2) {
+      if (axis_distance(max_position, past_position) >= 2) {
+        if (crossed && SIDE(max_position) == starting_side()) return false;
+        starting_position = max_position;
+      }
       publishPacket(SUSPICIOUS_EVENT);
       return true;
     }

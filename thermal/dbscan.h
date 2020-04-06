@@ -127,6 +127,7 @@ uint8_t findCurrentPoints() {
           bool skippable = true;
           for (uint8_t bn = 0; bn < nc; bn++) {
             if (clusterNum[blobNeighbors[bn]] == 0 &&
+                  norm_pixels[blobNeighbors[bn]] > CONFIDENCE_THRESHOLD &&
                   isNeighborly(blobNeighbors[bn], foundNeighbor) &&
                   diffFromPoint(blobNeighbors[bn], blobPoint) < mtb) {
               // keep expanding if there are actually more connections to the blob
@@ -202,11 +203,10 @@ uint8_t findCurrentPoints() {
         float dp = diffFromPoint(n, current_point);
         if (dp > mt_constrained) continue;
 
-        if (norm_pixels[n] < CONFIDENCE_THRESHOLD) {
-          // only count 0 confidence points within 0.3º (regardless of distance)
-          if (dp > 0.3) continue;
-        } else if (dimension < 5 && int_distance(n, current_point) >= dimension+2) {
-          // only count points with confidence within dimension+2 distance
+        if (dp > 0.3 && (norm_pixels[n] < CONFIDENCE_THRESHOLD ||
+              (dimension < 5 && int_distance(n, current_point) >= dimension+2))) {
+          // when diff is more than 0.3º, point either needs to be 0 conf or
+          // within a limited radius to person
           continue;
         }
 

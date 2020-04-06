@@ -11,26 +11,22 @@ float maxDperson = p.max_distance();
 for (idx_t j=0; j<total_masses; j++) {
   PossiblePerson pp = points[j];
 
+  // can't jump too far
   float maxDpoint = pp.max_distance();
-  // choose larger range of 2 points as max distance
-  maxDpoint = max(maxDpoint, maxDperson);
-  maxDpoint = min(maxDpoint, 5.5); // don't let the D grow too big
-
   float d = euclidean_distance(p.past_position, pp.current_position);
-  if (d > maxDpoint) continue;
+  if (d > max(maxDpoint, maxDperson)) continue;
 
-  // can't shift more than 2-5º at once
+  // can't shift temperature too much
   float maxTpoint = pp.max_allowed_temp_drift();
   float tempDiff = p.difference_from_point(pp.current_position);
-  if (tempDiff > max(maxTperson, maxTpoint)) continue;
+  if (tempDiff > (d > 2 ? min(maxTperson, maxTpoint) : max(maxTperson, maxTpoint))) {
+    continue;
+  }
 
   float score = sq(d/maxDperson) + sq(max(tempDiff, 1)/maxTperson);
   if (!p.crossed || pointOnSmallBorder(p.starting_position)) {
     score -= (0.02*((float)pp.neighbors));
   }
-
-  // distance is high AND temp diff is high
-  if (d > 2 && score > 1.8) continue;
 
   if (score <= (min_score - 0.1) || (score <= (min_score + 0.1) &&
         tempDiff < p.difference_from_point(points[min_index].current_position))) {
