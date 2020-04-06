@@ -285,20 +285,20 @@ void forget_person(idx_t idx, Person (&temp_forgotten_people)[MAX_PEOPLE],
 idx_t findClosestPerson(Person (&arr)[MAX_PEOPLE], coord_t i, float maxDistance) {
   idx_t pidx = UNDEF_INDEX;
   float minTemp = 1.0;
+  float maxTemp = maxTempDiffForFgd(fgDiff(i))*0.6;
   for (idx_t x=0; x<MAX_PEOPLE; x++) {
     Person p = arr[x];
     if (p.real()) {
       float maxD = p.max_distance();
-      maxDistance = max(maxDistance, maxD);
-      maxDistance = min(maxDistance, 4.0);
+      maxD = min(maxD, 4.0);
       float dist = euclidean_distance(p.past_position, i);
-      if (dist > maxDistance) continue;
+      if (dist > max(maxDistance, maxD)) continue;
 
       float tempDiff = p.difference_from_point(i);
       float maxT = p.max_allowed_temp_drift() * 0.6;
-      if (tempDiff > maxT) continue;
+      if (tempDiff > max(maxTemp, maxT)) continue;
 
-      float tempRatio = tempDiff/maxT;
+      float tempRatio = tempDiff/maxTemp;
       tempRatio = max(tempRatio, 0.1);
       float distRatio = dist/maxDistance;
       distRatio = max(distRatio, 0.1);
@@ -316,7 +316,7 @@ void remember_person(Person (&arr)[MAX_PEOPLE], coord_t point, uint8_t &h, coord
         coord_t &mp, uint8_t &mj, fint1_t &md, uint8_t &cross, bool &revert, uint16_t &c,
         uint8_t &fc, uint8_t height, uint8_t width, uint8_t neighbors, uint8_t conf) {
   float maxD = calcMaxDistance(height, width, neighbors, conf);
-  idx_t pi = findClosestPerson(arr, point, maxD);
+  idx_t pi = findClosestPerson(arr, point, min(maxD, 4.0));
   if (pi != UNDEF_INDEX) {
     Person p = arr[pi];
 

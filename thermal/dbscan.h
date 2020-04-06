@@ -127,28 +127,11 @@ uint8_t findCurrentPoints() {
           bool skippable = true;
           for (uint8_t bn = 0; bn < nc; bn++) {
             if (clusterNum[blobNeighbors[bn]] == 0 &&
+                  isNeighborly(blobNeighbors[bn], foundNeighbor) &&
                   diffFromPoint(blobNeighbors[bn], blobPoint) < mtb) {
               // keep expanding if there are actually more connections to the blob
-              if (isNeighborly(blobNeighbors[bn], foundNeighbor)) {
-                skippable = false;
-                break;
-              }
-//              else {
-//                // scan all neighbors of new point to see if it's touching this blob
-//                coord_t blobNeighbors2[8];
-//                uint8_t nc2 = loadNeighbors(blobNeighbors[bn], blobNeighbors2);
-//                for (uint8_t bn2 = 0; bn2 < nc2; bn2++) {
-//                  // don't double count the current point
-//                  if (blobNeighbors2[bn2] == blobPoint) continue;
-//                  // check the other neighbors for a connection
-//                  if (clusterNum[blobNeighbors2[bn2]] == clusterIdx) {
-//                    // it is! We must keep expanding this blob then
-//                    skippable = false;
-//                    break;
-//                  }
-//                }
-//                if (!skippable) break;
-//              }
+              skippable = false;
+              break;
             }
           }
           if (skippable) continue;
