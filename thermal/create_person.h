@@ -15,58 +15,57 @@ uint8_t width = points[i].width;
 uint8_t h = 1;
 uint16_t c = 1;
 uint8_t fc = 0;
+axis_t spAxis = normalizeAxis(AXIS(sp));
+float maxD = calcMaxDistance(height, width, n, conf);
+maxD = min(maxD, 4.0);
 
 if (temp_forgotten_num > 0 && !pointOnEdge(points[i].current_position)) {
   // first let's check points on death row from this frame for a match
-  remember_person(temp_forgotten_people, points[i].current_position, h, sp, mp, mj,
-        md, cross, revert, c, fc, height, width, n, conf);
+  idx_t pi = findClosestPerson(temp_forgotten_people, sp, maxD);
+  if (pi != UNDEF_POINT &&
+      remember_person(temp_forgotten_people[pi], h, sp, mp, mj, md, cross, revert, c, fc)) {
+    temp_forgotten_people[pi] = UNDEF_PERSON;
+    if (sp == merged_person.starting_position && c-1 == merged_person.count) {
+      clearMergedPerson();
+    }
+  }
 }
 
 if (c == 1 && cycles_since_forgotten < MAX_EMPTY_CYCLES) {
   // second let's check past forgotten points for a match
-  remember_person(forgotten_people, points[i].current_position, h, sp, mp, mj,
-        md, cross, revert, c, fc, height, width, n, conf);
+  idx_t pi = findClosestPerson(forgotten_people, sp, maxD);
+  if (pi != UNDEF_POINT &&
+      remember_person(forgotten_people[pi], h, sp, mp, mj, md, cross, revert, c, fc)) {
+    forgotten_people[pi] = UNDEF_PERSON;
+    if (sp == merged_person.starting_position && c-1 == merged_person.count) {
+      clearMergedPerson();
+    }
+  }
 }
 
-axis_t spAxis = normalizeAxis(AXIS(sp));
-if (c == 1 && spAxis >= 3 && b > 1.5 && f > 1.5) {
+if (c == 1 && merged_person.real() && spAxis >= 3) {
+  float mpt = merged_person.difference_from_point(sp);
+  float mp_maxT = merged_person.max_allowed_temp_drift();
+  float pp_maxT = maxTempDiffForFgd(f);
+  if (mpt < min(mp_maxT, pp_maxT) &&
+      remember_person(merged_person, h, sp, mp, mj, md, cross, revert, c, fc)) {
+    clearMergedPerson();
+  }
+}
+
+if (c == 1 && spAxis == 4 && b > 1.5 && f > 1.5) {
   // if point is right in middle, drag it to the side it appears to be coming from
-  coord_t a = sp - GRID_EXTENT;
-  coord_t b = sp + GRID_EXTENT;
-  bool djo = doorJustOpened();
-  if (djo && spAxis == 4 && SIDE(sp) == door_side) {
+  if (doorJustOpened() && SIDE(sp) == door_side) {
     if (door_side == 1) {
       sp += GRID_EXTENT;
     } else {
       sp -= GRID_EXTENT;
     }
     h++;
-  } else if (!djo && (side1Point || side2Point) && otherPersonExists(sp)) {
-    // there's another person in the frame, assume this is a split of that person
-    // TODO look into this logic tomorrow
-    if (side1Point > (side2Point+10) && (spAxis == 4 ||
-          compareNeighboringPixels(a,b,sp,f))) {
-      if (SIDE2(sp)) {
-        h++;
-        while (SIDE2(sp)) {
-          sp -= GRID_EXTENT;
-        }
-      }
-      side1Point = 0;
-      side2Point = 0;
-    } else if (side2Point > (side1Point+10) && (spAxis == 4 ||
-          compareNeighboringPixels(b,a,sp,f))) {
-      if (SIDE1(sp)) {
-        h++;
-        while (SIDE1(sp)) {
-          sp += GRID_EXTENT;
-        }
-      }
-      side1Point = 0;
-      side2Point = 0;
-    }
-  } else if (!djo && spAxis == 4 && height > 0) {
+  } else if (!door_magnet_installed && height > 0) {
     // catch entries on door open for people who did not setup the door contact magnet
+    coord_t a = sp - GRID_EXTENT;
+    coord_t b = sp + GRID_EXTENT;
     if (SIDE1(sp)) {
       if (compareNeighboringPixels(b,a,sp,f)) {
         sp += GRID_EXTENT;

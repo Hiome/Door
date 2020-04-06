@@ -31,10 +31,6 @@ const float   FOREGROUND_GRADIENT    = 2.0;
 const coord_t UNDEF_POINT            = AMG88xx_PIXEL_ARRAY_SIZE + 10;
 const idx_t   UNDEF_INDEX            = UNDEF_POINT;
 
-uint8_t side1Point = 0;
-uint8_t side2Point = 0;
-uint8_t cycles_since_forgotten = MAX_EMPTY_CYCLES;
-
 #include "thermal/coordinates.h"
 #include "thermal/door_contact.h"
 #include "thermal/csm.h"
@@ -110,24 +106,6 @@ bool processSensor() {
   return true;
 }
 
-void clearSideXPoints() {
-  if (side1Point || side2Point) {
-    bool conjoinedBlobExists = false;
-    for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
-      Person p = known_people[idx];
-      if (p.real() && p.neighbors >= 3 && p.confidence > 50) {
-        conjoinedBlobExists = true;
-        break;
-      }
-    }
-    if (!conjoinedBlobExists) {
-      side1Point = 0;
-      side2Point = 0;
-      SERIAL_PRINTLN(F("csp"));
-    }
-  }
-}
-
 void runThermalLoop() {
   if (processSensor()) {
     // publish event if any people moved through doorway yet
@@ -135,7 +113,7 @@ void runThermalLoop() {
     // update avg_pixels
     updateBgAverage();
     // clear sideXPoints used to track which side a merged from (naming things is hard, ok)
-    clearSideXPoints();
+    clearPossibleMerger();
     // send heartbeat event if necessary
     // 108000 = 10 (frames/sec) * 60 (sec/min) * 60 (min/hr) * 3 (hrs)
     beatHeart(108000);

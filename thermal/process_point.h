@@ -38,15 +38,14 @@ bool holyMatrimony = points[i].confidence > 50 && points[i].neighbors >= 4 &&
 for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
   if (known_people[idx].real() && pairs[idx] == i && idx != max_idx) {
     // does this look like two blobs combining into one?
-    if (holyMatrimony && known_people[idx].neighbors &&
-          known_people[idx].count > 1 && known_people[idx].confidence > 50) {
-      if (SIDE1(known_people[idx].starting_position)) {
-        side1Point = max(known_people[idx].confidence, side1Point);
-        SERIAL_PRINTLN(F("s1Pt"));
-      } else {
-        side2Point = max(known_people[idx].confidence, side2Point);
-        SERIAL_PRINTLN(F("s2Pt"));
-      }
+    if (holyMatrimony && known_people[idx].count > 1 && known_people[idx].confidence > 50 &&
+          // new point is a merger, so must be bigger than old person
+          points[i].blobSize > known_people[idx].blobSize &&
+          // old person should be at least 1/4th this point's size to bother remembering
+          known_people[idx].blobSize*4 > points[i].blobSize &&
+        (!merged_person.real() || known_people[idx].confidence > merged_person.confidence)) {
+      merged_person = known_people[idx];
+      merged_with = max_idx;
     }
     FORGET_POINT;
     taken[i]--;

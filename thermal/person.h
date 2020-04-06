@@ -227,6 +227,25 @@ const Person UNDEF_PERSON = {
   .fgm=0
 };
 
+uint8_t cycles_since_forgotten = MAX_EMPTY_CYCLES;
+
+Person merged_person = UNDEF_PERSON;
+idx_t merged_with = UNDEF_INDEX;
+
+void clearMergedPerson() {
+  merged_person = UNDEF_PERSON;
+  merged_with = UNDEF_INDEX;
+}
+
+void clearPossibleMerger() {
+  if (merged_with != UNDEF_INDEX) {
+    Person p = known_people[merged_with];
+    if (!p.real() || p.blobSize < merged_person.blobSize) {
+      clearMergedPerson();
+    }
+  }
+}
+
 void publishEvents() {
   for (idx_t i=0; i<MAX_PEOPLE; i++) {
     Person p = known_people[i];
@@ -241,8 +260,7 @@ void publishEvents() {
 void clearPointsAfterDoorClose() {
   if (checkDoorState()) {
     cycles_since_forgotten = MAX_EMPTY_CYCLES;
-    side1Point = 0;
-    side2Point = 0;
+    clearMergedPerson();
 
     for (idx_t i = 0; i<MAX_PEOPLE; i++) {
       known_people[i].forget();
@@ -251,17 +269,6 @@ void clearPointsAfterDoorClose() {
       forgotten_people[i] = UNDEF_PERSON;
     }
   }
-}
-
-bool otherPersonExists(coord_t i) {
-  for (idx_t x=0; x<MAX_PEOPLE; x++) {
-    Person p = known_people[x];
-    if (p.real() && ((p.count > 3 && p.history > 1) || p.crossed) && p.confidence > 60 &&
-          p.neighbors > 2 && int_distance(i, p.past_position) < 5) {
-      return true;
-    }
-  }
-  return false;
 }
 
 void forget_person(idx_t idx, Person (&temp_forgotten_people)[MAX_PEOPLE],
@@ -289,14 +296,13 @@ idx_t findClosestPerson(Person (&arr)[MAX_PEOPLE], coord_t i, float maxDistance)
   for (idx_t x=0; x<MAX_PEOPLE; x++) {
     Person p = arr[x];
     if (p.real()) {
-      float maxD = p.max_distance();
-      maxD = min(maxD, 4.0);
       float dist = euclidean_distance(p.past_position, i);
-      if (dist > max(maxDistance, maxD)) continue;
+      float maxD = p.max_distance();
+      if (dist > min(maxDistance, maxD)) continue;
 
       float tempDiff = p.difference_from_point(i);
       float maxT = p.max_allowed_temp_drift() * 0.6;
-      if (tempDiff > max(maxTemp, maxT)) continue;
+      if (tempDiff > min(maxTemp, maxT)) continue;
 
       float tempRatio = tempDiff/maxTemp;
       tempRatio = max(tempRatio, 0.1);
@@ -312,46 +318,37 @@ idx_t findClosestPerson(Person (&arr)[MAX_PEOPLE], coord_t i, float maxDistance)
   return pidx;
 }
 
-void remember_person(Person (&arr)[MAX_PEOPLE], coord_t point, uint8_t &h, coord_t &sp,
-        coord_t &mp, uint8_t &mj, fint1_t &md, uint8_t &cross, bool &revert, uint16_t &c,
-        uint8_t &fc, uint8_t height, uint8_t width, uint8_t neighbors, uint8_t conf) {
-  float maxD = calcMaxDistance(height, width, neighbors, conf);
-  idx_t pi = findClosestPerson(arr, point, min(maxD, 4.0));
-  if (pi != UNDEF_INDEX) {
-    Person p = arr[pi];
-
-    axis_t ppaxis = AXIS(p.past_position);
-    if ((SIDE1(p.starting_position) && ppaxis-1 > AXIS(point)) ||
-        (SIDE2(p.starting_position) && ppaxis+1 < AXIS(point))) {
-      // this point is moved behind previous position, just start over
-      return;
-    }
-
-    if (p.history <= MIN_HISTORY && p.side() != p.starting_side() &&
-          pointOnSmallBorder(p.past_position) &&
-          p.history <= (MIN_HISTORY+1 - normalizeAxis(ppaxis))) {
-      // impossible for this person to ever do anything useful with its life, kill it
-      return;
-    }
-
-    // point is ahead of starting point at least
-    sp = p.starting_position;
-    h = min(p.history, MIN_HISTORY);
-
-    fint1_t tempDrift = floatToFint1(p.difference_from_point(point));
-    md = max(tempDrift, p.max_temp_drift);
-
-    uint8_t axisJump = max_axis_jump(p.past_position, point);
-    mj = max(axisJump, p.max_jump);
-
-    if ((SIDE1(sp) && AXIS(mp) < AXIS(p.max_position)) ||
-        (SIDE2(sp) && AXIS(mp) > AXIS(p.max_position))) {
-      mp = p.max_position;
-    }
-    cross = p.crossed;
-    revert = p.reverted;
-    c = p.count + 1;
-    fc = p.forgotten_count + 1;
-    arr[pi] = UNDEF_PERSON;
+bool remember_person(Person p, uint8_t &h, coord_t &sp, coord_t &mp, uint8_t &mj,
+    fint1_t &md, uint8_t &cross, bool &revert, uint16_t &c, uint8_t &fc) {
+  axis_t ppaxis = AXIS(p.past_position);
+  if ((SIDE1(p.starting_position) && ppaxis-1 > AXIS(sp)) ||
+      (SIDE2(p.starting_position) && ppaxis+1 < AXIS(sp))) {
+    // this point is moved behind previous position, just start over
+    return false;
   }
+
+  if (p.history <= MIN_HISTORY && p.side() != p.starting_side() &&
+        pointOnSmallBorder(p.past_position) &&
+        p.history <= (MIN_HISTORY+1 - normalizeAxis(ppaxis))) {
+    // impossible for this person to ever do anything useful with its life, kill it
+    return false;
+  }
+
+  fint1_t tempDrift = floatToFint1(p.difference_from_point(sp));
+  md = max(tempDrift, p.max_temp_drift);
+
+  uint8_t axisJump = max_axis_jump(p.past_position, sp);
+  mj = max(axisJump, p.max_jump);
+
+  if ((SIDE1(p.starting_position) && AXIS(mp) < AXIS(p.max_position)) ||
+      (SIDE2(p.starting_position) && AXIS(mp) > AXIS(p.max_position))) {
+    mp = p.max_position;
+  }
+  cross = p.crossed;
+  revert = p.reverted;
+  sp = p.starting_position;
+  h = min(p.history, MIN_HISTORY);
+  c = p.count + 1;
+  fc = p.forgotten_count + 1;
+  return true;
 }
