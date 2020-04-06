@@ -81,17 +81,16 @@ float maxTempDiffForPoint(coord_t x) {
 }
 
 float trimMean(uint8_t side) {
-  coord_t sortedPixels[AMG88xx_PIXEL_ARRAY_SIZE/2];
+  coord_t sortedPixels[32];
   uint8_t total = 0;
-  uint8_t baseline = side==1 ? 0 : 32;
-  for (coord_t i=baseline; i<(32 + baseline); i++) {
+  coord_t maxI = 32*side;
+  for (coord_t i = (maxI - 32); i < maxI; i++) {
     // sort clusters by raw temp
     if (((uint8_t)raw_pixels[i]) > MIN_TEMP && ((uint8_t)raw_pixels[i]) < MAX_TEMP) {
-      uint8_t adjI = i - baseline;
       bool added = false;
-      for (uint8_t j=0; j<adjI; j++) {
+      for (uint8_t j=0; j<total; j++) {
         if (raw_pixels[i] > raw_pixels[(sortedPixels[j])]) {
-          for (int8_t x=adjI; x>j; x--) {
+          for (int8_t x=total; x>j; x--) {
             sortedPixels[x] = sortedPixels[(x-1)];
           }
           sortedPixels[j] = i;
@@ -101,13 +100,13 @@ float trimMean(uint8_t side) {
       }
       if (!added) {
         // append i to end of array
-        sortedPixels[adjI] = i;
+        sortedPixels[total] = i;
       }
       total++;
     }
   }
 
-  SERIAL_PRINTLN(total);
+  SERIAL_PRINTLN(total); // should always == 32
 
   float avg = 0;
   uint8_t newTotal = 0;
@@ -122,7 +121,7 @@ float trimMean(uint8_t side) {
     }
   }
 
-  SERIAL_PRINTLN(newTotal);
+  SERIAL_PRINTLN(newTotal); // should be between 26 - 52
 
   if (!newTotal) {
     SERIAL_PRINTLN(F("xxx"));
