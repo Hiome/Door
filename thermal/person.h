@@ -136,14 +136,7 @@ typedef struct {
     return false;
   };
 
-  #define FRD_EVENT         0
-  #define SUSPICIOUS_EVENT  1
-  void publishPacket(uint8_t eventType) {
-    if (eventType == SUSPICIOUS_EVENT) {
-      _publishFrd("s", 3);
-      return;
-    }
-
+  void publishPacket() {
     uint8_t old_crossed = crossed;
     if (SIDE1(past_position)) {
       crossed = _publishFrd("1", RETRY_COUNT);
@@ -173,13 +166,9 @@ typedef struct {
   bool publishMaybeEvent() {
     if (!real()) return false;
 
-    if (door_state != DOOR_OPEN && frames_since_door_open == 0 && door_side == side()) {
-      return false;
-    }
-
     if ((history >= MIN_HISTORY || (history == 2 && avg_fgm > 150 && avg_bgm > 150)) &&
         (!crossed || !reverted) && starting_side() != side()) {
-      publishPacket(FRD_EVENT);
+      publishPacket();
       return true;
     } else if (avg_fgm > 150 && avg_bgm > 150 &&
                 axis_distance(max_position, starting_position) >= 2) {
@@ -187,7 +176,7 @@ typedef struct {
         if (crossed && SIDE(max_position) == starting_side()) return false;
         starting_position = max_position;
       }
-      publishPacket(SUSPICIOUS_EVENT);
+      _publishFrd("s", 3);
       return true;
     }
 
@@ -254,7 +243,7 @@ void publishEvents() {
     Person p = known_people[i];
     if (p.real() && p.history > MIN_HISTORY && (!p.crossed || !p.reverted) &&
         p.starting_side() != p.side()) {
-      p.publishPacket(FRD_EVENT);
+      p.publishPacket();
       known_people[i] = p; // update known_people array
     }
   }

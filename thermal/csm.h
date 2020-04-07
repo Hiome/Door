@@ -180,7 +180,8 @@ void updateBgAverage() {
 
     // yes we can use += here and rely on type promotion, but I want to be absolutely
     // explicit that we need to use int32_t and not int16_t to avoid overflow
-    avg_pixels[i] = ((int32_t)avg_pixels[i]) + ((int32_t)round(calculateNewBackground(i)));
+    int32_t temp = ((int32_t)avg_pixels[i]) + ((int32_t)round(calculateNewBackground(i)));
+    avg_pixels[i] = temp;
   }
 }
 
@@ -207,7 +208,8 @@ void startBgAverage() {
       }
       float std = raw_pixels[i] - bgPixel(i);
       // alpha of 0.3
-      avg_pixels[i] = ((int32_t)avg_pixels[i]) + ((int32_t)(300.0 * std));
+      int32_t temp = ((int32_t)avg_pixels[i]) + ((int32_t)(300.0 * std));
+      avg_pixels[i] = temp;
     }
   }
 }

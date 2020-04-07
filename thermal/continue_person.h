@@ -82,15 +82,15 @@ for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
     p.neighbors = pp.neighbors;
     p.height = pp.height;
     p.width = pp.width;
-    #define UPDATE_RUNNING_AVG(o,n) ( o = ((n) + (o*2))/3 )
+    #define UPDATE_RUNNING_AVG(o,n) ( o = ((n) + ((o)*2))/3 )
     UPDATE_RUNNING_AVG(p.avg_bgm, floatToFint2(pp.bgm()));
     UPDATE_RUNNING_AVG(p.avg_fgm, floatToFint2(p.fgm));
     UPDATE_RUNNING_AVG(p.avg_height, p.height);
     UPDATE_RUNNING_AVG(p.avg_width, p.width);
     UPDATE_RUNNING_AVG(p.avg_neighbors, p.neighbors);
-    UPDATE_RUNNING_AVG(p.avg_confidence, p.confidence);
     UPDATE_RUNNING_AVG(p.blobSize, (uint8_t)pp.blobSize);
     UPDATE_RUNNING_AVG(p.noiseSize, pp.noiseSize);
+    p.avg_confidence = (((uint16_t)p.confidence + (((uint16_t)p.avg_confidence)*2))/3);
     p.count = min(p.count + 1, 60000);
     known_people[idx] = p;
     break;

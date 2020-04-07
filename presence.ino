@@ -68,7 +68,7 @@ void isBatteryConnected() {
       return;
     }
     int16_t bd = (int16_t)b - (int16_t)b2;
-    total_change += abs(bd);
+    total_change += (uint16_t)abs(bd);
     if (total_change > MAX_VOLTAGE_DRIFT) break;
     b = b2;
     LOWPOWER_DELAY(SLEEP_30MS);

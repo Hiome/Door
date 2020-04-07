@@ -179,13 +179,6 @@ uint8_t findCurrentPoints() {
       }
     }
 
-    if (totalBlobSize > 60) {
-      SERIAL_PRINT(F("x "));
-      SERIAL_PRINT(current_point);
-      SERIAL_PRINTLN(F(" toobig"));
-      continue;
-    }
-
     uint8_t height = maxAxis - minAxis;
     uint8_t width = maxNAxis - minNAxis;
     uint8_t dimension = max(height, width) + 1;
