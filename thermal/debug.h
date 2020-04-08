@@ -1,17 +1,13 @@
-#ifdef PRINT_RAW_DATA
-
-//if (total_masses > 0) { // ignore frames where nothing happened
-if (true) {
+void printDebugInfo() {
   for (idx_t i = 0; i<MAX_PEOPLE; i++) {
-    Person p = known_people[i];
-    if (p.real()) {
-      SERIAL_PRINT(p.past_position);
+    if (known_people[i].real()) {
+      SERIAL_PRINT(known_people[i].past_position);
       SERIAL_PRINT(F(" ("));
-      SERIAL_PRINT(p.starting_position);
+      SERIAL_PRINT(known_people[i].starting_position);
       SERIAL_PRINT(F("-"));
-      SERIAL_PRINT(p.history);
+      SERIAL_PRINT(known_people[i].history);
       SERIAL_PRINT(F("-"));
-      SERIAL_PRINT(p.neighbors);
+      SERIAL_PRINT(known_people[i].neighbors);
       SERIAL_PRINT(F("),"));
     }
   }
@@ -39,13 +35,14 @@ if (true) {
     if (norm < CONFIDENCE_THRESHOLD) {
       SERIAL_PRINT(F("---"));
     } else {
-      if (norm < 100) SERIAL_PRINT(F(" "));
+      if (norm < 100) { SERIAL_PRINT(F(" ")); }
       SERIAL_PRINT(norm);
     }
-    if (xCoord(idx) == GRID_EXTENT)
+    if (xCoord(idx) == GRID_EXTENT) {
       SERIAL_PRINTLN();
-    else
+    } else {
       SERIAL_PRINT(F("  "));
+    }
   }
   // SERIAL_PRINTLN(F("avg"));
   // for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
@@ -57,5 +54,3 @@ if (true) {
   SERIAL_PRINTLN();
   // SERIAL_FLUSH;
 }
-
-#endif

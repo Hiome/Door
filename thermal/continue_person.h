@@ -1,7 +1,7 @@
 // a person and point have been paired together! Update the person's stats accordingly
 for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
-  Person p = known_people[idx];
-  if (p.real() && pairs[idx] == i) {
+  if (known_people[idx].real() && pairs[idx] == i) {
+    Person p = known_people[idx];
     // closest point matched, update trackers
     PossiblePerson pp = points[i];
 
@@ -57,9 +57,9 @@ for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
       } else if (AXIS(p.past_position) != AXIS(pp.current_position)) {
         // "always forward, forward always" - Luke Cage
         if ((SIDE1(p.starting_position) &&
-              AXIS(pp.current_position) > AXIS(p.max_position)) ||
+              AXIS(pp.current_position) >= AXIS(p.max_position)) ||
             (SIDE2(p.starting_position) &&
-              AXIS(pp.current_position) < AXIS(p.max_position))) {
+              AXIS(pp.current_position) <= AXIS(p.max_position))) {
           // we beat our previous max position record
           p.max_position = pp.current_position;
         }

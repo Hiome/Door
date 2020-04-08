@@ -25,7 +25,7 @@ const uint8_t MAX_FORGOTTEN_COUNT    = 2;    // max number of times allowed to f
 const uint8_t MAX_DOOR_CHANGE_FRAMES = 5;    // cycles we keep counting after door changes
 const uint8_t CONFIDENCE_THRESHOLD   = 5;    // min 5% confidence required
 const uint8_t MIN_TEMP               = 2;    // ignore all points colder than 2º C
-const uint8_t MAX_TEMP               = 45;   // ignore all points hotter than 45ºC
+const uint8_t MAX_TEMP               = 55;   // ignore all points hotter than 55ºC
 const float   BACKGROUND_GRADIENT    = 2.0;
 const float   FOREGROUND_GRADIENT    = 2.0;
 const coord_t UNDEF_POINT            = AMG88xx_PIXEL_ARRAY_SIZE + 10;
@@ -37,6 +37,7 @@ const idx_t   UNDEF_INDEX            = UNDEF_POINT;
 #include "thermal/neighbors.h"
 #include "thermal/person.h"
 #include "thermal/dbscan.h"
+#include "thermal/debug.h"
 
 bool processSensor() {
   if (!normalizePixels()) return false;
@@ -47,23 +48,11 @@ bool processSensor() {
   // "I don't know who you are or what you want, but you should know that I have a
   // very particular set of skills that make me a nightmare for people like you.
   // I will find you, I will track you, and I will turn the lights on for you."
-  uint8_t taken[MAX_PEOPLE];
+  uint8_t taken[MAX_PEOPLE] = { 0 };
   idx_t pairs[MAX_PEOPLE];
 
-  // "Good luck."
-  Person temp_forgotten_people[MAX_PEOPLE];
-  uint8_t temp_forgotten_num = 0;
-
-  for (idx_t i=0; i<MAX_PEOPLE; i++) {
-    taken[i] = 0;
-    pairs[i] = UNDEF_INDEX;
-    temp_forgotten_people[i] = UNDEF_PERSON;
-  }
-
-  // track forgotten point states in temporary local variables and reset global ones
-  #define FORGET_POINT (forget_person(idx, temp_forgotten_people, pairs, temp_forgotten_num))
-
   for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
+    pairs[idx] = UNDEF_INDEX;
     #include "thermal/process_person.h"
   }
 
@@ -79,29 +68,10 @@ bool processSensor() {
     }
   }
 
-  // copy forgotten data points for this frame to global scope
-
-  if (temp_forgotten_num > 0) {
-    for (idx_t i=0; i<MAX_PEOPLE; i++) {
-      forgotten_people[i].publishMaybeEvent();
-      forgotten_people[i] = temp_forgotten_people[i];
-    }
-    cycles_since_forgotten = 0;
-    SERIAL_PRINTLN(F("s"));
-  } else if (cycles_since_forgotten < MAX_EMPTY_CYCLES) {
-    cycles_since_forgotten++;
-    if (cycles_since_forgotten == MAX_EMPTY_CYCLES) {
-      // clear forgotten points list
-      for (idx_t i=0; i<MAX_PEOPLE; i++) {
-        forgotten_people[i].publishMaybeEvent();
-        forgotten_people[i] = UNDEF_PERSON;
-      }
-      SERIAL_PRINTLN(F("f"));
-    }
-  }
-
   // wrap up with debugging output
-  #include "thermal/debug.h"
+  #ifdef PRINT_RAW_DATA
+    printDebugInfo();
+  #endif
 
   return true;
 }
@@ -112,8 +82,8 @@ void runThermalLoop() {
     publishEvents();
     // update avg_pixels
     updateBgAverage();
-    // clear sideXPoints used to track which side a merged from (naming things is hard, ok)
-    clearPossibleMerger();
+    // decrement counter on forgotten expirations
+    expireForgottenPeople();
     // send heartbeat event if necessary
     // 108000 = 10 (frames/sec) * 60 (sec/min) * 60 (min/hr) * 3 (hrs)
     beatHeart(108000);

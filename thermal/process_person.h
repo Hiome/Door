@@ -1,7 +1,7 @@
 // find which point this person is most interested in pairing with
-Person p = known_people[idx];
-if (!p.real()) continue;
+if (!known_people[idx].real()) continue;
 
+Person p = known_people[idx];
 idx_t min_index = UNDEF_INDEX;
 float min_score = 100;
 float maxTperson = p.max_allowed_temp_drift();
@@ -23,7 +23,7 @@ for (idx_t j=0; j<total_masses; j++) {
     continue;
   }
 
-  float score = sq(d/maxDperson) + sq(max(tempDiff, 1)/maxTperson);
+  float score = sq(d/maxDperson) + sq(tempDiff/maxTperson);
   if (!p.crossed || pointOnSmallBorder(p.starting_position)) {
     score -= (0.02*((float)pp.neighbors));
   }

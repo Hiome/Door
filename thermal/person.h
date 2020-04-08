@@ -23,7 +23,7 @@ typedef struct {
     return MAX_DIST_FORMULA;
   };
   float     max_allowed_temp_drift() {
-    return maxTempDiffForFgd(fgm());
+    return maxTempDiffForFgd(fgm())*0.67;
   };
 } PossiblePerson;
 
@@ -72,13 +72,13 @@ typedef struct {
     return MAX_DIST_FORMULA;
   };
   float     max_allowed_temp_drift() {
-    return maxTempDiffForFgd(fgm);
+    return maxTempDiffForFgd(fgm)*0.67;
   };
   float     difference_from_point(coord_t a) {
     return abs(raw_pixels[(a)] - raw_temp);
   };
 
-  #define METALENGTH  47
+  #define METALENGTH  48
   void generateMeta(char *meta) {
     sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
       avg_confidence,                     // 3  100
@@ -94,9 +94,9 @@ typedef struct {
       avg_width,                          // 1  7
       max_jump,                           // 1  5
       noiseSize,                          // 2  60
-      max_temp_drift,                     // 2  99
+      max_temp_drift,                     // 3  250
       forgotten_count                     // 1  3
-    );                                    // + 14 'x' + 1 null => 47 total
+    );                                    // + 14 'x' + 1 null => 48 total
   };
 
   uint8_t _publishFrd(const char* msg, uint8_t retries) {
@@ -190,6 +190,8 @@ typedef struct {
 
 Person known_people[MAX_PEOPLE];
 Person forgotten_people[MAX_PEOPLE];
+uint8_t forgotten_expirations[MAX_PEOPLE] = { 0 };
+
 const Person UNDEF_PERSON = {
   .past_position=UNDEF_POINT,
   // (╯°□°）╯︵ ┻━┻  avr-gcc doesn't implement non-trivial designated initializers...
@@ -219,30 +221,12 @@ const Person UNDEF_PERSON = {
   .fgm=0
 };
 
-uint8_t cycles_since_forgotten = MAX_EMPTY_CYCLES;
-
-Person merged_person = UNDEF_PERSON;
-idx_t merged_with = UNDEF_INDEX;
-
-void clearMergedPerson() {
-  merged_person = UNDEF_PERSON;
-  merged_with = UNDEF_INDEX;
-}
-
-void clearPossibleMerger() {
-  if (merged_with != UNDEF_INDEX) {
-    Person p = known_people[merged_with];
-    if (!p.real() || p.blobSize < merged_person.blobSize) {
-      clearMergedPerson();
-    }
-  }
-}
-
 void publishEvents() {
   for (idx_t i=0; i<MAX_PEOPLE; i++) {
-    Person p = known_people[i];
-    if (p.real() && p.history > MIN_HISTORY && (!p.crossed || !p.reverted) &&
-        p.starting_side() != p.side()) {
+    if (known_people[i].real() && known_people[i].history > MIN_HISTORY &&
+        (!known_people[i].crossed || !known_people[i].reverted) &&
+        known_people[i].starting_side() != known_people[i].side()) {
+      Person p = known_people[i];
       p.publishPacket();
       known_people[i] = p; // update known_people array
     }
@@ -251,27 +235,60 @@ void publishEvents() {
 
 void clearPointsAfterDoorClose() {
   if (checkDoorState()) {
-    cycles_since_forgotten = MAX_EMPTY_CYCLES;
-    clearMergedPerson();
-
     for (idx_t i = 0; i<MAX_PEOPLE; i++) {
       known_people[i].forget();
       known_people[i] = UNDEF_PERSON;
-      forgotten_people[i].publishMaybeEvent();
+      forgotten_people[i].forget();
       forgotten_people[i] = UNDEF_PERSON;
     }
   }
 }
 
-void forget_person(idx_t idx, Person (&temp_forgotten_people)[MAX_PEOPLE],
-                    idx_t (&pairs)[MAX_PEOPLE], uint8_t &temp_forgotten_num) {
+void store_forgotten_person(Person p, uint8_t cnt) {
+  uint8_t added = UNDEF_POINT;
+  uint8_t min_conf = 100;
+  uint8_t min_conf_idx = UNDEF_POINT;
+  for (idx_t j = 0; j < MAX_PEOPLE; j++) {
+    if (!forgotten_people[j].real() || forgotten_expirations[j] == 0) {
+      added = j;
+      break;
+    } else if (forgotten_people[j].confidence < min_conf) {
+      min_conf = forgotten_people[j].confidence;
+      min_conf_idx = j;
+    }
+  }
+  if (added == UNDEF_POINT && min_conf < p.confidence) {
+    added = min_conf_idx;
+  }
+  if (added != UNDEF_POINT) {
+    forgotten_people[added].forget();
+    forgotten_people[added] = p;
+    forgotten_expirations[added] = cnt;
+    SERIAL_PRINTLN(F("s"));
+  }
+}
+
+void expireForgottenPeople() {
+  for (idx_t i = 0; i < MAX_PEOPLE; i++) {
+    if (forgotten_people[i].real()) {
+      if (forgotten_expirations[i] == 0) {
+        forgotten_people[i].forget();
+        forgotten_people[i] = UNDEF_PERSON;
+        SERIAL_PRINTLN(F("f"));
+      } else {
+        forgotten_expirations[i]--;
+      }
+    }
+  }
+}
+
+void forget_person(idx_t idx, idx_t (&pairs)[MAX_PEOPLE]) {
   Person p = known_people[(idx)];
   if (p.confidence > 30 &&
       (p.checkForRevert() || axis_distance(p.starting_position, p.past_position) > 1 ||
         axis_distance(p.max_position, p.past_position) > 1)) {
     if (p.forgotten_count < MAX_FORGOTTEN_COUNT) {
-      temp_forgotten_people[(temp_forgotten_num)] = p;
-      temp_forgotten_num++;
+      store_forgotten_person(p, MAX_EMPTY_CYCLES);
     } else {
       // we're giving up on this point, but at least publish what we have
       p.publishMaybeEvent();
@@ -280,50 +297,25 @@ void forget_person(idx_t idx, Person (&temp_forgotten_people)[MAX_PEOPLE],
   pairs[(idx)] = UNDEF_INDEX;
   known_people[(idx)] = UNDEF_PERSON;
 }
+#define FORGET_POINT ( forget_person(idx, pairs) )
 
-idx_t findClosestPerson(Person (&arr)[MAX_PEOPLE], coord_t i, float maxDistance) {
-  idx_t pidx = UNDEF_INDEX;
-  float minTemp = 1.0;
-  float maxTemp = maxTempDiffForFgd(fgDiff(i))*0.6;
-  for (idx_t x=0; x<MAX_PEOPLE; x++) {
-    Person p = arr[x];
-    if (p.real()) {
-      float dist = euclidean_distance(p.past_position, i);
-      float maxD = p.max_distance();
-      if (dist > min(maxDistance, maxD)) continue;
-
-      float tempDiff = p.difference_from_point(i);
-      float maxT = p.max_allowed_temp_drift() * 0.6;
-      if (tempDiff > min(maxTemp, maxT)) continue;
-
-      float tempRatio = tempDiff/maxTemp;
-      tempRatio = max(tempRatio, 0.1);
-      float distRatio = dist/maxDistance;
-      distRatio = max(distRatio, 0.1);
-      tempDiff = tempRatio * distRatio;
-      if (tempDiff < 0.5 && tempDiff < minTemp) {
-        pidx = x;
-        minTemp = tempDiff;
-      }
-    }
-  }
-  return pidx;
-}
-
-bool remember_person(Person p, uint8_t &h, coord_t &sp, coord_t &mp, uint8_t &mj,
+void remember_person(idx_t pi, uint8_t &h, coord_t &sp, coord_t &mp, uint8_t &mj,
     fint1_t &md, uint8_t &cross, bool &revert, uint16_t &c, uint8_t &fc) {
+  if (pi == UNDEF_INDEX) return;
+  Person p = forgotten_people[pi];
+
   axis_t ppaxis = AXIS(p.past_position);
   if ((SIDE1(p.starting_position) && ppaxis-1 > AXIS(sp)) ||
       (SIDE2(p.starting_position) && ppaxis+1 < AXIS(sp))) {
     // this point is moved behind previous position, just start over
-    return false;
+    return;
   }
 
   if (p.history <= MIN_HISTORY && p.side() != p.starting_side() &&
         pointOnSmallBorder(p.past_position) &&
         p.history <= (MIN_HISTORY+1 - normalizeAxis(ppaxis))) {
     // impossible for this person to ever do anything useful with its life, kill it
-    return false;
+    return;
   }
 
   fint1_t tempDrift = floatToFint1(p.difference_from_point(sp));
@@ -342,5 +334,36 @@ bool remember_person(Person p, uint8_t &h, coord_t &sp, coord_t &mp, uint8_t &mj
   h = min(p.history, MIN_HISTORY);
   c = p.count + 1;
   fc = p.forgotten_count + 1;
-  return true;
+
+  forgotten_people[pi] = UNDEF_PERSON;
+}
+
+idx_t findClosestPerson(coord_t i, float maxDistance) {
+  idx_t pidx = UNDEF_INDEX;
+  float minTemp = 1.0;
+  float maxTemp = maxTempDiffForFgd(fgDiff(i)) * 0.67;
+  maxDistance = min(maxDistance, 4.0);
+  for (idx_t x=0; x<MAX_PEOPLE; x++) {
+    if (forgotten_people[x].real() && forgotten_expirations[x] > 0) {
+      Person p = forgotten_people[x];
+      float dist = euclidean_distance(p.past_position, i);
+      float maxD = p.max_distance();
+      if (dist > min(maxDistance, maxD)) continue;
+
+      float tempDiff = p.difference_from_point(i);
+      float maxT = p.max_allowed_temp_drift();
+      if (tempDiff > min(maxTemp, maxT)) continue;
+
+      float tempRatio = tempDiff/maxTemp;
+      tempRatio = max(tempRatio, 0.1);
+      float distRatio = dist/maxDistance;
+      distRatio = max(distRatio, 0.1);
+      tempDiff = tempRatio * distRatio;
+      if (tempDiff < 0.5 && tempDiff < minTemp) {
+        pidx = x;
+        minTemp = tempDiff;
+      }
+    }
+  }
+  return pidx;
 }

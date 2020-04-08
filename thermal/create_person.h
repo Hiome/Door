@@ -16,42 +16,11 @@ uint8_t h = 1;
 uint16_t c = 1;
 uint8_t fc = 0;
 axis_t spAxis = normalizeAxis(AXIS(sp));
+
+// first let's check points on death row from this frame for a match
 float maxD = calcMaxDistance(height, width, n, conf);
-maxD = min(maxD, 4.0);
-
-if (temp_forgotten_num > 0 && !pointOnEdge(points[i].current_position)) {
-  // first let's check points on death row from this frame for a match
-  idx_t pi = findClosestPerson(temp_forgotten_people, sp, maxD);
-  if (pi != UNDEF_POINT &&
-      remember_person(temp_forgotten_people[pi], h, sp, mp, mj, md, cross, revert, c, fc)) {
-    temp_forgotten_people[pi] = UNDEF_PERSON;
-    if (sp == merged_person.starting_position && c-1 == merged_person.count) {
-      clearMergedPerson();
-    }
-  }
-}
-
-if (c == 1 && cycles_since_forgotten < MAX_EMPTY_CYCLES) {
-  // second let's check past forgotten points for a match
-  idx_t pi = findClosestPerson(forgotten_people, sp, maxD);
-  if (pi != UNDEF_POINT &&
-      remember_person(forgotten_people[pi], h, sp, mp, mj, md, cross, revert, c, fc)) {
-    forgotten_people[pi] = UNDEF_PERSON;
-    if (sp == merged_person.starting_position && c-1 == merged_person.count) {
-      clearMergedPerson();
-    }
-  }
-}
-
-if (c == 1 && merged_person.real() && spAxis >= 3) {
-  float mpt = merged_person.difference_from_point(sp);
-  float mp_maxT = merged_person.max_allowed_temp_drift();
-  float pp_maxT = maxTempDiffForFgd(f);
-  if (mpt < min(mp_maxT, pp_maxT) &&
-      remember_person(merged_person, h, sp, mp, mj, md, cross, revert, c, fc)) {
-    clearMergedPerson();
-  }
-}
+idx_t pi = findClosestPerson(sp, maxD);
+remember_person(pi, h, sp, mp, mj, md, cross, revert, c, fc);
 
 if (c == 1 && spAxis == 4 && b > 1.5 && f > 1.5) {
   // if point is right in middle, drag it to the side it appears to be coming from

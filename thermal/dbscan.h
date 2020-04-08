@@ -11,7 +11,11 @@ uint8_t findCurrentPoints() {
     if (norm_pixels[i] > CONFIDENCE_THRESHOLD) {
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
-        if (norm_pixels[i] > norm_pixels[(ordered_indexes_temp[j])]) {
+        if (norm_pixels[i] > norm_pixels[(ordered_indexes_temp[j])] ||
+            (norm_pixels[i] == 100 &&
+              // since we cap fg/bgDiffs to 10º, if 2 points are
+              // both at 100%, choose the one with higher fgDiff
+              fgDiff(i) > fgDiff(ordered_indexes_temp[j]))) {
           for (int8_t x=active_pixel_count; x>j; x--) {
             ordered_indexes_temp[x] = ordered_indexes_temp[(x-1)];
           }

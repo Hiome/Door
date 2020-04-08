@@ -5,14 +5,13 @@ float score;
 float maxT = points[i].max_allowed_temp_drift();
 float maxD = points[i].max_distance();
 for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
-  Person p = known_people[idx];
-  if (p.real() && pairs[idx] == i) {
+  if (known_people[idx].real() && pairs[idx] == i) {
+    Person p = known_people[idx];
     // prefer people with more neighbors
     score = (0.03*((float)p.neighbors));
 
     // prefer people with more similar temps
     float tempDiff = p.difference_from_point(points[i].current_position);
-    tempDiff = max(tempDiff, 1);
     score -= sq(tempDiff/maxT);
 
     // prefer people who didn't take crazy leaps to get here
@@ -42,11 +41,13 @@ for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
           points[i].blobSize > known_people[idx].blobSize &&
           // old person should be at least 1/4th this point's size to bother remembering
           known_people[idx].blobSize*4 > points[i].blobSize &&
-        (!merged_person.real() || known_people[idx].confidence > merged_person.confidence)) {
-      merged_person = known_people[idx];
-      merged_with = max_idx;
+          known_people[idx].forgotten_count < MAX_FORGOTTEN_COUNT) {
+      store_forgotten_person(known_people[idx], (5*MAX_EMPTY_CYCLES));
+      pairs[idx] = UNDEF_INDEX;
+      known_people[idx] = UNDEF_PERSON;
+    } else {
+      FORGET_POINT;
     }
-    FORGET_POINT;
     taken[i]--;
     if (taken[i] == 1) break;
   }

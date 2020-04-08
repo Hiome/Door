@@ -15,25 +15,21 @@ float diffFromPoint(coord_t a, coord_t b) {
 
 // calculate difference from foreground
 float fgDiff(coord_t i) {
-  if (((uint8_t)raw_pixels[(i)]) <= MIN_TEMP || ((uint8_t)raw_pixels[(i)]) >= MAX_TEMP) {
-    return 0.0;
-  }
-  float fgmt1 = abs(raw_pixels[(i)] - cavg1);
-  float fgmt2 = abs(raw_pixels[(i)] - cavg2);
+  float t = constrain(raw_pixels[(i)], MIN_TEMP, MAX_TEMP);
+  float fgmt1 = abs(t - cavg1);
+  float fgmt2 = abs(t - cavg2);
   return min(fgmt1, fgmt2);
 }
 
 // calculate difference from background
 float bgDiff(coord_t i) {
-  if (((uint8_t)raw_pixels[(i)]) <= MIN_TEMP || ((uint8_t)raw_pixels[(i)]) >= MAX_TEMP) {
-    return 0.0;
-  }
-  float std = raw_pixels[(i)] - bgPixel(i);
+  float std = constrain(raw_pixels[(i)], MIN_TEMP, MAX_TEMP) - bgPixel(i);
   return abs(std);
 }
 
 uint8_t calcGradient(float diff, float scale) {
-  if (diff < 0.5 || ((uint8_t)diff) > 20) return 0;
+  if (diff < 0.5) return 0;
+  if ((uint8_t)diff > 10) return 100;
   diff /= scale;
   if (diff > 0.995) return 100;
   return (uint8_t)(diff*100.0);
@@ -54,7 +50,8 @@ void calculateFgm() {
   global_fgm = FOREGROUND_GRADIENT;
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     float fgmt = fgDiff(i);
-    if (fgmt < global_fgm || fgmt > 10.0) continue;
+    if (fgmt < global_fgm) continue;
+    if (fgmt > 10) fgmt = 10;
     if (global_bgm > 1.0) fgmt *= (calcBgm(i)/100.0);
     global_fgm = max(fgmt, global_fgm);
   }
@@ -65,7 +62,8 @@ void calculateBgm() {
   global_bgm = BACKGROUND_GRADIENT;
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
     float bgmt = bgDiff(i);
-    if (bgmt < global_bgm || bgmt > 10.0) continue;
+    if (bgmt < global_bgm) continue;
+    if (bgmt > 10) bgmt = 10;
     bgmt *= (calcFgm(i)/100.0);
     global_bgm = max(bgmt, global_bgm);
   }
@@ -73,7 +71,7 @@ void calculateBgm() {
 
 float maxTempDiffForFgd(float f) {
   f *= 0.75;
-  return min(f, 5.0);
+  return min(f, 20.0);
 }
 
 float maxTempDiffForPoint(coord_t x) {
