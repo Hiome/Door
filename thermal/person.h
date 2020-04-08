@@ -23,7 +23,7 @@ typedef struct {
     return MAX_DIST_FORMULA;
   };
   float     max_allowed_temp_drift() {
-    return maxTempDiffForFgd(fgm())*0.67;
+    return maxTempDiffForFgd(fgm());
   };
 } PossiblePerson;
 
@@ -72,7 +72,7 @@ typedef struct {
     return MAX_DIST_FORMULA;
   };
   float     max_allowed_temp_drift() {
-    return maxTempDiffForFgd(fgm)*0.67;
+    return maxTempDiffForFgd(fgm);
   };
   float     difference_from_point(coord_t a) {
     return abs(raw_pixels[(a)] - raw_temp);
@@ -341,8 +341,8 @@ void remember_person(idx_t pi, uint8_t &h, coord_t &sp, coord_t &mp, uint8_t &mj
 idx_t findClosestPerson(coord_t i, float maxDistance) {
   idx_t pidx = UNDEF_INDEX;
   float minTemp = 1.0;
-  float maxTemp = maxTempDiffForFgd(fgDiff(i)) * 0.67;
-  maxDistance = min(maxDistance, 4.0);
+  float maxTemp = maxTempDiffForFgd(fgDiff(i));
+  maxDistance = min(maxDistance, 4.5);
   for (idx_t x=0; x<MAX_PEOPLE; x++) {
     if (forgotten_people[x].real() && forgotten_expirations[x] > 0) {
       Person p = forgotten_people[x];
