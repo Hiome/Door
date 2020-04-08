@@ -175,7 +175,7 @@ typedef struct {
       if (axis_distance(max_position, past_position) >= 2) {
         if (crossed && SIDE(max_position) == starting_side()) return false;
         starting_position = max_position;
-      }
+      } else if (axis_distance(starting_position, past_position) < 2) return false;
       _publishFrd("s", 3);
       return true;
     }
