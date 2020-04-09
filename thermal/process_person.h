@@ -20,11 +20,11 @@ for (idx_t j=0; j<total_masses; j++) {
   float tempDiff = p.difference_from_point(pp.current_position);
   float maxTpoint = pp.max_allowed_temp_drift();
   maxTpoint = max(maxTperson, maxTpoint);
-  maxTpoint *= (1.15 - max(d,1)*0.15);
+  if (d > 1) maxTpoint *= (1.15 - d*0.15);
   if (tempDiff > maxTpoint) continue;
 
   float score = sq(d/maxDperson) + sq(tempDiff/maxTperson);
-  if (!p.crossed || pointOnSmallBorder(p.starting_position)) {
+  if (p.side() == p.starting_side() || pointOnSmallBorder(p.starting_position)) {
     score -= (0.02*((float)pp.neighbors));
   }
 

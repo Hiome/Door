@@ -46,18 +46,18 @@ typedef struct {
   uint8_t   width             :3; // 0-7
 
   uint8_t   crossed           :4; // 0-9
-  uint8_t   max_jump          :3; // 0-7
-  bool      reverted          :1; // 0-1
+  uint8_t   max_jump          :4; // 0-7 (only need 3 bits)
 
-  uint32_t  avg_bgm           :11;
-  uint16_t  avg_fgm           :11;
-  uint8_t   avg_height        :3;
-  uint8_t   avg_width         :3;
-  uint8_t   avg_neighbors     :4;
+  uint8_t   avg_height        :4; // only need 3 bits
+  uint8_t   avg_width         :4; // only need 3 bits
 
+  uint8_t   avg_neighbors;        // only need 4 bits
   uint8_t   avg_confidence;
   uint8_t   blobSize;
   uint8_t   noiseSize;
+
+  uint16_t  avg_bgm;
+  uint16_t  avg_fgm;
 
   float     raw_temp;
   float     fgm;
@@ -82,7 +82,7 @@ typedef struct {
   void generateMeta(char *meta) {
     sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
       avg_confidence,                     // 3  100
-      (uint16_t)avg_bgm,                  // 4  1020
+      avg_bgm,                            // 4  1020
       avg_fgm,                            // 4  1020
       starting_position,                  // 2  64
       past_position,                      // 2  64
@@ -105,39 +105,10 @@ typedef struct {
     return publish(msg, meta, retries);
   };
 
-  void revert() {
-    char rBuf[3];
-    sprintf(rBuf, "r%u", crossed);
-    _publishFrd(rBuf, RETRY_COUNT);
-  };
-
-  bool checkForRevert() {
-    if (!real() || !crossed) return false;
-
-    if (confidence > 60 && doorJustClosed()) {
-      if ((side() != door_side || !pointOnBorder(past_position)) &&
-          ((reverted && starting_side() != door_side) ||
-          (!reverted && starting_side() == door_side))) {
-        // door just closed and point is on side 2 or right in the middle,
-        // revert if it was previously reverted from side 2 or was a non-reverted fake entry
-        revert();
-        reverted = !reverted;
-        return true;
-      }
-    } else if ((reverted && side() == starting_side()) ||
-              (!reverted && side() != starting_side())) {
-      // we had previously reverted this point, but it came back and made it through,
-      // or point never reverted but is back on the OG starting side
-      revert();
-      reverted = !reverted;
-      return true;
-    }
-
-    return false;
-  };
-
   void publishPacket() {
-    uint8_t old_crossed = crossed;
+    // door has been closed/ajar for more than 1 frame, no way anybody crossed
+    if (door_state != DOOR_OPEN && frames_since_door_open) return;
+
     if (SIDE1(past_position)) {
       crossed = _publishFrd("1", RETRY_COUNT);
       if (!crossed) return;
@@ -157,17 +128,16 @@ typedef struct {
     count = 1;
     history = 1;
     retreating = false;
-    reverted = false;
     max_position = past_position;
-    if (old_crossed) crossed = 0;
   };
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
   bool publishMaybeEvent() {
-    if (!real()) return false;
+    // door has been closed/ajar for more than 1 frame, no way anybody crossed
+    if (door_state != DOOR_OPEN && frames_since_door_open) return false;
 
     if ((history >= MIN_HISTORY || (history == 2 && avg_fgm > 150 && avg_bgm > 150)) &&
-        (!crossed || !reverted) && starting_side() != side()) {
+        starting_side() != side()) {
       publishPacket();
       return true;
     } else if (avg_fgm > 150 && avg_bgm > 150 &&
@@ -176,15 +146,17 @@ typedef struct {
         if (crossed && SIDE(max_position) == starting_side()) return false;
         starting_position = max_position;
       } else if (axis_distance(starting_position, past_position) < 2) return false;
-      _publishFrd("s", 3);
+
+      if (crossed) {
+        char rBuf[3];
+        sprintf(rBuf, "s%u", crossed);
+        _publishFrd(rBuf, 3);
+      } else _publishFrd("s", 3);
+
       return true;
     }
 
     return false;
-  };
-
-  void forget() {
-    checkForRevert() || publishMaybeEvent();
   };
 } Person;
 
@@ -208,15 +180,14 @@ const Person UNDEF_PERSON = {
   .width=0,
   .crossed=0,
   .max_jump=0,
-  .reverted=false,
-  .avg_bgm=0,
-  .avg_fgm=0,
   .avg_height=0,
   .avg_width=0,
   .avg_neighbors=0,
   .avg_confidence=0,
   .blobSize=0,
   .noiseSize=0,
+  .avg_bgm=0,
+  .avg_fgm=0,
   .raw_temp=0,
   .fgm=0
 };
@@ -224,7 +195,6 @@ const Person UNDEF_PERSON = {
 void publishEvents() {
   for (idx_t i=0; i<MAX_PEOPLE; i++) {
     if (known_people[i].real() && known_people[i].history > MIN_HISTORY &&
-        (!known_people[i].crossed || !known_people[i].reverted) &&
         known_people[i].starting_side() != known_people[i].side()) {
       Person p = known_people[i];
       p.publishPacket();
@@ -236,10 +206,15 @@ void publishEvents() {
 void clearPointsAfterDoorClose() {
   if (checkDoorState()) {
     for (idx_t i = 0; i<MAX_PEOPLE; i++) {
-      known_people[i].forget();
-      known_people[i] = UNDEF_PERSON;
-      forgotten_people[i].forget();
-      forgotten_people[i] = UNDEF_PERSON;
+      if (known_people[i].real() && known_people[i].avg_fgm < 150) {
+        known_people[i].publishMaybeEvent();
+        known_people[i] = UNDEF_PERSON;
+      }
+
+      if (forgotten_people[i].real()) {
+        forgotten_people[i].publishMaybeEvent();
+        forgotten_people[i] = UNDEF_PERSON;
+      }
     }
   }
 }
@@ -261,7 +236,9 @@ void store_forgotten_person(Person p, uint8_t cnt) {
     added = min_conf_idx;
   }
   if (added != UNDEF_POINT) {
-    forgotten_people[added].forget();
+    if (forgotten_people[added].real()) {
+      forgotten_people[added].publishMaybeEvent();
+    }
     forgotten_people[added] = p;
     forgotten_expirations[added] = cnt;
     SERIAL_PRINTLN(F("s"));
@@ -272,7 +249,7 @@ void expireForgottenPeople() {
   for (idx_t i = 0; i < MAX_PEOPLE; i++) {
     if (forgotten_people[i].real()) {
       if (forgotten_expirations[i] == 0) {
-        forgotten_people[i].forget();
+        forgotten_people[i].publishMaybeEvent();
         forgotten_people[i] = UNDEF_PERSON;
         SERIAL_PRINTLN(F("f"));
       } else {
@@ -284,8 +261,7 @@ void expireForgottenPeople() {
 
 void forget_person(idx_t idx, idx_t (&pairs)[MAX_PEOPLE]) {
   Person p = known_people[(idx)];
-  if (p.confidence > 30 &&
-      (p.checkForRevert() || axis_distance(p.starting_position, p.past_position) > 1 ||
+  if (p.confidence > 30 && (axis_distance(p.starting_position, p.past_position) > 1 ||
         axis_distance(p.max_position, p.past_position) > 1)) {
     if (p.forgotten_count < MAX_FORGOTTEN_COUNT) {
       store_forgotten_person(p, MAX_EMPTY_CYCLES);
@@ -299,8 +275,39 @@ void forget_person(idx_t idx, idx_t (&pairs)[MAX_PEOPLE]) {
 }
 #define FORGET_POINT ( forget_person(idx, pairs) )
 
-void remember_person(idx_t pi, uint8_t &h, coord_t &sp, coord_t &mp, uint8_t &mj,
-    fint1_t &md, uint8_t &cross, bool &revert, uint16_t &c, uint8_t &fc) {
+idx_t findClosestPerson(coord_t i, float maxDistance) {
+  idx_t pidx = UNDEF_INDEX;
+  float minTemp = 1.0;
+  float maxTemp = maxTempDiffForFgd(fgDiff(i));
+  maxDistance = min(maxDistance, 4.5);
+  for (idx_t x=0; x<MAX_PEOPLE; x++) {
+    if (forgotten_people[x].real()) {
+      Person p = forgotten_people[x];
+      float dist = euclidean_distance(p.past_position, i);
+      float maxD = p.max_distance();
+      if (dist > min(maxDistance, maxD)) continue;
+
+      float tempDiff = p.difference_from_point(i);
+      float maxT = p.max_allowed_temp_drift();
+      if (tempDiff > min(maxTemp, maxT)) continue;
+
+      float tempRatio = tempDiff/maxTemp;
+      tempRatio = max(tempRatio, 0.1);
+      float distRatio = dist/maxDistance;
+      distRatio = max(distRatio, 0.1);
+      tempDiff = tempRatio * distRatio;
+      if (tempDiff < 0.5 && tempDiff < minTemp) {
+        pidx = x;
+        minTemp = tempDiff;
+      }
+    }
+  }
+  return pidx;
+}
+
+void remember_person(coord_t &sp, coord_t &mp, uint8_t &mj, fint1_t &md,
+    uint8_t &cross, uint8_t &h, uint16_t &c, uint8_t &fc, float maxDistance) {
+  coord_t pi = findClosestPerson(sp, maxDistance);
   if (pi == UNDEF_INDEX) return;
   Person p = forgotten_people[pi];
 
@@ -329,41 +336,10 @@ void remember_person(idx_t pi, uint8_t &h, coord_t &sp, coord_t &mp, uint8_t &mj
     mp = p.max_position;
   }
   cross = p.crossed;
-  revert = p.reverted;
   sp = p.starting_position;
   h = min(p.history, MIN_HISTORY);
   c = p.count + 1;
   fc = p.forgotten_count + 1;
 
   forgotten_people[pi] = UNDEF_PERSON;
-}
-
-idx_t findClosestPerson(coord_t i, float maxDistance) {
-  idx_t pidx = UNDEF_INDEX;
-  float minTemp = 1.0;
-  float maxTemp = maxTempDiffForFgd(fgDiff(i));
-  maxDistance = min(maxDistance, 4.5);
-  for (idx_t x=0; x<MAX_PEOPLE; x++) {
-    if (forgotten_people[x].real() && forgotten_expirations[x] > 0) {
-      Person p = forgotten_people[x];
-      float dist = euclidean_distance(p.past_position, i);
-      float maxD = p.max_distance();
-      if (dist > min(maxDistance, maxD)) continue;
-
-      float tempDiff = p.difference_from_point(i);
-      float maxT = p.max_allowed_temp_drift();
-      if (tempDiff > min(maxTemp, maxT)) continue;
-
-      float tempRatio = tempDiff/maxTemp;
-      tempRatio = max(tempRatio, 0.1);
-      float distRatio = dist/maxDistance;
-      distRatio = max(distRatio, 0.1);
-      tempDiff = tempRatio * distRatio;
-      if (tempDiff < 0.5 && tempDiff < minTemp) {
-        pidx = x;
-        minTemp = tempDiff;
-      }
-    }
-  }
-  return pidx;
 }

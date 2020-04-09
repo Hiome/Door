@@ -5,8 +5,6 @@
 uint8_t door_state = DOOR_OPEN;
 uint8_t last_published_door_state = 9; // initialize to something invalid to force first loop
 uint8_t frames_since_door_open = 0;
-uint8_t door_side = 1;
-bool door_magnet_installed = false;
 
 uint8_t readDoorState() {
   #ifdef RECESSED
@@ -14,7 +12,6 @@ uint8_t readDoorState() {
     bool reed4High = PIND & 0b00010000; // true if reed 4 is high (normal state)
     if (reed3High && reed4High) return DOOR_OPEN;
     if (!reed3High && !reed4High) return DOOR_CLOSED;
-    if (reed4High) door_side = 2;
     return DOOR_AJAR;
   #else
     if (PIND & 0b00001000) {  // true if reed 3 is high (normal state)
@@ -24,17 +21,6 @@ uint8_t readDoorState() {
       return DOOR_CLOSED;
     }
   #endif
-}
-
-bool doorJustOpened() {
-  if (door_state != DOOR_CLOSED) return frames_since_door_open < MAX_DOOR_CHANGE_FRAMES;
-  else return readDoorState() != DOOR_CLOSED;
-}
-
-bool doorJustClosed() {
-  if (frames_since_door_open == 0) return door_state != DOOR_OPEN;
-  else if (door_state == DOOR_OPEN && door_magnet_installed) return readDoorState() != DOOR_OPEN;
-  return false;
 }
 
 bool checkDoorState() {
@@ -48,7 +34,6 @@ bool checkDoorState() {
 
   if (last_door_state != door_state) {
     frames_since_door_open = 0;
-    door_magnet_installed = true;
     return true;
   }
 

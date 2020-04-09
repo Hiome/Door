@@ -23,23 +23,12 @@ for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
             (SIDE2(p.starting_position) &&
               AXIS(pp.current_position) >= AXIS(p.starting_position))) {
           // reset history if point is further back than where it started
-          if (!p.crossed || pointOnEdge(pp.current_position)) {
-            // reset everything, unless point is crossed and could still move back.
-            // past_position needs to be set before checkForRevert
-            p.past_position = pp.current_position;
-            p.checkForRevert();
-            p.crossed = 0;
-            p.forgotten_count = 0;
-            p.reverted = false;
-          }
-          // reset start position, unless point is in a revert crisis
-          if (!p.reverted) {
-            p.starting_position = pp.current_position;
-            p.retreating = false;
-          }
+          p.starting_position = pp.current_position;
+          p.retreating = false;
           p.history = 1;
           p.max_jump = 0;
           p.max_temp_drift = 0;
+          p.forgotten_count = 0;
         } else if (p.history > 1) {
           // point moved backwards a little bit, decrement history
           uint8_t sad = axis_distance(p.starting_position, pp.current_position) + 1;
@@ -56,15 +45,9 @@ for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
         }
       } else if (AXIS(p.past_position) != AXIS(pp.current_position)) {
         // "always forward, forward always" - Luke Cage
-        if ((SIDE1(p.starting_position) &&
-              AXIS(pp.current_position) >= AXIS(p.max_position)) ||
-            (SIDE2(p.starting_position) &&
-              AXIS(pp.current_position) <= AXIS(p.max_position))) {
-          // we beat our previous max position record
-          p.max_position = pp.current_position;
-        }
         if (!p.retreating || axis_distance(p.past_position, pp.current_position) > 1) {
           p.history++;
+          p.max_position = pp.current_position;
         }
         p.retreating = false;
         if (pp.side() != p.side() || p.history > 5) {
