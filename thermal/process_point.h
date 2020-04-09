@@ -18,12 +18,10 @@ for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
     float d = euclidean_distance(p.past_position, points[i].current_position);
     score -= sq(d/maxD);
 
-    if (score >= max_score + 0.1) {
+    if (score >= max_score + 0.05) {
       max_score = score;
       max_idx = idx;
-    } else if (score >= max_score - 0.1 &&
-        (p.total_distance() + p.history) >
-          (known_people[max_idx].total_distance() + known_people[max_idx].history)) {
+    } else if (score > max_score - 0.05 && p.history > known_people[max_idx].history) {
       // if 2 competing points have the same score, pick the one with more history
       max_score = score;
       max_idx = idx;

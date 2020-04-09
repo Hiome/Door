@@ -28,7 +28,7 @@ for (idx_t j=0; j<total_masses; j++) {
     score -= (0.02*((float)pp.neighbors));
   }
 
-  if (score <= (min_score - 0.1) || (score <= (min_score + 0.1) &&
+  if (score <= (min_score - 0.05) || (score < (min_score + 0.05) &&
         tempDiff < p.difference_from_point(points[min_index].current_position))) {
     // either score is less than min score, or if it's similar,
     // choose the point with more similar raw temp

@@ -108,8 +108,8 @@ float trimMean(uint8_t side) {
 
   float avg = 0;
   uint8_t newTotal = 0;
-  for (idx_t i = 3; i < total-3; i++) {
-    // only take mean of middle 80% of pixels
+  for (idx_t i = 3; i < total-6; i++) {
+    // only take mean of middle 70% of pixels
     avg += raw_pixels[(sortedPixels[i])];
     newTotal++;
     if ((uint8_t)bgDiff(sortedPixels[i]) == 0) {
