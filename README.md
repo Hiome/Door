@@ -14,7 +14,7 @@ cd ~/Documents/Arduino/libraries
 git clone git@github.com:Hiome/LowPower.git
 git clone git@github.com:Hiome/SPIFlash.git
 git clone -b skipcansend git@github.com:hiome/RFM69.git
-git clone git@gitlab.com:hiome/Adafruit_AMG88xx.git
+git clone git@github.com:Hiome/Hiome_AMG88xx.git
 
 cd ..
 

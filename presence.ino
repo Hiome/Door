@@ -1,5 +1,5 @@
 #include "Hiome_AVR.h"
-#include <Adafruit_AMG88xx.h>
+#include <Hiome_AMG88xx.h>
 #include "thermal/types.h"
 
 #ifdef ENABLE_SERIAL
@@ -11,7 +11,7 @@
 #define FIRMWARE_VERSION        "V20.4.10"
 
 Hiome_AVR hiome;
-Adafruit_AMG88xx amg;
+Hiome_AMG88xx amg;
 
 #ifdef R3
   #define AMG_ADDR              0x68
