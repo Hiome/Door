@@ -108,8 +108,10 @@ float trimMean(uint8_t side) {
 
   float avg = 0;
   uint8_t newTotal = 0;
-  for (idx_t i = 3; i < total-6; i++) {
-    // only take mean of middle 70% of pixels
+  for (idx_t i = 0; i < total-6; i++) {
+    // drop the top 6 warmest points when calculating mean to skew it lower
+    // this might cause issues if the person is actually cooler than the background,
+    // such as when keith is sweaty. We shall see!
     avg += raw_pixels[(sortedPixels[i])];
     newTotal++;
     if ((uint8_t)bgDiff(sortedPixels[i]) == 0) {
