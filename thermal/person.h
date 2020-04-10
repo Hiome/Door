@@ -221,7 +221,7 @@ void store_forgotten_person(Person p, uint8_t cnt) {
   idx_t useIdx = UNDEF_INDEX;
   uint8_t min_conf = p.confidence;
   for (idx_t j = 0; j < MAX_PEOPLE; j++) {
-    if (!forgotten_people[j].real() || forgotten_expirations[j] == 0) {
+    if (!forgotten_people[j].real()) {
       // slot is empty, use it and stop looking for another
       useIdx = j;
       break;
