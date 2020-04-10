@@ -6,6 +6,8 @@
  *  
  */
 
+// TODO convert this whole file into a Hiome class and use thermal.h as main ino file
+
 #include "config.h"
 #define NETWORKID     27  // the same on all nodes that talk to each other
 #define GATEWAYID     1
@@ -46,13 +48,9 @@ void beatHeart(uint32_t maxBeats) {
 
 bool battConnected = true;
 uint16_t checkBattery() {
-  // #ifdef ENABLE_SERIAL
-  // return 0;
-  // #else
   if (!battConnected) return 0;
   // https://lowpowerlab.com/forum/index.php/topic,1206.0.html
   return (uint16_t)analogRead(BATT);
-  // #endif
 }
 
 #define MAX_VOLTAGE_DRIFT   50
@@ -121,10 +119,22 @@ uint8_t publish(const char* msg, const char* meta, uint8_t retries) {
   #error Missing node type
 #endif
 
+void checkForUpdates() {
+  if (radio.receiveDone()) CheckForWirelessHEX(radio, flash, false);
+}
+
+void ledOn() {
+  PORTB = PORTB | B00000010;  // pull pin 9 high
+}
+
+void ledOff() {
+  PORTB = PORTB & B11111101;  // pull LED low
+}
+
 void setup() {
   // setup LED's
   DDRB  = DDRB  | B00000010;  // set pin 9 as output
-  PORTB = PORTB | B00000010;  // pull pin 9 high
+  ledOn();
 
   SERIAL_START;
 
@@ -137,17 +147,14 @@ void setup() {
 
   if (flash.initialize()) flash.sleep();
 
-  #ifndef ENABLE_SERIAL
+  // check right on boot just in case this is a recovery attempt for a bricked sensor
+  checkForUpdates();
+
   isBatteryConnected();
-  #endif
 
   initialize();
 
-  PORTB = PORTB & B11111101;  // pull LED low
-}
-
-void checkForUpdates() {
-  if (radio.receiveDone()) CheckForWirelessHEX(radio, flash, false);
+  ledOff();
 }
 
 void loop() {

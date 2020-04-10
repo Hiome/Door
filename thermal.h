@@ -92,6 +92,7 @@ void runThermalLoop() {
       frames_since_door_open++;
     }
     #ifdef TIME_CYCLES
+      SERIAL_PRINT(F("-> "));
       SERIAL_PRINTLN(millis());
     #endif
   }
@@ -107,9 +108,6 @@ void initialize() {
 
   LOWPOWER_DELAY(SLEEP_1S);
   publish(FIRMWARE_VERSION, "0", RETRY_COUNT*2);
-
-  // check right on boot just in case this is a recovery attempt for a bricked sensor
-  checkForUpdates();
 
   // give sensor 16sec to stabilize
   LOWPOWER_DELAY(SLEEP_8S);
