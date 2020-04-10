@@ -1,162 +1,134 @@
-/*
- *  Hiome sensor base
- *  
- *  Copyright 2020 Hiome Inc.
- *  All rights reserved.
- *  
- */
-
-// TODO convert this whole file into a Hiome class and use thermal.h as main ino file
-
-#include "config.h"
-#define NETWORKID     27  // the same on all nodes that talk to each other
-#define GATEWAYID     1
-#define ENCRYPTKEY    "smarterisbetters" // exactly the same 16 characters/bytes on all nodes!
-#define ATC_RSSI      -75
-#define SERIAL_BAUD   115200
-#define RETRY_TIME    60
-#define RETRY_COUNT   5
-#define BATT          A3
-
-#include <RFM69_ATC.h>
-#include <RFM69_OTA.h>
-#include <SPIFlash.h>
-#include <LowPower.h>
-
-RFM69_ATC radio;
-SPIFlash flash(8, 0xEF30); //EF30 for windbond 4mbit flash
+#include "Hiome_AVR.h"
+#include <Adafruit_AMG88xx.h>
+#include "thermal/types.h"
 
 #ifdef ENABLE_SERIAL
-  #define SERIAL_START      ( Serial.begin(SERIAL_BAUD) )
-  #define SERIAL_FLUSH      ( Serial.flush() )
-  #define SERIAL_PRINT(a)   ( Serial.print(a) )
-  #define SERIAL_PRINTLN(a) ( Serial.println(a) )
-#else
-  #define SERIAL_START
-  #define SERIAL_FLUSH
-  #define SERIAL_PRINT(a)
-  #define SERIAL_PRINTLN(a)
+  #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
+//  #define OPTIMIZE_FOR_SERIAL
+//  #define TIME_CYCLES
 #endif
 
-#define LOWPOWER_DELAY(d) ( LowPower.powerDown(d, ADC_OFF, BOD_ON) )
+#define FIRMWARE_VERSION        "V20.4.10"
 
-uint32_t heartbeats = 0;
-void beatHeart(uint32_t maxBeats) {
-  heartbeats++;
-  if (heartbeats > maxBeats) publish("h", "0", 0);
-}
+Hiome_AVR hiome;
+Adafruit_AMG88xx amg;
 
-bool battConnected = true;
-uint16_t checkBattery() {
-  if (!battConnected) return 0;
-  // https://lowpowerlab.com/forum/index.php/topic,1206.0.html
-  return (uint16_t)analogRead(BATT);
-}
+#ifdef R3
+  #define AMG_ADDR              0x68
+#else
+  #define AMG_ADDR              0x69
+#endif
 
-#define MAX_VOLTAGE_DRIFT   50
-#define MIN_ALLOWED_VOLTAGE 200
-#define MAX_ALLOWED_VOLTAGE 700
+const uint8_t GRID_EXTENT            = 8;    // size of grid (8x8)
+const uint8_t MIN_HISTORY            = 3;    // min number of times a point needs to be seen
+const uint8_t MAX_PEOPLE             = 5;    // most people we support in a single frame
+const uint8_t MAX_EMPTY_CYCLES       = 2;    // cycles to remember forgotten points
+const uint8_t MAX_FORGOTTEN_COUNT    = 2;    // max number of times allowed to forget someone
+const uint8_t MAX_DOOR_CHANGE_FRAMES = 5;    // cycles we keep counting after door changes
+const uint8_t CONFIDENCE_THRESHOLD   = 10;   // min 10% confidence required
+const uint8_t MIN_TEMP               = 2;    // ignore all points colder than 2º C
+const uint8_t MAX_TEMP               = 55;   // ignore all points hotter than 55ºC
+const float   BACKGROUND_GRADIENT    = 2.0;
+const float   FOREGROUND_GRADIENT    = 2.0;
+const coord_t UNDEF_POINT            = AMG88xx_PIXEL_ARRAY_SIZE + 10;
+const idx_t   UNDEF_INDEX            = UNDEF_POINT;
 
-void isBatteryConnected() {
-  uint16_t total_change = 0;
-  uint16_t b = checkBattery();
-  for (uint8_t k=0; k<20; k++) {
-    uint16_t b2 = checkBattery();
-    int16_t bd = (int16_t)b - (int16_t)b2;
-    total_change += (uint16_t)abs(bd);
-    if (total_change > MAX_VOLTAGE_DRIFT ||
-          b2 > MAX_ALLOWED_VOLTAGE || b2 < MIN_ALLOWED_VOLTAGE) {
-      battConnected = false;
-      return;
-    }
-    b = b2;
-    LOWPOWER_DELAY(SLEEP_30MS);
+#include "thermal/coordinates.h"
+#include "thermal/door_contact.h"
+#include "thermal/csm.h"
+#include "thermal/neighbors.h"
+#include "thermal/person.h"
+#include "thermal/dbscan.h"
+#include "thermal/debug.h"
+
+bool processSensor() {
+  if (!normalizePixels()) return false;
+
+  // find list of peaks in current frame
+  uint8_t total_masses = findCurrentPoints();
+
+  // "I don't know who you are or what you want, but you should know that I have a
+  // very particular set of skills that make me a nightmare for people like you.
+  // I will find you, I will track you, and I will turn the lights on for you."
+  uint8_t taken[MAX_PEOPLE] = { 0 };
+  idx_t pairs[MAX_PEOPLE];
+
+  for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
+    pairs[idx] = UNDEF_INDEX;
+    #include "thermal/process_person.h"
   }
-  SERIAL_PRINTLN(total_change);
-}
 
-uint8_t packetCount = 1;
-uint8_t publish(const char* msg, const char* meta, uint8_t retries) {
-  char sendBuf[57];
-  int8_t len = sprintf(sendBuf, "%s;%s%u%u", msg, meta, checkBattery(), packetCount);
-  if (len <= 0) return 0;
+  for (idx_t i=0; i<total_masses; i++) {
+    if (taken[i] > 1) {
+      #include "thermal/process_point.h"
+    }
 
-  bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries, RETRY_TIME);
+    if (taken[i] == 1) {
+      #include "thermal/continue_person.h"
+    } else if (taken[i] == 0) {
+      #include "thermal/create_person.h"
+    }
+  }
 
-  #ifdef ENABLE_SERIAL
-    SERIAL_PRINT(F("p "));
-    SERIAL_PRINT(sendBuf);
-    if (!success) { SERIAL_PRINT(F(" x")); }
-    SERIAL_PRINTLN(F("\n\n"));
-//    SERIAL_FLUSH;
+  // wrap up with debugging output
+  #ifdef PRINT_RAW_DATA
+    printDebugInfo();
   #endif
 
-  if (success) heartbeats = 0;
+  return true;
+}
 
-  if (success || retries) {
-    if (packetCount < 9) {
-      return packetCount++;
-    } else {
-      packetCount = 1;
-      return 9;
+void runThermalLoop() {
+  if (processSensor()) {
+    // publish event if any people moved through doorway yet
+    publishEvents();
+    // update avg_pixels
+    updateBgAverage();
+    // decrement counter on forgotten expirations
+    expireForgottenPeople();
+    // send heartbeat event if necessary
+    // 108000 = 10 (frames/sec) * 60 (sec/min) * 60 (min/hr) * 3 (hrs)
+    hiome.beatHeart(108000);
+    // increment counter for how long door has been open
+    if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) {
+      frames_since_door_open++;
     }
+    #ifdef TIME_CYCLES
+      SERIAL_PRINT(F("-> "));
+      SERIAL_PRINTLN(millis());
+    #endif
   }
-
-  return 0;
-}
-
-#if defined LIDAR
-  #include "lidar.h"
-#elif defined MOTION
-  #include "motion.h"
-#elif defined THERMAL
-  #include "thermal.h"
-#elif defined BED
-  #include "bed.h"
-#elif defined BATTERY
-  #include "battery.h"
-#else
-  #error Missing node type
-#endif
-
-void checkForUpdates() {
-  if (radio.receiveDone()) CheckForWirelessHEX(radio, flash, false);
-}
-
-void ledOn() {
-  PORTB = PORTB | B00000010;  // pull pin 9 high
-}
-
-void ledOff() {
-  PORTB = PORTB & B11111101;  // pull LED low
+  hiome.checkForUpdates();
 }
 
 void setup() {
-  // setup LED's
-  DDRB  = DDRB  | B00000010;  // set pin 9 as output
-  ledOn();
+  hiome.begin();
+  hiome.ledOn();
 
-  SERIAL_START;
+  amg.begin(AMG_ADDR);
 
-  radio.initialize(RF69_915MHZ, NODEID, NETWORKID);
-  #ifdef R3
-    radio.setHighPower(); //must include this only for RFM69HW/HCW!
-  #endif
-  radio.encrypt(ENCRYPTKEY);
-  radio.enableAutoPower(ATC_RSSI);
+  // setup reed switches
+  DDRD  = DDRD  & B11100111;  // set pins 3 and 4 as inputs
+  PORTD = PORTD | B00011000;  // pull pins 3 and 4 high
 
-  if (flash.initialize()) flash.sleep();
+  hiome.sleep(SLEEP_1S);
+  hiome.publish(FIRMWARE_VERSION, "0", RETRY_COUNT*2);
 
-  // check right on boot just in case this is a recovery attempt for a bricked sensor
-  checkForUpdates();
+  // give sensor 16sec to stabilize
+  hiome.sleep(SLEEP_8S);
+  hiome.sleep(SLEEP_8S);
 
-  isBatteryConnected();
+  for (idx_t i=0; i<MAX_PEOPLE; i++) {
+    known_people[i] = UNDEF_PERSON;
+    forgotten_people[i] = UNDEF_PERSON;
+  }
 
-  initialize();
+  startBgAverage();
 
-  ledOff();
+  hiome.ledOff();
 }
 
 void loop() {
-  loop_frd();
+  clearPointsAfterDoorClose();
+  runThermalLoop();
 }

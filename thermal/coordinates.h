@@ -1,3 +1,5 @@
+#define YAXIS                        // axis along which we expect points to move (x or y)
+
 #ifdef OPTIMIZE_FOR_SERIAL
 
 // Replace above progmem with following functions to save 146 bytes of storage space

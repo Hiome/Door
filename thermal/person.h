@@ -101,7 +101,7 @@ typedef struct {
   uint8_t _publishFrd(const char* msg, uint8_t retries) {
     char meta[METALENGTH];
     generateMeta(meta);
-    return publish(msg, meta, retries);
+    return hiome.publish(msg, meta, retries);
   };
 
   void publishPacket() {
