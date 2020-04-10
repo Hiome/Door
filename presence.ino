@@ -46,16 +46,17 @@ void beatHeart(uint32_t maxBeats) {
 
 bool battConnected = true;
 uint16_t checkBattery() {
-  #ifdef ENABLE_SERIAL
-  return 0;
-  #else
+  // #ifdef ENABLE_SERIAL
+  // return 0;
+  // #else
   if (!battConnected) return 0;
   // https://lowpowerlab.com/forum/index.php/topic,1206.0.html
   return (uint16_t)analogRead(BATT);
-  #endif
+  // #endif
 }
 
 #define MAX_VOLTAGE_DRIFT   50
+#define MIN_ALLOWED_VOLTAGE 200
 #define MAX_ALLOWED_VOLTAGE 700
 
 void isBatteryConnected() {
@@ -63,18 +64,17 @@ void isBatteryConnected() {
   uint16_t b = checkBattery();
   for (uint8_t k=0; k<20; k++) {
     uint16_t b2 = checkBattery();
-    if (b2 > MAX_ALLOWED_VOLTAGE) {
+    int16_t bd = (int16_t)b - (int16_t)b2;
+    total_change += (uint16_t)abs(bd);
+    if (total_change > MAX_VOLTAGE_DRIFT ||
+          b2 > MAX_ALLOWED_VOLTAGE || b2 < MIN_ALLOWED_VOLTAGE) {
       battConnected = false;
       return;
     }
-    int16_t bd = (int16_t)b - (int16_t)b2;
-    total_change += (uint16_t)abs(bd);
-    if (total_change > MAX_VOLTAGE_DRIFT) break;
     b = b2;
     LOWPOWER_DELAY(SLEEP_30MS);
   }
   SERIAL_PRINTLN(total_change);
-  if (total_change > MAX_VOLTAGE_DRIFT) battConnected = false;
 }
 
 uint8_t packetCount = 1;
@@ -88,7 +88,7 @@ uint8_t publish(const char* msg, const char* meta, uint8_t retries) {
   #ifdef ENABLE_SERIAL
     SERIAL_PRINT(F("p "));
     SERIAL_PRINT(sendBuf);
-    if (!success) SERIAL_PRINT(F(" x"));
+    if (!success) { SERIAL_PRINT(F(" x")); }
     SERIAL_PRINTLN(F("\n\n"));
 //    SERIAL_FLUSH;
   #endif

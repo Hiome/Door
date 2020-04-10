@@ -24,11 +24,11 @@ for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
               AXIS(pp.current_position) >= AXIS(p.starting_position))) {
           // reset history if point is further back than where it started
           p.starting_position = pp.current_position;
-          p.retreating = false;
           p.history = 1;
           p.max_jump = 0;
           p.max_temp_drift = 0;
           p.forgotten_count = 0;
+          p.retreating = false;
         } else if (p.history > 1) {
           // point moved backwards a little bit, decrement history
           uint8_t sad = axis_distance(p.starting_position, pp.current_position) + 1;

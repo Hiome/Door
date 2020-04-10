@@ -115,32 +115,32 @@ uint8_t findCurrentPoints() {
       } else {
         mtb = maxTempDiffForPoint(blobPoint);
         // find how many neighbors this point has
-        uint8_t fnc = 0;
-        coord_t foundNeighbor = UNDEF_POINT;
-        coord_t blobNeighbors[8];
-        uint8_t nc = loadNeighbors(blobPoint, blobNeighbors);
-        for (uint8_t bn = 0; bn < nc; bn++) {
-          if (clusterNum[blobNeighbors[bn]] == clusterIdx) {
-            fnc++;
-            if (fnc == 2) break;
-            foundNeighbor = blobNeighbors[bn];
-          }
-        }
-        if (fnc == 1) {
-          // if point only has 1 connection to this blob, maybe it's time to stop expanding
-          bool skippable = true;
-          for (uint8_t bn = 0; bn < nc; bn++) {
-            if (clusterNum[blobNeighbors[bn]] == 0 &&
-                  norm_pixels[blobNeighbors[bn]] > CONFIDENCE_THRESHOLD &&
-                  isNeighborly(blobNeighbors[bn], foundNeighbor) &&
-                  diffFromPoint(blobNeighbors[bn], blobPoint) < mtb) {
-              // keep expanding if there are actually more connections to the blob
-              skippable = false;
-              break;
-            }
-          }
-          if (skippable) continue;
-        }
+        // uint8_t fnc = 0;
+        // coord_t foundNeighbor = UNDEF_POINT;
+        // coord_t blobNeighbors[8];
+        // uint8_t nc = loadNeighbors(blobPoint, blobNeighbors);
+        // for (uint8_t bn = 0; bn < nc; bn++) {
+        //   if (clusterNum[blobNeighbors[bn]] == clusterIdx) {
+        //     fnc++;
+        //     if (fnc == 2) break;
+        //     foundNeighbor = blobNeighbors[bn];
+        //   }
+        // }
+        // if (fnc == 1) {
+        //   // if point only has 1 connection to this blob, maybe it's time to stop expanding
+        //   bool skippable = true;
+        //   for (uint8_t bn = 0; bn < nc; bn++) {
+        //     if (clusterNum[blobNeighbors[bn]] == 0 &&
+        //           norm_pixels[blobNeighbors[bn]] > CONFIDENCE_THRESHOLD &&
+        //           isNeighborly(blobNeighbors[bn], foundNeighbor) &&
+        //           diffFromPoint(blobNeighbors[bn], blobPoint) < mtb) {
+        //       // keep expanding if there are actually more connections to the blob
+        //       skippable = false;
+        //       break;
+        //     }
+        //   }
+        //   if (skippable) continue;
+        // }
       }
 
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
@@ -181,6 +181,14 @@ uint8_t findCurrentPoints() {
         maxNAxis = max(maxNAxis, naxisn);
         if (isNeighborly(n, current_point)) neighbors++;
       }
+    }
+
+    if (totalBlobSize > 50) {
+      // should never happen, but ensure there's no overflow
+      SERIAL_PRINT(F("x "));
+      SERIAL_PRINT(current_point);
+      SERIAL_PRINTLN(F(" toobig"));
+      continue;
     }
 
     uint8_t height = maxAxis - minAxis;

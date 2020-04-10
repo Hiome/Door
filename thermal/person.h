@@ -2,7 +2,6 @@ float calcMaxDistance(uint8_t height, uint8_t width, uint8_t neighbors, uint8_t 
   float d = 3.0 + (height+width+neighbors)/4.0 + (confidence/100.0);
   return min(d, 5.5);
 }
-#define MAX_DIST_FORMULA ( calcMaxDistance(height, width, neighbors, confidence) )
 
 typedef struct {
   coord_t   current_position;   //:6
@@ -20,7 +19,7 @@ typedef struct {
   float     bgm() { return bgDiff(current_position); };
   float     fgm() { return fgDiff(current_position); };
   float     max_distance() {
-    return MAX_DIST_FORMULA;
+    return calcMaxDistance(height, width, neighbors, confidence);
   };
   float     max_allowed_temp_drift() {
     return maxTempDiffForFgd(fgm());
@@ -69,7 +68,7 @@ typedef struct {
     return euclidean_distance(starting_position, past_position);
   };
   float     max_distance() {
-    return MAX_DIST_FORMULA;
+    return calcMaxDistance(height, width, neighbors, confidence);
   };
   float     max_allowed_temp_drift() {
     return maxTempDiffForFgd(fgm);
@@ -125,9 +124,9 @@ typedef struct {
     max_temp_drift = 0;
     forgotten_count = 0;
     max_jump = 0;
+    retreating = false;
     count = 1;
     history = 1;
-    retreating = false;
     max_position = past_position;
   };
 
@@ -136,8 +135,7 @@ typedef struct {
     // door has been closed/ajar for more than 1 frame, no way anybody crossed
     if (door_state != DOOR_OPEN && frames_since_door_open) return false;
 
-    if ((history >= MIN_HISTORY || (history == 2 && avg_fgm > 150 && avg_bgm > 150)) &&
-        starting_side() != side()) {
+    if (history >= MIN_HISTORY && starting_side() != side()) {
       publishPacket();
       return true;
     } else if (avg_fgm > 150 && avg_bgm > 150 &&
@@ -220,27 +218,26 @@ void clearPointsAfterDoorClose() {
 }
 
 void store_forgotten_person(Person p, uint8_t cnt) {
-  uint8_t added = UNDEF_POINT;
-  uint8_t min_conf = 100;
-  uint8_t min_conf_idx = UNDEF_POINT;
+  idx_t useIdx = UNDEF_INDEX;
+  uint8_t min_conf = p.confidence;
   for (idx_t j = 0; j < MAX_PEOPLE; j++) {
     if (!forgotten_people[j].real() || forgotten_expirations[j] == 0) {
-      added = j;
+      // slot is empty, use it and stop looking for another
+      useIdx = j;
       break;
     } else if (forgotten_people[j].confidence < min_conf) {
+      // this slot is lower confidence, consider using it
       min_conf = forgotten_people[j].confidence;
-      min_conf_idx = j;
+      useIdx = j;
     }
   }
-  if (added == UNDEF_POINT && min_conf < p.confidence) {
-    added = min_conf_idx;
-  }
-  if (added != UNDEF_POINT) {
-    if (forgotten_people[added].real()) {
-      forgotten_people[added].publishMaybeEvent();
+  if (useIdx != UNDEF_INDEX) {
+    // we found a slot! save person in there
+    if (forgotten_people[useIdx].real()) {
+      forgotten_people[useIdx].publishMaybeEvent();
     }
-    forgotten_people[added] = p;
-    forgotten_expirations[added] = cnt;
+    forgotten_people[useIdx] = p;
+    forgotten_expirations[useIdx] = cnt;
     SERIAL_PRINTLN(F("s"));
   }
 }
