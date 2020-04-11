@@ -20,7 +20,7 @@ for (idx_t j=0; j<total_masses; j++) {
   float tempDiff = p.difference_from_point(pp.current_position);
   float maxTpoint = pp.max_allowed_temp_drift();
   maxTpoint = max(maxTperson, maxTpoint);
-  if (d > 1) maxTpoint *= (1.15 - d*0.15);
+  if (d > 2) maxTpoint *= (1.2 - d*0.1);
   if (tempDiff > maxTpoint) continue;
 
   float score = sq(d/maxDperson) + sq(tempDiff/maxTperson);
