@@ -47,7 +47,7 @@ for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
         // "always forward, forward always" - Luke Cage
         if (!p.retreating || axis_distance(p.past_position, pp.current_position) > 1) {
           p.history++;
-          p.max_position = pp.current_position;
+          if (!p.retreating) p.max_position = pp.current_position;
         }
         p.retreating = false;
         if (pp.side() != p.side() || p.history > 5) {

@@ -70,7 +70,7 @@ void calculateBgm() {
 }
 
 float maxTempDiffForFgd(float f) {
-  f *= 0.85;
+  f *= 0.9;
   return min(f, 20.0);
 }
 
@@ -163,7 +163,7 @@ float calculateNewBackground(coord_t i) {
 
   if ((uint8_t)bgd > 1 && (fgd < 0.5 || bgd > max(5*fgd, 5))) {
     // rapidly update when background changes quickly
-    return std * (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES ? 50 : 10);
+    return std * (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES ? 100 : 20);
   }
 
   // increment/decrement average by 0.001. Every 1º change will take 100 sec to learn.
@@ -172,7 +172,18 @@ float calculateNewBackground(coord_t i) {
 }
 
 void updateBgAverage() {
+  #ifdef RECESSED
+    if (door_state == DOOR_CLOSED) return;
+  #else
+    if (door_state == DOOR_AJAR) return;
+  #endif
+
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    #ifndef RECESSED
+      if (door_state == DOOR_AJAR && SIDE1(i)) return;
+      if (door_state == DOOR_CLOSED && SIDE2(i)) return;
+    #endif
+
     // ignore extreme raw pixels
     if (((uint8_t)raw_pixels[(i)]) <= MIN_TEMP || ((uint8_t)raw_pixels[(i)]) >= MAX_TEMP) {
       continue;

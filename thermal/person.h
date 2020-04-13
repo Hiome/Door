@@ -276,7 +276,6 @@ idx_t findClosestPerson(coord_t i, float maxDistance) {
   idx_t pidx = UNDEF_INDEX;
   float minTemp = 1.0;
   float maxTemp = maxTempDiffForFgd(fgDiff(i));
-  maxDistance = min(maxDistance, 4.5);
   for (idx_t x=0; x<MAX_PEOPLE; x++) {
     if (forgotten_people[x].real()) {
       Person p = forgotten_people[x];
@@ -286,14 +285,15 @@ idx_t findClosestPerson(coord_t i, float maxDistance) {
 
       float tempDiff = p.difference_from_point(i);
       float maxT = p.max_allowed_temp_drift();
-      if (tempDiff > min(maxTemp, maxT)) continue;
+      maxT = min(maxTemp, maxT) * (1 - dist*0.05);
+      if (tempDiff > maxT) continue;
 
       float tempRatio = tempDiff/maxTemp;
       tempRatio = max(tempRatio, 0.1);
       float distRatio = dist/maxDistance;
       distRatio = max(distRatio, 0.1);
       tempDiff = tempRatio * distRatio;
-      if (tempDiff < 0.5 && tempDiff < minTemp) {
+      if (tempDiff < minTemp) {
         pidx = x;
         minTemp = tempDiff;
       }
