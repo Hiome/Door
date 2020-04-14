@@ -9,20 +9,21 @@ uint16_t c = 1;
 uint8_t fc = 0;
 float bgm = points[i].bgm();
 float fgm = points[i].fgm();
+float maxTemp = maxTempDiffForTemps(fgm, bgm);
 
 // first let's check points on death row from this frame for a match
-remember_person(sp, mp, mj, md, cross, h, c, fc, points[i].max_distance());
+remember_person(sp, mp, mj, md, cross, h, c, fc, maxTemp, points[i].max_distance());
 
-if (c == 1 && points[i].height && bgm > 1.5 && fgm > 1.5 && normalizeAxis(AXIS(sp)) == 4) {
+if (c == 1 && points[i].height && normalizeAxis(AXIS(sp)) == 4) {
   // if point is right in middle, drag it to the side it appears to be coming from
   coord_t spa = sp - GRID_EXTENT;
   coord_t spb = sp + GRID_EXTENT;
   if (SIDE1(sp)) {
-    if (compareNeighboringPixels(spb,spa,sp,fgm)) {
+    if (compareNeighboringPixels(spb,spa,sp,maxTemp)) {
       sp += GRID_EXTENT;
       h++;
     }
-  } else if (compareNeighboringPixels(spa,spb,sp,fgm)) {
+  } else if (compareNeighboringPixels(spa,spb,sp,maxTemp)) {
     sp -= GRID_EXTENT;
     h++;
   }
@@ -67,6 +68,7 @@ for (idx_t j=0; j<MAX_PEOPLE; j++) {
       .avg_bgm=floatToFint2(bgm),
       .avg_fgm=floatToFint2(fgm),
       .raw_temp=points[i].raw_temp(),
+      .bgm=bgm,
       .fgm=fgm
     };
     known_people[j] = p;

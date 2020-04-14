@@ -70,7 +70,7 @@ void Hiome_AVR::beatHeart(uint32_t maxBeats) {
 }
 
 uint8_t Hiome_AVR::publish(const char* msg, const char* meta, uint8_t retries, uint8_t timeout) {
-  char sendBuf[57];
+  char sendBuf[60];
   int8_t len = sprintf(sendBuf, "%s;%s%u%u", msg, meta, checkBattery(), packetCount);
   if (len <= 0) return 0;
 

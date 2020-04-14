@@ -39,11 +39,12 @@ uint8_t findCurrentPoints() {
     coord_t i = ordered_indexes_temp[z];
     bool added = false;
     float fgd = fgDiff(i);
-    float mt = maxTempDiffForFgd(fgd);
+    float bgd = bgDiff(i);
+    float mt = maxTempDiffForTemps(fgd, bgd);
     uint8_t nci = neighborsCount(i, mt, norm_pixels);
     for (uint8_t j=0; j<z; j++) {
       coord_t oj = sibling_indexes[j];
-      if ((norm_pixels[i]*2) > norm_pixels[oj] && diffFromPoint(oj, i) < min(fgd-0.1, 0.6)) {
+      if ((norm_pixels[i]*2) > norm_pixels[oj] && diffFromPoint(oj, i) < min(fgd/4, 1)) {
         float mt2 = maxTempDiffForPoint(ordered_indexes[j]);
         uint8_t ncj = neighborsCount(ordered_indexes[j], mt2, norm_pixels);
         if (nci > (ncj + 1)) {
@@ -104,7 +105,8 @@ uint8_t findCurrentPoints() {
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
     float fgd = fgDiff(current_point);
-    float mt = maxTempDiffForFgd(fgd);
+    float bgd = bgDiff(current_point);
+    float mt = maxTempDiffForTemps(fgd, bgd);
 
     // scan all points added after current_point, since they must be part of same blob
     for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
@@ -195,10 +197,9 @@ uint8_t findCurrentPoints() {
     uint8_t width = maxNAxis - minNAxis;
     uint8_t dimension = max(height, width) + 1;
     uint8_t boundingBox = min(dimension, 5);
-    uint8_t bgd = (uint8_t)bgDiff(current_point);
     // ignore a blob that fills less than 1/3 of its bounding box
     // a blob with 9 points will always pass density test
-    if ((totalBlobSize + min((uint8_t)fgd, bgd))*3 >= sq(boundingBox)) {
+    if ((totalBlobSize + min((uint8_t)fgd, (uint8_t)bgd))*3 >= sq(boundingBox)) {
       uint8_t noiseSize = 0;
       float mt_constrained = mt*0.7;
       mt_constrained = constrain(mt_constrained, 0.51, 1.51);

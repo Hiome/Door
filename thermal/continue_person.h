@@ -45,9 +45,15 @@ for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
         }
       } else if (AXIS(p.past_position) != AXIS(pp.current_position)) {
         // "always forward, forward always" - Luke Cage
+        if (!p.retreating || (SIDE1(p.starting_position) &&
+              AXIS(pp.current_position) >= AXIS(p.max_position)) ||
+            (SIDE2(p.starting_position) &&
+              AXIS(pp.current_position) <= AXIS(p.max_position))) {
+          // we beat our previous max position record
+          p.max_position = pp.current_position;
+        }
         if (!p.retreating || axis_distance(p.past_position, pp.current_position) > 1) {
           p.history++;
-          if (!p.retreating) p.max_position = pp.current_position;
         }
         p.retreating = false;
         if (pp.side() != p.side() || p.history > 5) {
@@ -61,12 +67,13 @@ for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
     // update current state
     p.confidence = pp.confidence;
     p.raw_temp = pp.raw_temp();
+    p.bgm = pp.bgm();
     p.fgm = pp.fgm();
     p.neighbors = pp.neighbors;
     p.height = pp.height;
     p.width = pp.width;
     #define UPDATE_RUNNING_AVG(o,n) ( o = ((n) + ((o)*2))/3 )
-    UPDATE_RUNNING_AVG(p.avg_bgm, floatToFint2(pp.bgm()));
+    UPDATE_RUNNING_AVG(p.avg_bgm, floatToFint2(p.bgm));
     UPDATE_RUNNING_AVG(p.avg_fgm, floatToFint2(p.fgm));
     UPDATE_RUNNING_AVG(p.avg_height, p.height);
     UPDATE_RUNNING_AVG(p.avg_width, p.width);

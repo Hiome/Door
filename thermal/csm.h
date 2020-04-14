@@ -89,13 +89,13 @@ void calculateBgm() {
   }
 }
 
-float maxTempDiffForFgd(float f) {
-  f *= 0.85;
+float maxTempDiffForTemps(float f, float b) {
+  f = max(f, b)*0.85;
   return min(f, 20.0);
 }
 
 float maxTempDiffForPoint(coord_t x) {
-  return maxTempDiffForFgd(fgDiff(x));
+  return maxTempDiffForTemps(fgDiff(x), bgDiff(x));
 }
 
 float trimMean(uint8_t side) {

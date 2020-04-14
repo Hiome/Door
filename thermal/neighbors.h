@@ -61,7 +61,7 @@ uint8_t neighborsCount(coord_t i,float mt,uint8_t (&norm_pixels)[AMG88xx_PIXEL_A
   return nc;
 }
 
-bool compareNeighboringPixels(coord_t x, coord_t y, coord_t i, float f) {
+bool compareNeighboringPixels(coord_t x, coord_t y, coord_t i, float mt) {
   float d = diffFromPoint(x, i);
-  return (d + 0.5) < diffFromPoint(y, i) && d < maxTempDiffForFgd(f);
+  return (d + 0.5) < diffFromPoint(y, i) && d < mt;
 }

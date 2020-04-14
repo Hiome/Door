@@ -22,7 +22,7 @@ typedef struct {
     return calcMaxDistance(height, width, neighbors, confidence);
   };
   float     max_allowed_temp_drift() {
-    return maxTempDiffForFgd(fgm());
+    return maxTempDiffForTemps(fgm(), bgm());
   };
 } PossiblePerson;
 
@@ -59,6 +59,7 @@ typedef struct {
   uint16_t  avg_fgm;
 
   float     raw_temp;
+  float     bgm;
   float     fgm;
 
   bool      real() { return past_position != UNDEF_POINT; };
@@ -71,15 +72,15 @@ typedef struct {
     return calcMaxDistance(height, width, neighbors, confidence);
   };
   float     max_allowed_temp_drift() {
-    return maxTempDiffForFgd(fgm);
+    return maxTempDiffForTemps(fgm, bgm);
   };
   float     difference_from_point(coord_t a) {
     return abs(raw_pixels[(a)] - raw_temp);
   };
 
-  #define METALENGTH  48
+  #define METALENGTH  51
   void generateMeta(char *meta) {
-    sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
+    sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
       avg_confidence,                     // 3  100
       avg_bgm,                            // 4  1020
       avg_fgm,                            // 4  1020
@@ -94,8 +95,9 @@ typedef struct {
       max_jump,                           // 1  5
       noiseSize,                          // 2  60
       max_temp_drift,                     // 3  250
+      (uint8_t)raw_temp,                  // 2  63
       forgotten_count                     // 1  3
-    );                                    // + 14 'x' + 1 null => 48 total
+    );                                    // + 15 'x' + 1 null => 51 total
   };
 
   uint8_t _publishFrd(const char* msg, uint8_t retries) {
@@ -190,6 +192,7 @@ const Person UNDEF_PERSON = {
   .avg_bgm=0,
   .avg_fgm=0,
   .raw_temp=0,
+  .bgm=0,
   .fgm=0
 };
 
@@ -303,10 +306,9 @@ void forget_person(idx_t idx, idx_t (&pairs)[MAX_PEOPLE]) {
 }
 #define FORGET_POINT ( forget_person(idx, pairs) )
 
-idx_t findClosestPerson(coord_t i, float maxDistance) {
+idx_t findClosestPerson(coord_t i, float maxTemp, float maxDistance) {
   idx_t pidx = UNDEF_INDEX;
   float minTemp = 1.0;
-  float maxTemp = maxTempDiffForFgd(fgDiff(i));
   for (idx_t x=0; x<MAX_PEOPLE; x++) {
     if (forgotten_people[x].real()) {
       Person p = forgotten_people[x];
@@ -334,8 +336,8 @@ idx_t findClosestPerson(coord_t i, float maxDistance) {
 }
 
 void remember_person(coord_t &sp, coord_t &mp, uint8_t &mj, fint1_t &md,
-    uint8_t &cross, uint8_t &h, uint16_t &c, uint8_t &fc, float maxDistance) {
-  coord_t pi = findClosestPerson(sp, maxDistance);
+    uint8_t &cross, uint8_t &h, uint16_t &c, uint8_t &fc, float maxTemp, float maxDistance) {
+  coord_t pi = findClosestPerson(sp, maxTemp, maxDistance);
   if (pi == UNDEF_INDEX) return;
   Person p = forgotten_people[pi];
 

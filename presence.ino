@@ -21,7 +21,7 @@ Hiome_AMG88xx amg;
 
 const uint8_t GRID_EXTENT            = 8;    // size of grid (8x8)
 const uint8_t MIN_HISTORY            = 3;    // min number of times a point needs to be seen
-const uint8_t MAX_PEOPLE             = 5;    // most people we support in a single frame
+const uint8_t MAX_PEOPLE             = 4;    // most people we support in a single frame
 const uint8_t MAX_EMPTY_CYCLES       = 2;    // cycles to remember forgotten points
 const uint8_t MAX_FORGOTTEN_COUNT    = 2;    // max number of times allowed to forget someone
 const uint8_t MAX_DOOR_CHANGE_FRAMES = 5;    // cycles we keep counting after door changes
