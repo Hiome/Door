@@ -5,6 +5,7 @@
 uint8_t door_state = DOOR_OPEN;
 uint8_t last_published_door_state = 9; // initialize to something invalid to force first loop
 uint8_t frames_since_door_open = 0;
+uint8_t ajar_side = 1;
 
 uint8_t readDoorState() {
   #ifdef RECESSED
@@ -12,6 +13,7 @@ uint8_t readDoorState() {
     bool reed4High = PIND & 0b00010000; // true if reed 4 is high (normal state)
     if (reed3High && reed4High) return DOOR_OPEN;
     if (!reed3High && !reed4High) return DOOR_CLOSED;
+    ajar_side = reed4High ? 2 : 1;
     return DOOR_AJAR;
   #else
     if (PIND & 0b00001000) {  // true if reed 3 is high (normal state)

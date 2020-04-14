@@ -42,6 +42,22 @@ uint8_t calcFgm(coord_t i) {
 
 // calculate background gradient percent
 uint8_t calcBgm(coord_t i) {
+  // skip calculating bgm if door just opened
+  // since we have no idea what the background is anyway
+  #ifdef RECESSED
+    if (door_state == DOOR_CLOSED) return 0;
+    if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) {
+      return 100;
+    }
+  #else
+    if (SIDE2(i)) {
+      if (door_state == DOOR_CLOSED) return 0;
+      if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) {
+        return 100;
+      }
+    }
+  #endif
+
   return calcGradient(bgDiff(i), global_bgm);
 }
 
@@ -114,7 +130,8 @@ float trimMean(uint8_t side) {
     // such as when keith is sweaty. We shall see!
     avg += raw_pixels[(sortedPixels[i])];
     newTotal++;
-    if ((uint8_t)bgDiff(sortedPixels[i]) == 0) {
+    if (frames_since_door_open >= MAX_DOOR_CHANGE_FRAMES &&
+        (uint8_t)bgDiff(sortedPixels[i]) == 0) {
       // double weight of points with low background diff
       avg += raw_pixels[(sortedPixels[i])];
       newTotal++;
@@ -154,34 +171,42 @@ bool normalizePixels() {
 
 float calculateNewBackground(coord_t i) {
   // implicit alpha of 0.001 because avg_pixels is raw_pixels*1000.0
-  float std = raw_pixels[(i)] - bgPixel(i);
+  float currBg = bgPixel(i);
+  float std = raw_pixels[(i)] - currBg;
   float bgd = abs(std);
   if (bgd < 0.5) return 10*std; // alpha = 0.01
 
   float cavg = SIDE1(i) ? cavg1 : cavg2;
-  float fgd = abs(raw_pixels[(i)] - cavg);
+  float cgd = cavg - currBg;
 
-  if ((uint8_t)bgd > 1 && (fgd < 0.5 || bgd > max(5*fgd, 5))) {
-    // rapidly update when background changes quickly
-    return std * (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES ? 100 : 20);
+  if ((std < 0 && cgd < 0) || (std > 0 && cgd > 0)) {
+    // foreground average and this point's temp are on same side of background
+    float acgd = abs(cgd);
+    if (acgd > 1 && acgd < bgd) {
+      // foreground average is more than 1º away, but closer than point's temp
+      // so move towards it quickly
+      return cgd;
+    }
   }
 
+  // otherwise move very slowly towards this point's temp
   // increment/decrement average by 0.001. Every 1º change will take 100 sec to learn.
-  // This scales linearly so something that's 5º warmer will require ~8 min to learn.
   return std < 0 ? -1 : 1;
 }
 
 void updateBgAverage() {
   #ifdef RECESSED
-    if (door_state == DOOR_CLOSED) return;
-  #else
-    if (door_state == DOOR_AJAR) return;
+    if (door_state == DOOR_CLOSED) {
+      return;
+    }
   #endif
 
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    if (door_state == DOOR_AJAR && SIDE(i) == ajar_side) continue;
     #ifndef RECESSED
-      if (door_state == DOOR_AJAR && SIDE1(i)) return;
-      if (door_state == DOOR_CLOSED && SIDE2(i)) return;
+      if (door_state == DOOR_CLOSED && SIDE2(i)) {
+        return;
+      }
     #endif
 
     // ignore extreme raw pixels

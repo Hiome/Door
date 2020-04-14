@@ -106,7 +106,8 @@ typedef struct {
 
   void publishPacket() {
     // door has been closed/ajar for more than 1 frame, no way anybody crossed
-    if (door_state != DOOR_OPEN && frames_since_door_open) return;
+    if (door_state != DOOR_OPEN && frames_since_door_open > 0) return;
+    if (door_state == DOOR_OPEN && frames_since_door_open < 2) return;
 
     if (SIDE1(past_position)) {
       crossed = _publishFrd("1", RETRY_COUNT);
@@ -133,7 +134,9 @@ typedef struct {
   // called when a point is about to be forgotten to diagnose if min history is an issue
   bool publishMaybeEvent() {
     // door has been closed/ajar for more than 1 frame, no way anybody crossed
-    if (door_state != DOOR_OPEN && frames_since_door_open) return false;
+    if (door_state != DOOR_OPEN && frames_since_door_open > 0) return false;
+    // door literally just opened this frame, no way anybody crossed
+    if (door_state == DOOR_OPEN && frames_since_door_open < 2) return false;
 
     if (history >= MIN_HISTORY && starting_side() != side()) {
       publishPacket();
@@ -202,11 +205,39 @@ void publishEvents() {
 }
 
 void clearPointsAfterDoorClose() {
+  uint8_t previous_door_state = door_state;
   if (checkDoorState()) {
     for (idx_t i = 0; i<MAX_PEOPLE; i++) {
-      if (known_people[i].real() && known_people[i].avg_fgm < 150) {
-        known_people[i].publishMaybeEvent();
-        known_people[i] = UNDEF_PERSON;
+      if (known_people[i].real()) {
+        bool clearPoint;
+        if (known_people[i].confidence < 50) {
+          // clear all points with low confidence, regardless of transition
+          clearPoint = true;
+        } else if (door_state == DOOR_CLOSED || previous_door_state == DOOR_OPEN) {
+          // door just closed, publish whatever we have and forget all points
+          clearPoint = true;
+        } else if (previous_door_state == DOOR_CLOSED) {
+          // door just opened
+          #ifdef RECESSED
+            // always clear any points on grid when recessed door opens
+            clearPoint = true;
+          #else
+            // only clear points who started on side 2
+            // (where door was) when wired door opens
+            if (SIDE2(known_people[i].starting_position)) {
+              clearPoint = true;
+            }
+          #endif
+        } else if (previous_door_state == DOOR_AJAR &&
+                    known_people[i].starting_side() == ajar_side) {
+          // door is ajar and this person started on the side that the door is ajar
+          clearPoint = true;
+        }
+
+        if (clearPoint) {
+          known_people[i].publishMaybeEvent();
+          known_people[i] = UNDEF_PERSON;
+        }
       }
 
       if (forgotten_people[i].real()) {

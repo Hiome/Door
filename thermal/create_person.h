@@ -28,6 +28,18 @@ if (c == 1 && points[i].height && bgm > 1.5 && fgm > 1.5 && normalizeAxis(AXIS(s
   }
 }
 
+#ifdef RECESSED
+  if (door_state == DOOR_CLOSED ||
+      (door_state == DOOR_AJAR && SIDE(sp) == ajar_side)) {
+    continue;
+  }
+#else
+  if ((door_state == DOOR_CLOSED && SIDE2(sp)) ||
+      (door_state == DOOR_AJAR && SIDE1(sp))) {
+    continue;
+  }
+#endif
+
 for (idx_t j=0; j<MAX_PEOPLE; j++) {
   // look for first empty slot in known_people to use
   if (!known_people[j].real()) {
