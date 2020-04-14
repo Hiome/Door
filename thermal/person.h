@@ -78,9 +78,10 @@ typedef struct {
     return abs(raw_pixels[(a)] - raw_temp);
   };
 
-  #define METALENGTH  51
+  #define METALENGTH  48
   void generateMeta(char *meta) {
-    sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
+    // TODO add reporting of (uint8_t)raw_temp too
+    sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
       avg_confidence,                     // 3  100
       avg_bgm,                            // 4  1020
       avg_fgm,                            // 4  1020
@@ -95,9 +96,8 @@ typedef struct {
       max_jump,                           // 1  5
       noiseSize,                          // 2  60
       max_temp_drift,                     // 3  250
-      (uint8_t)raw_temp,                  // 2  63
       forgotten_count                     // 1  3
-    );                                    // + 15 'x' + 1 null => 51 total
+    );                                    // + 14 'x' + 1 null => 48 total
   };
 
   uint8_t _publishFrd(const char* msg, uint8_t retries) {
@@ -143,8 +143,7 @@ typedef struct {
     if (history >= MIN_HISTORY && starting_side() != side()) {
       publishPacket();
       return true;
-    } else if (avg_fgm > 150 && avg_bgm > 150 &&
-                axis_distance(max_position, starting_position) >= 2) {
+    } else if (axis_distance(max_position, starting_position) >= 2) {
       if (axis_distance(max_position, past_position) >= 2) {
         if (crossed && SIDE(max_position) == starting_side()) return false;
         starting_position = max_position;
