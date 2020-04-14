@@ -8,7 +8,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.4.13"
+#define FIRMWARE_VERSION        "V20.4.13b"
 
 Hiome_AVR hiome;
 Hiome_AMG88xx amg;
