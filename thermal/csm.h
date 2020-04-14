@@ -9,13 +9,17 @@ float bgPixel(coord_t x) {
   return fint3ToFloat(avg_pixels[(x)]);
 }
 
+float constrainedPixel(coord_t x) {
+  return constrain(raw_pixels[(x)], MIN_TEMP, MAX_TEMP);
+}
+
 float diffFromPoint(coord_t a, coord_t b) {
   return abs(raw_pixels[(a)] - raw_pixels[(b)]);
 }
 
 // calculate difference from foreground
 float fgDiff(coord_t i) {
-  float t = constrain(raw_pixels[(i)], MIN_TEMP, MAX_TEMP);
+  float t = constrainedPixel(i);
   float fgmt1 = abs(t - cavg1);
   float fgmt2 = abs(t - cavg2);
   return min(fgmt1, fgmt2);
@@ -23,7 +27,7 @@ float fgDiff(coord_t i) {
 
 // calculate difference from background
 float bgDiff(coord_t i) {
-  float std = constrain(raw_pixels[(i)], MIN_TEMP, MAX_TEMP) - bgPixel(i);
+  float std = constrainedPixel(i) - bgPixel(i);
   return abs(std);
 }
 
@@ -100,52 +104,48 @@ float trimMean(uint8_t side) {
   coord_t maxI = 32*side;
   for (coord_t i = (maxI - 32); i < maxI; i++) {
     // sort clusters by raw temp
-    if (((uint8_t)raw_pixels[i]) > MIN_TEMP && ((uint8_t)raw_pixels[i]) < MAX_TEMP) {
-      bool added = false;
-      for (uint8_t j=0; j<total; j++) {
-        if (raw_pixels[i] > raw_pixels[(sortedPixels[j])]) {
-          for (int8_t x=total; x>j; x--) {
-            sortedPixels[x] = sortedPixels[(x-1)];
-          }
-          sortedPixels[j] = i;
-          added = true;
-          break;
+    bool added = false;
+    for (uint8_t j=0; j<total; j++) {
+      if (constrainedPixel(i) > constrainedPixel(sortedPixels[j])) {
+        for (int8_t x=total; x>j; x--) {
+          sortedPixels[x] = sortedPixels[(x-1)];
         }
+        sortedPixels[j] = i;
+        added = true;
+        break;
       }
-      if (!added) {
-        // append i to end of array
-        sortedPixels[total] = i;
-      }
+    }
+    if (!added) {
+      // append i to end of array
+      sortedPixels[total] = i;
+    }
+    total++;
+  }
+
+  float avg = 0;
+  total = 0;
+  for (idx_t i = 0; i < 26; i++) {
+    // drop the top 6 warmest points when calculating mean to skew it lower
+    // this might cause issues if the person is actually cooler than the background,
+    // such as when keith is sweaty. We shall see!
+    avg += constrainedPixel(sortedPixels[i]);
+    total++;
+    if (frames_since_door_open >= MAX_DOOR_CHANGE_FRAMES &&
+        (uint8_t)bgDiff(sortedPixels[i]) == 0) {
+      // double weight of points with low background diff
+      avg += constrainedPixel(sortedPixels[i]);
       total++;
     }
   }
 
-  SERIAL_PRINTLN(total); // should always == 32
+  SERIAL_PRINTLN(total); // should be between 26 - 52
 
-  float avg = 0;
-  uint8_t newTotal = 0;
-  for (idx_t i = 0; i < total-6; i++) {
-    // drop the top 6 warmest points when calculating mean to skew it lower
-    // this might cause issues if the person is actually cooler than the background,
-    // such as when keith is sweaty. We shall see!
-    avg += raw_pixels[(sortedPixels[i])];
-    newTotal++;
-    if (frames_since_door_open >= MAX_DOOR_CHANGE_FRAMES &&
-        (uint8_t)bgDiff(sortedPixels[i]) == 0) {
-      // double weight of points with low background diff
-      avg += raw_pixels[(sortedPixels[i])];
-      newTotal++;
-    }
-  }
-
-  SERIAL_PRINTLN(newTotal); // should be between 26 - 52
-
-  if (!newTotal) {
+  if (!total) {
     SERIAL_PRINTLN(F("xxx"));
     return 0; // no chosen points, skip this frame (should be impossible)
   }
 
-  return avg/newTotal;
+  return avg/total;
 }
 
 bool normalizePixels() {
@@ -172,7 +172,7 @@ bool normalizePixels() {
 float calculateNewBackground(coord_t i) {
   // implicit alpha of 0.001 because avg_pixels is raw_pixels*1000.0
   float currBg = bgPixel(i);
-  float std = raw_pixels[(i)] - currBg;
+  float std = constrainedPixel(i) - currBg;
   float bgd = abs(std);
   if (bgd < 0.5) return 10*std; // alpha = 0.01
 
@@ -209,15 +209,10 @@ void updateBgAverage() {
       }
     #endif
 
-    // ignore extreme raw pixels
-    if (((uint8_t)raw_pixels[(i)]) <= MIN_TEMP || ((uint8_t)raw_pixels[(i)]) >= MAX_TEMP) {
-      continue;
-    }
-
     // yes we can use += here and rely on type promotion, but I want to be absolutely
     // explicit that we need to use int32_t and not int16_t to avoid overflow
-    int32_t temp = ((int32_t)avg_pixels[i]) + ((int32_t)round(calculateNewBackground(i)));
-    avg_pixels[i] = temp;
+    int32_t temp = ((int32_t)avg_pixels[i]) + ((int32_t)calculateNewBackground(i));
+    avg_pixels[i] = constrain(temp, ((uint16_t)MIN_TEMP)*1000, ((uint16_t)MAX_TEMP)*1000);
   }
 }
 
@@ -229,7 +224,7 @@ void startBgAverage() {
   amg.readPixels(raw_pixels);
 
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    avg_pixels[i] = floatToFint3(constrain(raw_pixels[i], MIN_TEMP, MAX_TEMP));
+    avg_pixels[i] = floatToFint3(constrainedPixel(i));
   }
 
   for (uint8_t k=0; k < 10; k++) {
@@ -239,13 +234,10 @@ void startBgAverage() {
     }
 
     for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-      if (((uint8_t)raw_pixels[i]) <= MIN_TEMP || ((uint8_t)raw_pixels[i]) >= MAX_TEMP) {
-        continue;
-      }
-      float std = raw_pixels[i] - bgPixel(i);
+      float std = constrainedPixel(i) - bgPixel(i);
       // alpha of 0.3
       int32_t temp = ((int32_t)avg_pixels[i]) + ((int32_t)(300.0 * std));
-      avg_pixels[i] = temp;
+      avg_pixels[i] = constrain(temp, ((uint16_t)MIN_TEMP)*1000, ((uint16_t)MAX_TEMP)*1000);
     }
   }
 }
