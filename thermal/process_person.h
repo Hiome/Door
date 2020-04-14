@@ -19,7 +19,7 @@ for (idx_t j=0; j<total_masses; j++) {
   // can't shift temperature too much
   float tempDiff = p.difference_from_point(pp.current_position);
   float maxTpoint = pp.max_allowed_temp_drift();
-  maxTpoint = min(maxTperson, maxTpoint);
+  maxTpoint = max(maxTperson, maxTpoint);
   maxTpoint *= (1 - d*0.05);
   if (tempDiff > maxTpoint) continue;
 

@@ -86,7 +86,7 @@ void calculateBgm() {
 }
 
 float maxTempDiffForFgd(float f) {
-  f *= 0.9;
+  f *= 0.85;
   return min(f, 20.0);
 }
 
