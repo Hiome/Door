@@ -12,6 +12,19 @@ void printDebugInfo() {
     }
   }
   SERIAL_PRINTLN();
+  for (idx_t i = 0; i<MAX_PEOPLE; i++) {
+    if (forgotten_people[i].real()) {
+      SERIAL_PRINT(forgotten_people[i].past_position);
+      SERIAL_PRINT(F(" ("));
+      SERIAL_PRINT(forgotten_people[i].starting_position);
+      SERIAL_PRINT(F("-"));
+      SERIAL_PRINT(forgotten_people[i].history);
+      SERIAL_PRINT(F("-"));
+      SERIAL_PRINT(forgotten_people[i].neighbors);
+      SERIAL_PRINT(F("),"));
+    }
+  }
+  SERIAL_PRINTLN();
 
   SERIAL_PRINT(cavg1);
   SERIAL_PRINT(F(", "));

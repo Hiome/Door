@@ -90,7 +90,7 @@ void calculateBgm() {
 }
 
 float maxTempDiffForTemps(float f, float b) {
-  f = max(f, b)*0.9;
+  f = max(f, b)*0.7;
   return min(f, 20.0);
 }
 

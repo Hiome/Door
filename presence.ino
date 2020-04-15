@@ -8,7 +8,7 @@
 //  #define TIME_CYCLES
 #endif
 
-#define FIRMWARE_VERSION        "V20.4.13c"
+#define FIRMWARE_VERSION        "V20.4.14"
 
 Hiome_AVR hiome;
 Hiome_AMG88xx amg;
@@ -50,10 +50,10 @@ bool processSensor() {
   // "I don't know who you are or what you want, but you should know that I have a
   // very particular set of skills that make me a nightmare for people like you.
   // I will find you, I will track you, and I will turn the lights on for you."
-  uint8_t taken[MAX_PEOPLE] = { 0 };
-  idx_t pairs[MAX_PEOPLE];
+  uint8_t taken[MAX_PEOPLE*2] = { 0 };
+  idx_t pairs[MAX_PEOPLE*2];
 
-  for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
+  for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
     pairs[idx] = UNDEF_INDEX;
     #include "thermal/process_person.h"
   }
@@ -65,7 +65,8 @@ bool processSensor() {
 
     if (taken[i] == 1) {
       #include "thermal/continue_person.h"
-    } else if (taken[i] == 0) {
+    }
+    if (taken[i] == 0) {
       #include "thermal/create_person.h"
     }
   }

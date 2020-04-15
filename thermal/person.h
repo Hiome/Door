@@ -1,6 +1,5 @@
 float calcMaxDistance(uint8_t height, uint8_t width, uint8_t neighbors, uint8_t confidence) {
-  float d = 3.0 + (height+width+neighbors)/4.0 + (confidence/100.0);
-  return min(d, 5.5);
+  return 3.0 + (height+width+neighbors)/4.0 + (confidence/100.0);
 }
 
 typedef struct {
@@ -143,7 +142,8 @@ typedef struct {
     if (history >= MIN_HISTORY && starting_side() != side()) {
       publishPacket();
       return true;
-    } else if (axis_distance(max_position, starting_position) >= 2) {
+    } else if (avg_fgm > 100 && avg_bgm > 100 &&
+                axis_distance(max_position, starting_position) >= 2) {
       if (axis_distance(max_position, past_position) >= 2) {
         if (crossed && SIDE(max_position) == starting_side()) return false;
         starting_position = max_position;
@@ -250,9 +250,9 @@ void clearPointsAfterDoorClose() {
   }
 }
 
-void store_forgotten_person(Person p, uint8_t cnt) {
+void store_forgotten_person(idx_t idx, uint8_t cnt) {
   idx_t useIdx = UNDEF_INDEX;
-  uint8_t min_conf = p.confidence;
+  uint8_t min_conf = known_people[idx].confidence;
   for (idx_t j = 0; j < MAX_PEOPLE; j++) {
     if (!forgotten_people[j].real()) {
       // slot is empty, use it and stop looking for another
@@ -269,7 +269,7 @@ void store_forgotten_person(Person p, uint8_t cnt) {
     if (forgotten_people[useIdx].real()) {
       forgotten_people[useIdx].publishMaybeEvent();
     }
-    forgotten_people[useIdx] = p;
+    forgotten_people[useIdx] = known_people[idx];
     forgotten_expirations[useIdx] = cnt;
     SERIAL_PRINTLN(F("s"));
   }
@@ -289,86 +289,54 @@ void expireForgottenPeople() {
   }
 }
 
-void forget_person(idx_t idx, idx_t (&pairs)[MAX_PEOPLE]) {
-  Person p = known_people[(idx)];
-  if (p.confidence > 30 && (axis_distance(p.starting_position, p.past_position) > 1 ||
-        axis_distance(p.max_position, p.past_position) > 1)) {
-    if (p.forgotten_count < MAX_FORGOTTEN_COUNT) {
-      store_forgotten_person(p, MAX_EMPTY_CYCLES);
-    } else {
-      // we're giving up on this point, but at least publish what we have
-      p.publishMaybeEvent();
-    }
+void forget_person(idx_t idx, idx_t (&pairs)[MAX_PEOPLE*2]) {
+  if (known_people[(idx)].forgotten_count < MAX_FORGOTTEN_COUNT) {
+    store_forgotten_person(idx, MAX_EMPTY_CYCLES);
+  } else {
+    // we're giving up on this point, but at least publish what we have
+    known_people[(idx)].publishMaybeEvent();
   }
   pairs[(idx)] = UNDEF_INDEX;
   known_people[(idx)] = UNDEF_PERSON;
 }
-#define FORGET_POINT ( forget_person(idx, pairs) )
 
-idx_t findClosestPerson(coord_t i, float maxTemp, float maxDistance) {
-  idx_t pidx = UNDEF_INDEX;
-  float minTemp = 1.0;
-  for (idx_t x=0; x<MAX_PEOPLE; x++) {
-    if (forgotten_people[x].real()) {
-      Person p = forgotten_people[x];
-      float dist = euclidean_distance(p.past_position, i);
-      float maxD = p.max_distance();
-      if (dist > min(maxDistance, maxD)) continue;
-
-      float tempDiff = p.difference_from_point(i);
-      float maxT = p.max_allowed_temp_drift();
-      maxT = min(maxTemp, maxT) * (1 - dist*0.05);
-      if (tempDiff > maxT) continue;
-
-      float tempRatio = tempDiff/maxTemp;
-      tempRatio = max(tempRatio, 0.1);
-      float distRatio = dist/maxDistance;
-      distRatio = max(distRatio, 0.1);
-      tempDiff = tempRatio * distRatio;
-      if (tempDiff < minTemp) {
-        pidx = x;
-        minTemp = tempDiff;
-      }
+Person getPersonFromIdx(idx_t idx) {
+  if (idx < MAX_PEOPLE) {
+    if (!known_people[idx].real()) return UNDEF_PERSON;
+    return known_people[idx];
+  } else {
+    if (!forgotten_people[idx-MAX_PEOPLE].real() ||
+          forgotten_expirations[idx-MAX_PEOPLE] == MAX_EMPTY_CYCLES) {
+      // point is not real or it was *just* forgotten
+      // this will skip a point that was meant to be remembered for longer if they
+      // happen to have exactly MAX_EMPTY_CYCLES of life left. Oh well.
+      return UNDEF_PERSON;
     }
+    return forgotten_people[idx-MAX_PEOPLE];
   }
-  return pidx;
 }
 
-void remember_person(coord_t &sp, coord_t &mp, uint8_t &mj, fint1_t &md,
-    uint8_t &cross, uint8_t &h, uint16_t &c, uint8_t &fc, float maxTemp, float maxDistance) {
-  coord_t pi = findClosestPerson(sp, maxTemp, maxDistance);
-  if (pi == UNDEF_INDEX) return;
-  Person p = forgotten_people[pi];
-
-  axis_t ppaxis = AXIS(p.past_position);
-  if ((SIDE1(p.starting_position) && ppaxis-1 > AXIS(sp)) ||
-      (SIDE2(p.starting_position) && ppaxis+1 < AXIS(sp))) {
-    // this point is moved behind previous position, just start over
-    return;
+bool updateKnownPerson(Person p, idx_t (&pairs)[MAX_PEOPLE*2]) {
+  idx_t useIdx = UNDEF_INDEX;
+  uint8_t min_conf = p.confidence;
+  for (idx_t j = 0; j < MAX_PEOPLE; j++) {
+    if (!known_people[j].real()) {
+      // slot is empty, use it and stop looking for another
+      useIdx = j;
+      break;
+    } else if (known_people[j].confidence < min_conf) {
+      // this slot is lower confidence, consider using it
+      min_conf = known_people[j].confidence;
+      useIdx = j;
+    }
   }
-
-  if (p.history <= MIN_HISTORY && p.side() != p.starting_side() &&
-        pointOnSmallBorder(p.past_position) &&
-        p.history <= (MIN_HISTORY+1 - normalizeAxis(ppaxis))) {
-    // impossible for this person to ever do anything useful with its life, kill it
-    return;
+  if (useIdx != UNDEF_INDEX) {
+    // we found a slot! save person in there
+    if (known_people[useIdx].real()) {
+      forget_person(useIdx, pairs);
+    }
+    known_people[useIdx] = p;
+    return true;
   }
-
-  fint1_t tempDrift = floatToFint1(p.difference_from_point(sp));
-  md = max(tempDrift, p.max_temp_drift);
-
-  uint8_t axisJump = max_axis_jump(p.past_position, sp);
-  mj = max(axisJump, p.max_jump);
-
-  if ((SIDE1(p.starting_position) && AXIS(mp) < AXIS(p.max_position)) ||
-      (SIDE2(p.starting_position) && AXIS(mp) > AXIS(p.max_position))) {
-    mp = p.max_position;
-  }
-  cross = p.crossed;
-  sp = p.starting_position;
-  h = min(p.history, MIN_HISTORY);
-  c = p.count + 1;
-  fc = p.forgotten_count + 1;
-
-  forgotten_people[pi] = UNDEF_PERSON;
+  return false;
 }

@@ -1,7 +1,10 @@
 // a person and point have been paired together! Update the person's stats accordingly
-for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
-  if (known_people[idx].real() && pairs[idx] == i) {
-    Person p = known_people[idx];
+bool added = false;
+for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
+  if (pairs[idx] == i) {
+    Person p = getPersonFromIdx(idx);
+    if (!p.real()) break;
+
     // closest point matched, update trackers
     PossiblePerson pp = points[i];
 
@@ -56,7 +59,7 @@ for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
           p.history++;
         }
         p.retreating = false;
-        if (pp.side() != p.side() || p.history > 5) {
+        if (pp.side() != p.side() || p.history > 5 || idx >= MAX_PEOPLE) {
           // point just crossed threshold, let's reduce its history to force
           // it to spend another cycle on this side before we count the event
           p.history = min(p.history, MIN_HISTORY);
@@ -82,7 +85,20 @@ for (idx_t idx=0; idx < MAX_PEOPLE; idx++) {
     UPDATE_RUNNING_AVG(p.noiseSize, pp.noiseSize);
     p.avg_confidence = (((uint16_t)p.confidence + (((uint16_t)p.avg_confidence)*2))/3);
     p.count = min(p.count + 1, 60000);
-    known_people[idx] = p;
+
+    if (idx < MAX_PEOPLE) {
+      // already a known person, update in place
+      known_people[idx] = p;
+      added = true;
+    } else {
+      // this is a forgotten person, free up its forgotten slot
+      forgotten_people[idx-MAX_PEOPLE] = UNDEF_PERSON;
+      // and then insert it into known_people instead
+      if (updateKnownPerson(p, pairs)) added = true;
+    }
     break;
   }
+}
+if (!added) {
+  taken[i] = 0;
 }

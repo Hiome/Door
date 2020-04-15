@@ -1,7 +1,7 @@
 // find which point this person is most interested in pairing with
-if (!known_people[idx].real()) continue;
+Person p = getPersonFromIdx(idx);
+if (!p.real()) continue;
 
-Person p = known_people[idx];
 idx_t min_index = UNDEF_INDEX;
 float min_score = 100;
 float maxTperson = p.max_allowed_temp_drift();
@@ -20,7 +20,6 @@ for (idx_t j=0; j<total_masses; j++) {
   float tempDiff = p.difference_from_point(pp.current_position);
   float maxTpoint = pp.max_allowed_temp_drift();
   maxTpoint = max(maxTperson, maxTpoint);
-  maxTpoint *= (1 - d*0.05);
   if (tempDiff > maxTpoint) continue;
 
   float score = sq(d/maxDperson) + sq(tempDiff/maxTperson);
@@ -39,7 +38,9 @@ for (idx_t j=0; j<total_masses; j++) {
 
 if (min_index == UNDEF_INDEX) {
   // still not found...
-  FORGET_POINT;
+  if (idx < MAX_PEOPLE) {
+    forget_person(idx, pairs);
+  }
 } else {
   taken[min_index]++;
   pairs[idx] = min_index;
