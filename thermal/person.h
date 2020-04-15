@@ -106,10 +106,6 @@ typedef struct {
   };
 
   void publishPacket() {
-    // door has been closed/ajar for more than 1 frame, no way anybody crossed
-    if (door_state != DOOR_OPEN && frames_since_door_open > 0) return;
-    if (door_state == DOOR_OPEN && frames_since_door_open < 2) return;
-
     if (SIDE1(past_position)) {
       crossed = _publishFrd("1", RETRY_COUNT);
       if (!crossed) return;
@@ -196,6 +192,10 @@ const Person UNDEF_PERSON = {
 };
 
 void publishEvents() {
+  // door has been closed/ajar for more than 1 frame, no way anybody crossed
+  if (door_state != DOOR_OPEN && frames_since_door_open > 0) return;
+  if (door_state == DOOR_OPEN && frames_since_door_open < 2) return;
+
   for (idx_t i=0; i<MAX_PEOPLE; i++) {
     if (known_people[i].real() && known_people[i].history > MIN_HISTORY &&
         known_people[i].starting_side() != known_people[i].side()) {
@@ -207,7 +207,6 @@ void publishEvents() {
 }
 
 void clearPointsAfterDoorClose() {
-  uint8_t previous_door_state = door_state;
   if (checkDoorState()) {
     for (idx_t i = 0; i<MAX_PEOPLE; i++) {
       if (known_people[i].real()) {
@@ -217,6 +216,14 @@ void clearPointsAfterDoorClose() {
           clearPoint = true;
         } else if (door_state == DOOR_CLOSED || previous_door_state == DOOR_OPEN) {
           // door just closed, publish whatever we have and forget all points
+          clearPoint = true;
+        } else if (previous_door_state == DOOR_AJAR &&
+                    known_people[i].starting_side() == ajar_side) {
+          // door is ajar and this person started on the side that the door is ajar
+          clearPoint = true;
+        } else if (door_state == DOOR_AJAR && (known_people[i].side() == ajar_side ||
+                      known_people[i].starting_side() == ajar_side)) {
+          // door is ajar and this person is somehow on the side that the door is ajar
           clearPoint = true;
         } else if (previous_door_state == DOOR_CLOSED) {
           // door just opened
@@ -230,10 +237,6 @@ void clearPointsAfterDoorClose() {
               clearPoint = true;
             }
           #endif
-        } else if (previous_door_state == DOOR_AJAR &&
-                    known_people[i].starting_side() == ajar_side) {
-          // door is ajar and this person started on the side that the door is ajar
-          clearPoint = true;
         }
 
         if (clearPoint) {
@@ -269,6 +272,7 @@ void store_forgotten_person(idx_t idx, uint8_t cnt) {
     if (forgotten_people[useIdx].real()) {
       forgotten_people[useIdx].publishMaybeEvent();
     }
+    known_people[idx].forgotten_count++;
     forgotten_people[useIdx] = known_people[idx];
     forgotten_expirations[useIdx] = cnt;
     SERIAL_PRINTLN(F("s"));

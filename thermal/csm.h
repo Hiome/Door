@@ -46,21 +46,14 @@ uint8_t calcFgm(coord_t i) {
 
 // calculate background gradient percent
 uint8_t calcBgm(coord_t i) {
-  // skip calculating bgm if door just opened
-  // since we have no idea what the background is anyway
+  // skip calculating bgm if door is closed
   #ifdef RECESSED
-    if (door_state == DOOR_CLOSED) return 0;
-    if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) {
-      return 100;
-    }
+  if (door_state == DOOR_CLOSED) {
   #else
-    if (SIDE2(i)) {
-      if (door_state == DOOR_CLOSED) return 0;
-      if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) {
-        return 100;
-      }
-    }
+  if (door_state == DOOR_CLOSED && SIDE2(i)) {
   #endif
+    return 0;
+  }
 
   return calcGradient(bgDiff(i), global_bgm);
 }
@@ -90,7 +83,7 @@ void calculateBgm() {
 }
 
 float maxTempDiffForTemps(float f, float b) {
-  f = max(f, b)*0.7;
+  f = max(f, b)*0.85;
   return min(f, 20.0);
 }
 
@@ -195,19 +188,21 @@ float calculateNewBackground(coord_t i) {
 }
 
 void updateBgAverage() {
-  #ifdef RECESSED
-    if (door_state == DOOR_CLOSED) {
-      return;
-    }
-  #endif
-
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    if (frames_since_door_open == 0 &&
+          #ifndef RECESSED
+          SIDE2(i) &&
+          #endif
+          (previous_door_state == DOOR_CLOSED || door_state == DOOR_OPEN)) {
+      // door just opened, reset avg_pixels to current foreground average
+      float cavg = SIDE1(i) ? cavg1 : cavg2;
+      avg_pixels[i] = floatToFint3(cavg);
+      continue;
+    }
+
+    // door is ajar, don't bother updating background for side of door
+    // since it's just the top of the door
     if (door_state == DOOR_AJAR && SIDE(i) == ajar_side) continue;
-    #ifndef RECESSED
-      if (door_state == DOOR_CLOSED && SIDE2(i)) {
-        return;
-      }
-    #endif
 
     // yes we can use += here and rely on type promotion, but I want to be absolutely
     // explicit that we need to use int32_t and not int16_t to avoid overflow

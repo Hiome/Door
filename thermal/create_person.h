@@ -1,3 +1,6 @@
+// ignore what looks to be a door
+if (points[i].width == 7 && points[i].height < 2) continue;
+
 // new point appeared (no past point found), start tracking it
 coord_t sp = points[i].current_position;
 float bgm = points[i].bgm();
@@ -17,17 +20,7 @@ if (points[i].height && normalizeAxis(AXIS(sp)) == 4) {
   }
 }
 
-#ifdef RECESSED
-  if (door_state == DOOR_CLOSED ||
-      (door_state == DOOR_AJAR && SIDE(sp) == ajar_side)) {
-    continue;
-  }
-#else
-  if ((door_state == DOOR_CLOSED && SIDE2(sp)) ||
-      (door_state == DOOR_AJAR && SIDE1(sp))) {
-    continue;
-  }
-#endif
+if (door_state == DOOR_AJAR && SIDE(sp) == ajar_side) continue;
 
 Person p = {
   .past_position=points[i].current_position,

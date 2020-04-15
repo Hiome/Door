@@ -2,6 +2,7 @@
 #define DOOR_OPEN   1
 #define DOOR_AJAR   2
 
+uint8_t previous_door_state = DOOR_CLOSED;
 uint8_t door_state = DOOR_OPEN;
 uint8_t last_published_door_state = 9; // initialize to something invalid to force first loop
 uint8_t frames_since_door_open = 0;
@@ -35,6 +36,7 @@ bool checkDoorState() {
   }
 
   if (last_door_state != door_state) {
+    previous_door_state = last_door_state;
     frames_since_door_open = 0;
     return true;
   }
