@@ -13,19 +13,14 @@ for (idx_t j=0; j<total_masses; j++) {
 
   // can't jump too far
   float d = euclidean_distance(p.past_position, pp.current_position);
-  float maxDpoint = pp.max_distance();
-  if (d > max(maxDpoint, maxDperson)) continue;
+  if (d > maxDperson) continue;
 
   // can't shift temperature too much
   float tempDiff = p.difference_from_point(pp.current_position);
-  float maxTpoint = pp.max_allowed_temp_drift();
-  maxTpoint = max(maxTperson, maxTpoint);
-  if (tempDiff > maxTpoint) continue;
+  if (tempDiff > maxTperson) continue;
 
   float score = sq(d/maxDperson) + sq(tempDiff/maxTperson);
-  if (p.side() == p.starting_side() || pointOnSmallBorder(p.starting_position)) {
-    score -= (0.02*((float)pp.neighbors));
-  }
+  score -= (0.01*((float)pp.neighbors));
 
   if (score <= (min_score - 0.05) || (score < (min_score + 0.05) &&
         tempDiff < p.difference_from_point(points[min_index].current_position))) {

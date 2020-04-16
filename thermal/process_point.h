@@ -11,7 +11,7 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
   if (!p.real()) continue;
 
   // prefer people with more neighbors
-  score = (0.03*((float)p.neighbors));
+  score = (0.01*((float)p.neighbors));
 
   // prefer people with more similar temps
   float tempDiff = p.difference_from_point(points[i].current_position);
