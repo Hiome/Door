@@ -12,12 +12,12 @@ for (idx_t j=0; j<total_masses; j++) {
   // can't jump too far
   float d = euclidean_distance(p.past_position, points[j].current_position);
   float maxDpoint = points[j].max_distance();
-  if (d > min(maxDperson, maxDpoint)) continue;
+  if (d > max(maxDperson, maxDpoint)) continue;
 
   // can't shift temperature too much
   float tempDiff = p.difference_from_point(points[j].current_position);
   float maxTpoint = points[j].max_allowed_temp_drift();
-  if (tempDiff > min(maxTperson, maxTpoint)) continue;
+  if (tempDiff > max(maxTperson, maxTpoint)) continue;
 
   float score = sq(d/maxDperson) + sq(tempDiff/maxTperson);
   score -= (0.01*((float)(points[j].neighbors)));

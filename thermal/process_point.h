@@ -43,7 +43,7 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
 for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
   if (pairs[idx] != i || idx == max_idx) continue;
   // does this look like two blobs combining into one?
-  if (idx < MAX_PEOPLE) {
+  if (idx < MAX_PEOPLE && known_people[idx].real()) {
     if (points[i].confidence > 50 && points[i].neighbors >= 4 &&
           known_people[idx].count > 1 && known_people[idx].confidence > 50 &&
           // new point is a merger, so must be bigger than old person
