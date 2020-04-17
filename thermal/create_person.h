@@ -10,7 +10,7 @@ if (points[i].height && normalizeAxis(AXIS(sp)) == 4) {
   // if point is right in middle, drag it to the side it appears to be coming from
   coord_t spa = sp - GRID_EXTENT;
   coord_t spb = sp + GRID_EXTENT;
-  float maxTemp = maxTempDiffForTemps(fgm, bgm);
+  float maxTemp = min(fgm, bgm);
   if (SIDE1(sp)) {
     if (compareNeighboringPixels(spb,spa,sp,maxTemp)) {
       sp += GRID_EXTENT;

@@ -21,7 +21,9 @@ typedef struct {
     return calcMaxDistance(height, width, neighbors, confidence);
   };
   float     max_allowed_temp_drift() {
-    return maxTempDiffForTemps(fgm(), bgm());
+    float f = fgm();
+    float b = bgm();
+    return max(f, b);
   };
 } PossiblePerson;
 
@@ -71,7 +73,7 @@ typedef struct {
     return calcMaxDistance(height, width, neighbors, confidence);
   };
   float     max_allowed_temp_drift() {
-    return maxTempDiffForTemps(fgm, bgm);
+    return max(fgm, bgm);
   };
   float     difference_from_point(coord_t a) {
     return abs(raw_pixels[(a)] - raw_temp);
@@ -245,7 +247,7 @@ void clearPointsAfterDoorClose() {
   }
 }
 
-void forget_person(idx_t idx, uint8_t expiration = MAX_EMPTY_CYCLES) {
+void forget_person(idx_t idx, idx_t (&pairs)[MAX_PEOPLE*2], uint8_t expiration = MAX_EMPTY_CYCLES) {
   idx_t useIdx = UNDEF_INDEX;
   uint8_t min_conf = known_people[idx].confidence;
   for (idx_t j = 0; j < MAX_PEOPLE; j++) {
@@ -262,7 +264,9 @@ void forget_person(idx_t idx, uint8_t expiration = MAX_EMPTY_CYCLES) {
   if (useIdx != UNDEF_INDEX) {
     // we found a slot! save person in there
     if (forgotten_people[useIdx].real()) {
+      // clear old slot first
       forgotten_people[useIdx].publishMaybeEvent();
+      pairs[useIdx+MAX_PEOPLE] = UNDEF_INDEX;
     }
     if (known_people[idx].forgotten_count < 250) {
       ++known_people[idx].forgotten_count;
@@ -319,9 +323,9 @@ bool updateKnownPerson(Person p, idx_t (&pairs)[MAX_PEOPLE*2]) {
   if (useIdx != UNDEF_INDEX) {
     // we found a slot! save person in there
     if (known_people[useIdx].real()) {
-      forget_person(useIdx);
-      pairs[(useIdx)] = UNDEF_INDEX;
+      forget_person(useIdx, pairs);
     }
+    pairs[(useIdx)] = UNDEF_INDEX;
     known_people[useIdx] = p;
     return true;
   }

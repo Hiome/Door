@@ -8,6 +8,7 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
     PossiblePerson pp = points[i];
 
     fint1_t td = floatToFint1(p.difference_from_point(pp.current_position));
+    if (td > 250) td = 250;
     p.max_temp_drift = max(p.max_temp_drift, td);
 
     if (p.past_position != pp.current_position) {
@@ -91,7 +92,7 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
     } else {
       // this is a forgotten person, free up its forgotten slot
       forgotten_people[idx-MAX_PEOPLE] = UNDEF_PERSON;
-      pairs[idx-MAX_PEOPLE] = UNDEF_INDEX;
+      pairs[idx] = UNDEF_INDEX;
       // and then insert it into known_people instead
       if (updateKnownPerson(p, pairs)) added = true;
     }

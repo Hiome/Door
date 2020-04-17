@@ -21,6 +21,8 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
   float d = euclidean_distance(p.past_position, points[i].current_position);
   score -= sq(d/maxD);
 
+  score -= (float(p.confidence)/float(points[i].confidence*10.0));
+
   if (score >= max_score + 0.05) {
     max_score = score;
     max_idx = idx;
@@ -50,11 +52,13 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
           points[i].blobSize > known_people[idx].blobSize &&
           // old person should be at least 1/4th this point's size to bother remembering
           known_people[idx].blobSize*4 > points[i].blobSize) {
-      forget_person(idx, (5*MAX_EMPTY_CYCLES));
+      forget_person(idx, pairs, (5*MAX_EMPTY_CYCLES));
     } else {
-      forget_person(idx);
+      forget_person(idx, pairs);
     }
   }
   pairs[idx] = UNDEF_INDEX;
-  --taken[i]; // don't break when this reaches 1 because it's possible to get to 0 too
 }
+
+// we found a match
+taken[i] = max_idx == UNDEF_INDEX ? 0 : 1;

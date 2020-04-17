@@ -12,15 +12,16 @@ for (idx_t j=0; j<total_masses; j++) {
   // can't jump too far
   float d = euclidean_distance(p.past_position, points[j].current_position);
   float maxDpoint = points[j].max_distance();
-  if (d > max(maxDperson, maxDpoint)) continue;
+  if (d > min(maxDperson, maxDpoint)) continue;
 
   // can't shift temperature too much
   float tempDiff = p.difference_from_point(points[j].current_position);
   float maxTpoint = points[j].max_allowed_temp_drift();
-  if (tempDiff > max(maxTperson, maxTpoint)) continue;
+  if (tempDiff > min(maxTperson, maxTpoint)) continue;
 
   float score = sq(d/maxDperson) + sq(tempDiff/maxTperson);
   score -= (0.01*((float)(points[j].neighbors)));
+  score -= (float(points[j].confidence)/float(p.confidence*10.0));
 
   if (score <= (min_score - 0.05) || (score < (min_score + 0.05) &&
         tempDiff < p.difference_from_point(points[min_index].current_position))) {
@@ -34,7 +35,7 @@ for (idx_t j=0; j<total_masses; j++) {
 if (min_index == UNDEF_INDEX) {
   // still not found...
   if (idx < MAX_PEOPLE) {
-    forget_person(idx);
+    forget_person(idx, pairs);
   }
 } else {
   ++taken[min_index];

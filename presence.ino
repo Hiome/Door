@@ -54,23 +54,34 @@ bool processSensor() {
   // "I don't know who you are or what you want, but you should know that I have a
   // very particular set of skills that make me a nightmare for people like you.
   // I will find you, I will track you, and I will turn the lights on for you."
-  uint8_t taken[MAX_PEOPLE*2] = { 0 };
+  uint8_t taken[MAX_PEOPLE] = { 0 };
   idx_t pairs[MAX_PEOPLE*2];
 
   for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
     pairs[idx] = UNDEF_INDEX;
+    // each person swipes left on new points
     #include "thermal/process_person.h"
   }
 
   for (idx_t i=0; i<total_masses; i++) {
     if (taken[i] > 1) {
+      // each point swipes left on people who swiped it
       #include "thermal/process_point.h"
     }
+  }
 
+  for (idx_t i=0; i<total_masses; i++) {
+    if (taken[i] == 0) {
+      // this point got no matches, try again
+      #include "thermal/process_point_again.h"
+    }
     if (taken[i] == 1) {
+      // this point has a match, pair them
       #include "thermal/continue_person.h"
     }
     if (taken[i] == 0) {
+      // this point really has no hope of matching,
+      // so create a new person instead
       #include "thermal/create_person.h"
     }
   }

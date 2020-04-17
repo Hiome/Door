@@ -40,12 +40,14 @@ uint8_t findCurrentPoints() {
     bool added = false;
     float fgd = fgDiff(i);
     float bgd = bgDiff(i);
-    float mt = maxTempDiffForTemps(fgd, bgd);
+    float mt = min(fgd, bgd);
     uint8_t nci = neighborsCount(i, mt, norm_pixels);
     for (uint8_t j=0; j<z; j++) {
       coord_t oj = sibling_indexes[j];
-      if ((norm_pixels[i]*2) > norm_pixels[oj] && diffFromPoint(oj, i) < min(fgd/4, 1)) {
-        float mt2 = maxTempDiffForPoint(ordered_indexes[j]);
+      if ((norm_pixels[i]*2) > norm_pixels[oj] && diffFromPoint(oj, i) < min(mt/4, 1)) {
+        float fgd2 = fgDiff(ordered_indexes[j]);
+        float bgd2 = bgDiff(ordered_indexes[j]);
+        float mt2 = min(fgd2, bgd2);
         uint8_t ncj = neighborsCount(ordered_indexes[j], mt2, norm_pixels);
         if (nci > (ncj + 1)) {
           // prefer the point that's more in middle of blob
@@ -106,64 +108,35 @@ uint8_t findCurrentPoints() {
     ordered_indexes[y] = UNDEF_POINT;
     float fgd = fgDiff(current_point);
     float bgd = bgDiff(current_point);
-    float mt = maxTempDiffForTemps(fgd, bgd);
+    float mt = min(fgd, bgd);
     uint8_t neighbors = 0;
-
-    // scan all points added after current_point, since they must be part of same blob
-    for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
-      coord_t blobPoint = ordered_indexes_temp[x];
-      float mtb;
-      if (blobPoint == current_point) {
-        mtb = mt;
-      } else {
-        mtb = maxTempDiffForPoint(blobPoint);
-      }
-
-      for (uint8_t k=y+1; k<active_pixel_count; k++) {
-        // scan all known points after current_point to find neighbors to point x
-        if (ordered_indexes[k] != UNDEF_POINT &&
-            isNeighborly(ordered_indexes[k], blobPoint) &&
-            (diffFromPoint(ordered_indexes[k], blobPoint) < mtb ||
-              diffFromPoint(ordered_indexes[k], current_point) < mt)) {
-          clusterNum[ordered_indexes[k]] = clusterIdx;
-          ordered_indexes_temp[sorted_size] = ordered_indexes[k];
-          sorted_size++;
-          ordered_indexes[k] = UNDEF_POINT;
-          if (blobPoint == current_point) neighbors++;
-        }
-      }
-    }
-
-    // check if point is too small/large to be a valid person
     uint8_t blobSize = 1;
-    uint8_t totalBlobSize = 1;
     axis_t minAxis = AXIS(current_point);
     axis_t maxAxis = minAxis;
     axis_t minNAxis = NOT_AXIS(current_point);
     axis_t maxNAxis = minNAxis;
-    for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
-      if (clusterNum[n] == clusterIdx && n != current_point) {
-        totalBlobSize++;
 
-        float dp = diffFromPoint(n, current_point);
-        if (dp > mt) continue;
-
-        blobSize++;
-        axis_t axisn = AXIS(n);
-        minAxis = min(minAxis, axisn);
-        maxAxis = max(maxAxis, axisn);
-        axis_t naxisn = NOT_AXIS(n);
-        minNAxis = min(minNAxis, naxisn);
-        maxNAxis = max(maxNAxis, naxisn);
+    // scan all points added after current_point, since they must be part of same blob
+    for (uint8_t x=sorted_size-1; x<sorted_size; x++) {
+      for (uint8_t k=y+1; k<active_pixel_count; k++) {
+        // scan all known points after current_point to find neighbors to point x
+        if (ordered_indexes[k] != UNDEF_POINT &&
+            isNeighborly(ordered_indexes[k], ordered_indexes_temp[x]) &&
+            diffFromPoint(ordered_indexes[k], current_point) < mt) {
+          clusterNum[ordered_indexes[k]] = clusterIdx;
+          ordered_indexes_temp[sorted_size] = ordered_indexes[k];
+          sorted_size++;
+          blobSize++;
+          axis_t axisn = AXIS(ordered_indexes[k]);
+          minAxis = min(minAxis, axisn);
+          maxAxis = max(maxAxis, axisn);
+          axis_t naxisn = NOT_AXIS(ordered_indexes[k]);
+          minNAxis = min(minNAxis, naxisn);
+          maxNAxis = max(maxNAxis, naxisn);
+          if (ordered_indexes_temp[x] == current_point) neighbors++;
+          ordered_indexes[k] = UNDEF_POINT;
+        }
       }
-    }
-
-    if (totalBlobSize > 50) {
-      // should never happen, but ensure there's no overflow
-      SERIAL_PRINT(F("x "));
-      SERIAL_PRINT(current_point);
-      SERIAL_PRINTLN(F(" toobig"));
-      continue;
     }
 
     uint8_t height = maxAxis - minAxis;
@@ -172,7 +145,7 @@ uint8_t findCurrentPoints() {
     uint8_t boundingBox = min(dimension, 5);
     // ignore a blob that fills less than 1/3 of its bounding box
     // a blob with 9 points will always pass density test
-    if ((totalBlobSize + min((uint8_t)fgd, (uint8_t)bgd))*3 >= sq(boundingBox)) {
+    if ((blobSize + (uint8_t)mt)*3 >= sq(boundingBox)) {
       uint8_t noiseSize = 0;
       float mt_constrained = mt*0.7;
       mt_constrained = constrain(mt_constrained, 0.51, 1.51);
