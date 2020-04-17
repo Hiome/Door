@@ -34,7 +34,8 @@ if [[ $1 == 'compile' ]]; then
 fi
 
 if [[ $1 == 'listen' ]]; then
-  $DIR_PATH/read_sensor.py
+  fn=$(date +"%FT%H%M%S")
+  $DIR_PATH/read_sensor.py > "${fn}.txt"
   exit 0
 fi
 
