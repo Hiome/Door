@@ -268,9 +268,9 @@ void forget_person(idx_t idx, idx_t (&pairs)[MAX_PEOPLE*2], uint8_t expiration =
       forgotten_people[useIdx].publishMaybeEvent();
       pairs[useIdx+MAX_PEOPLE] = UNDEF_INDEX;
     }
-    if (known_people[idx].forgotten_count < 250) {
-      ++known_people[idx].forgotten_count;
-    }
+    // if (known_people[idx].forgotten_count < 250) {
+    //   ++known_people[idx].forgotten_count;
+    // }
     forgotten_people[useIdx] = known_people[idx];
     forgotten_expirations[useIdx] = expiration;
   }
