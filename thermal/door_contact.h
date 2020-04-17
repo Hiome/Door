@@ -31,7 +31,7 @@ bool checkDoorState() {
   door_state = readDoorState();
 
   if (door_state != last_published_door_state && hiome.publish(
-    (door_state == DOOR_CLOSED ? "d0" : (door_state == DOOR_OPEN ? "d1" : "d2")), "0", 0)) {
+    (door_state == DOOR_CLOSED ? "d0" : (door_state == DOOR_OPEN ? "d1" : "d2")), "0", 0, SERIAL_DEBUG)) {
     last_published_door_state = door_state;
   }
 
@@ -42,4 +42,12 @@ bool checkDoorState() {
   }
 
   return false;
+}
+
+bool doorSide(coord_t i) {
+  #ifdef RECESSED
+    return true;
+  #else
+    return SIDE2(i);
+  #endif
 }

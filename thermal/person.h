@@ -102,7 +102,7 @@ typedef struct {
   uint8_t _publishFrd(const char* msg, uint8_t retries = RETRY_COUNT) {
     char meta[METALENGTH];
     generateMeta(meta);
-    return hiome.publish(msg, meta, retries);
+    return hiome.publish(msg, meta, retries, SERIAL_DEBUG);
   };
 
   void publishPacket() {
@@ -225,18 +225,10 @@ void clearPointsAfterDoorClose() {
                       known_people[i].starting_side() == ajar_side)) {
           // door is ajar and this person is somehow on the side that the door is ajar
           clearPoint = true;
-        } else if (previous_door_state == DOOR_CLOSED) {
+        } else if (previous_door_state == DOOR_CLOSED &&
+                    doorSide(known_people[i].starting_position)) {
           // door just opened
-          #ifdef RECESSED
-            // always clear any points on grid when recessed door opens
-            clearPoint = true;
-          #else
-            // only clear points who started on side 2
-            // (where door was) when wired door opens
-            if (SIDE2(known_people[i].starting_position)) {
-              clearPoint = true;
-            }
-          #endif
+          clearPoint = true;
         }
 
         if (clearPoint) {
@@ -277,7 +269,6 @@ void forget_person(idx_t idx, uint8_t expiration = MAX_EMPTY_CYCLES) {
     }
     forgotten_people[useIdx] = known_people[idx];
     forgotten_expirations[useIdx] = expiration;
-    SERIAL_PRINTLN(F("s"));
   }
   known_people[(idx)] = UNDEF_PERSON;
 }
@@ -288,7 +279,6 @@ void expireForgottenPeople() {
       if (forgotten_expirations[i] == 0) {
         forgotten_people[i].publishMaybeEvent();
         forgotten_people[i] = UNDEF_PERSON;
-        SERIAL_PRINTLN(F("f"));
       } else {
         --forgotten_expirations[i];
       }

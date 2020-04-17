@@ -47,11 +47,7 @@ uint8_t calcFgm(coord_t i) {
 // calculate background gradient percent
 uint8_t calcBgm(coord_t i) {
   // skip calculating bgm if door is closed
-  #ifdef RECESSED
-  if (door_state == DOOR_CLOSED) {
-  #else
-  if (door_state == DOOR_CLOSED && SIDE2(i)) {
-  #endif
+  if (door_state == DOOR_CLOSED && doorSide(i)) {
     return 0;
   }
 
@@ -189,10 +185,7 @@ float calculateNewBackground(coord_t i) {
 
 void updateBgAverage() {
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (frames_since_door_open == 0 &&
-          #ifndef RECESSED
-          SIDE2(i) &&
-          #endif
+    if (frames_since_door_open == 0 && doorSide(i) &&
           (previous_door_state == DOOR_CLOSED || door_state == DOOR_OPEN)) {
       // door just opened, reset avg_pixels to current foreground average
       float cavg = SIDE1(i) ? cavg1 : cavg2;

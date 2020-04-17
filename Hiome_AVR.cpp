@@ -1,16 +1,12 @@
 #include "Hiome_AVR.h"
 
-void Hiome_AVR::begin() {
+void Hiome_AVR::begin(uint8_t nodeid, bool highPowerMode) {
   // setup LED's
   DDRB  = DDRB  | B00000010;  // set pin 9 as output
   ledOn();
 
-  SERIAL_START;
-
-  radio.initialize(RF69_915MHZ, NODEID, NETWORKID);
-  #ifdef R3
-    radio.setHighPower(); //must include this only for RFM69HW/HCW!
-  #endif
+  radio.initialize(RF69_915MHZ, nodeid, NETWORKID);
+  if (highPowerMode) radio.setHighPower();
   radio.encrypt(ENCRYPTKEY);
   radio.enableAutoPower(ATC_RSSI);
 
@@ -55,7 +51,6 @@ void Hiome_AVR::checkIfBatteryConnected() {
     b = b2;
     sleep(SLEEP_30MS);
   }
-  SERIAL_PRINTLN(total_change);
 }
 
 uint16_t Hiome_AVR::checkBattery() {
@@ -69,20 +64,19 @@ void Hiome_AVR::beatHeart(uint32_t maxBeats) {
   if (heartbeats > maxBeats) publish("h", "0", 0);
 }
 
-uint8_t Hiome_AVR::publish(const char* msg, const char* meta, uint8_t retries, uint8_t timeout) {
+uint8_t Hiome_AVR::publish(const char* msg, const char* meta, uint8_t retries, bool debug) {
   char sendBuf[60];
   int8_t len = sprintf(sendBuf, "%s;%s%u%u", msg, meta, checkBattery(), packetCount);
   if (len <= 0) return 0;
 
-  bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries, timeout);
+  bool success = radio.sendWithRetry(GATEWAYID, sendBuf, len, retries, RETRY_TIME);
 
-  #ifdef ENABLE_SERIAL
-    SERIAL_PRINT(F("p "));
-    SERIAL_PRINT(sendBuf);
-    if (!success) { SERIAL_PRINT(F(" x")); }
-    SERIAL_PRINTLN(F("\n\n"));
-//    SERIAL_FLUSH;
-  #endif
+  if (debug) {
+    Serial.print(F("p "));
+    Serial.print(sendBuf);
+    if (!success) { Serial.print(F(" x")); }
+    Serial.println(F("\n\n"));
+  }
 
   if (success) heartbeats = 0;
 

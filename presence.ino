@@ -1,3 +1,5 @@
+#include "config.h"
+
 #include "Hiome_AVR.h"
 #include <Hiome_AMG88xx.h>
 #include "thermal/types.h"
@@ -6,24 +8,37 @@
   #define PRINT_RAW_DATA      // uncomment to print graph of what sensor is seeing
 //  #define OPTIMIZE_FOR_SERIAL
 //  #define TIME_CYCLES
+
+  #define SERIAL_DEBUG      true
+  #define SERIAL_START      ( Serial.begin(115200) )
+  #define SERIAL_FLUSH      ( Serial.flush() )
+  #define SERIAL_PRINT(a)   ( Serial.print(a) )
+  #define SERIAL_PRINTLN(a) ( Serial.println(a) )
+#else
+  #define SERIAL_DEBUG      false
+  #define SERIAL_START
+  #define SERIAL_FLUSH
+  #define SERIAL_PRINT(a)
+  #define SERIAL_PRINTLN(a)
 #endif
 
-#define FIRMWARE_VERSION        "V20.4.15"
+#define FIRMWARE_VERSION        "V20.4.16"
 
 Hiome_AVR hiome;
 Hiome_AMG88xx amg;
 
 #ifdef R3
   #define AMG_ADDR              0x68
+  #define RFM_HCW               true
 #else
   #define AMG_ADDR              0x69
+  #define RFM_HCW               false
 #endif
 
 const uint8_t GRID_EXTENT            = 8;    // size of grid (8x8)
 const uint8_t MIN_HISTORY            = 3;    // min number of times a point needs to be seen
 const uint8_t MAX_PEOPLE             = 4;    // most people we support in a single frame
 const uint8_t MAX_EMPTY_CYCLES       = 2;    // cycles to remember forgotten points
-const uint8_t MAX_FORGOTTEN_COUNT    = 2;    // max number of times allowed to forget someone
 const uint8_t MAX_DOOR_CHANGE_FRAMES = 5;    // cycles we keep counting after door changes
 const uint8_t CONFIDENCE_THRESHOLD   = 10;   // min 10% confidence required
 const uint8_t MIN_TEMP               = 2;    // ignore all points colder than 2º C
@@ -103,7 +118,9 @@ void runThermalLoop() {
 }
 
 void setup() {
-  hiome.begin();
+  SERIAL_START;
+
+  hiome.begin(NODEID, RFM_HCW);
   hiome.ledOn();
 
   amg.begin(AMG_ADDR);
@@ -113,7 +130,7 @@ void setup() {
   PORTD = PORTD | B00011000;  // pull pins 3 and 4 high
 
   hiome.sleep(SLEEP_1S);
-  hiome.publish(FIRMWARE_VERSION, "0", RETRY_COUNT*2);
+  hiome.publish(FIRMWARE_VERSION, "0", RETRY_COUNT*2, SERIAL_DEBUG);
 
   // give sensor 16sec to stabilize
   hiome.sleep(SLEEP_8S);

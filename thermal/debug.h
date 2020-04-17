@@ -1,4 +1,5 @@
 void printDebugInfo() {
+  SERIAL_PRINT(F("C: "));
   for (idx_t i = 0; i<MAX_PEOPLE; i++) {
     if (known_people[i].real()) {
       SERIAL_PRINT(known_people[i].past_position);
@@ -12,6 +13,7 @@ void printDebugInfo() {
     }
   }
   SERIAL_PRINTLN();
+  SERIAL_PRINT(F("F: "));
   for (idx_t i = 0; i<MAX_PEOPLE; i++) {
     if (forgotten_people[i].real()) {
       SERIAL_PRINT(forgotten_people[i].past_position);
@@ -30,7 +32,9 @@ void printDebugInfo() {
   SERIAL_PRINT(F(", "));
   SERIAL_PRINTLN(cavg2);
   // SERIAL_PRINTLN(amg.readThermistor());
+  SERIAL_PRINT(F("b: "));
   SERIAL_PRINTLN(global_bgm);
+  SERIAL_PRINT(F("f: "));
   SERIAL_PRINTLN(global_fgm);
   // float avg_avg = 0;
   // for (uint8_t idx=0; idx<AMG88xx_PIXEL_ARRAY_SIZE; idx++) {
@@ -65,5 +69,4 @@ void printDebugInfo() {
   //  if (xCoord(idx) == GRID_EXTENT) SERIAL_PRINTLN();
   // }
   SERIAL_PRINTLN();
-  // SERIAL_FLUSH;
 }
