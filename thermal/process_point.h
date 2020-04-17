@@ -49,15 +49,12 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
           // new point is a merger, so must be bigger than old person
           points[i].blobSize > known_people[idx].blobSize &&
           // old person should be at least 1/4th this point's size to bother remembering
-          known_people[idx].blobSize*4 > points[i].blobSize &&
-          known_people[idx].forgotten_count < MAX_FORGOTTEN_COUNT) {
-      store_forgotten_person(idx, (5*MAX_EMPTY_CYCLES));
-      known_people[idx] = UNDEF_PERSON;
+          known_people[idx].blobSize*4 > points[i].blobSize) {
+      forget_person(idx, (5*MAX_EMPTY_CYCLES));
     } else {
-      forget_person(idx, pairs);
+      forget_person(idx);
     }
   }
   pairs[idx] = UNDEF_INDEX;
-  taken[i]--;
-  if (taken[i] == 1) break;
+  --taken[i]; // don't break when this reaches 1 because it's possible to get to 0 too
 }

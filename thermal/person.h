@@ -39,9 +39,8 @@ typedef struct {
   bool      retreating        :1; // 0-1
   uint8_t   neighbors         :4; // 0-8
 
-  uint8_t   height            :3; // 0-7
-  uint8_t   forgotten_count   :2; // 0-2
-  uint8_t   width             :3; // 0-7
+  uint8_t   height            :4; // 0-7 (only need 3 bits)
+  uint8_t   width             :4; // 0-7 (only need 3 bits)
 
   uint8_t   crossed           :4; // 0-9
   uint8_t   max_jump          :4; // 0-7 (only need 3 bits)
@@ -53,6 +52,7 @@ typedef struct {
   uint8_t   avg_confidence;
   uint8_t   blobSize;
   uint8_t   noiseSize;
+  uint8_t   forgotten_count;
 
   uint16_t  avg_bgm;
   uint16_t  avg_fgm;
@@ -77,9 +77,9 @@ typedef struct {
     return abs(raw_pixels[(a)] - raw_temp);
   };
 
-  #define METALENGTH  48
+  #define METALENGTH  50
   void generateMeta(char *meta) {
-    // TODO add reporting of (uint8_t)raw_temp too
+    // TODO add reporting of (uint8_t)raw_temp and drop history
     sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
       avg_confidence,                     // 3  100
       avg_bgm,                            // 4  1020
@@ -95,11 +95,11 @@ typedef struct {
       max_jump,                           // 1  5
       noiseSize,                          // 2  60
       max_temp_drift,                     // 3  250
-      forgotten_count                     // 1  3
-    );                                    // + 14 'x' + 1 null => 48 total
+      forgotten_count                     // 3  250
+    );                                    // + 14 'x' + 1 null => 50 total
   };
 
-  uint8_t _publishFrd(const char* msg, uint8_t retries) {
+  uint8_t _publishFrd(const char* msg, uint8_t retries = RETRY_COUNT) {
     char meta[METALENGTH];
     generateMeta(meta);
     return hiome.publish(msg, meta, retries);
@@ -107,14 +107,14 @@ typedef struct {
 
   void publishPacket() {
     if (SIDE1(past_position)) {
-      crossed = _publishFrd("1", RETRY_COUNT);
+      crossed = _publishFrd("1");
       if (!crossed) return;
       // artificially shift starting point ahead 1 row so that
       // if user turns around now, algorithm considers it an exit
       int8_t s = ((int8_t)past_position) - ((int8_t)GRID_EXTENT);
       starting_position = max(s, 0);
     } else {
-      crossed = _publishFrd("2", RETRY_COUNT);
+      crossed = _publishFrd("2");
       if (!crossed) return;
       uint8_t s = past_position + GRID_EXTENT;
       starting_position = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
@@ -174,7 +174,6 @@ const Person UNDEF_PERSON = {
   .retreating=false,
   .neighbors=0,
   .height=0,
-  .forgotten_count=0,
   .width=0,
   .crossed=0,
   .max_jump=0,
@@ -184,6 +183,7 @@ const Person UNDEF_PERSON = {
   .avg_confidence=0,
   .blobSize=0,
   .noiseSize=0,
+  .forgotten_count=0,
   .avg_bgm=0,
   .avg_fgm=0,
   .raw_temp=0,
@@ -253,7 +253,7 @@ void clearPointsAfterDoorClose() {
   }
 }
 
-void store_forgotten_person(idx_t idx, uint8_t cnt) {
+void forget_person(idx_t idx, uint8_t expiration = MAX_EMPTY_CYCLES) {
   idx_t useIdx = UNDEF_INDEX;
   uint8_t min_conf = known_people[idx].confidence;
   for (idx_t j = 0; j < MAX_PEOPLE; j++) {
@@ -272,11 +272,14 @@ void store_forgotten_person(idx_t idx, uint8_t cnt) {
     if (forgotten_people[useIdx].real()) {
       forgotten_people[useIdx].publishMaybeEvent();
     }
-    known_people[idx].forgotten_count++;
+    if (known_people[idx].forgotten_count < 250) {
+      ++known_people[idx].forgotten_count;
+    }
     forgotten_people[useIdx] = known_people[idx];
-    forgotten_expirations[useIdx] = cnt;
+    forgotten_expirations[useIdx] = expiration;
     SERIAL_PRINTLN(F("s"));
   }
+  known_people[(idx)] = UNDEF_PERSON;
 }
 
 void expireForgottenPeople() {
@@ -287,21 +290,10 @@ void expireForgottenPeople() {
         forgotten_people[i] = UNDEF_PERSON;
         SERIAL_PRINTLN(F("f"));
       } else {
-        forgotten_expirations[i]--;
+        --forgotten_expirations[i];
       }
     }
   }
-}
-
-void forget_person(idx_t idx, idx_t (&pairs)[MAX_PEOPLE*2]) {
-  if (known_people[(idx)].forgotten_count < MAX_FORGOTTEN_COUNT) {
-    store_forgotten_person(idx, MAX_EMPTY_CYCLES);
-  } else {
-    // we're giving up on this point, but at least publish what we have
-    known_people[(idx)].publishMaybeEvent();
-  }
-  pairs[(idx)] = UNDEF_INDEX;
-  known_people[(idx)] = UNDEF_PERSON;
 }
 
 Person getPersonFromIdx(idx_t idx) {
@@ -337,7 +329,8 @@ bool updateKnownPerson(Person p, idx_t (&pairs)[MAX_PEOPLE*2]) {
   if (useIdx != UNDEF_INDEX) {
     // we found a slot! save person in there
     if (known_people[useIdx].real()) {
-      forget_person(useIdx, pairs);
+      forget_person(useIdx);
+      pairs[(useIdx)] = UNDEF_INDEX;
     }
     known_people[useIdx] = p;
     return true;
