@@ -141,11 +141,11 @@ typedef struct {
       publishPacket();
       return true;
     } else if (avg_fgm > 100 && avg_bgm > 100 &&
-                axis_distance(max_position, starting_position) > 2) {
-      if (axis_distance(max_position, past_position) > 2) {
+                axis_distance(max_position, starting_position) >= 2) {
+      if (axis_distance(max_position, past_position) >= 2) {
         if (crossed && SIDE(max_position) == starting_side()) return false;
         starting_position = max_position;
-      } else if (axis_distance(starting_position, past_position) <= 2) return false;
+      } else if (axis_distance(starting_position, past_position) < 2) return false;
 
       if (crossed) {
         char rBuf[3];
