@@ -79,33 +79,32 @@ void calculateBgm() {
 }
 
 float trimMean(uint8_t side) {
-  coord_t sortedPixels[32];
-  uint8_t total = 0;
-  coord_t maxI = 32*side;
-  for (coord_t i = (maxI - 32); i < maxI; i++) {
+  coord_t sortedPixels[(AMG88xx_PIXEL_ARRAY_SIZE/2)];
+  uint8_t baseLine = side == 1 ? 0 : (AMG88xx_PIXEL_ARRAY_SIZE/2);
+  for (uint8_t i = 0; i < (AMG88xx_PIXEL_ARRAY_SIZE/2); i++) {
     // sort clusters by raw temp
+    coord_t n = i + baseLine;
     bool added = false;
-    for (uint8_t j=0; j<total; j++) {
-      if (constrainedPixel(i) > constrainedPixel(sortedPixels[j])) {
-        for (int8_t x=total; x>j; x--) {
+    for (uint8_t j=0; j<i; j++) {
+      if (constrainedPixel(n) > constrainedPixel(sortedPixels[j])) {
+        for (int8_t x=i; x>j; x--) {
           sortedPixels[x] = sortedPixels[(x-1)];
         }
-        sortedPixels[j] = i;
+        sortedPixels[j] = n;
         added = true;
         break;
       }
     }
     if (!added) {
-      // append i to end of array
-      sortedPixels[total] = i;
+      // append n to end of array
+      sortedPixels[i] = n;
     }
-    total++;
   }
 
   float avg = 0;
-  total = 0;
-  for (idx_t i = 0; i < 26; i++) {
-    // drop the top 6 warmest points when calculating mean to skew it lower
+  uint8_t total = 0;
+  for (uint8_t i=6; i < (AMG88xx_PIXEL_ARRAY_SIZE/2); i++) {
+    // drop the 6^ warmest points when calculating mean to skew it lower
     // this might cause issues if the person is actually cooler than the background,
     // such as when keith is sweaty. We shall see!
     avg += constrainedPixel(sortedPixels[i]);
