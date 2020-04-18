@@ -1,26 +1,49 @@
-// ignore what looks to be a door
-if (points[i].width == 7 && points[i].height < 2) continue;
-
 // new point appeared (no past point found), start tracking it
 coord_t sp = points[i].current_position;
 float bgm = points[i].bgm();
 float fgm = points[i].fgm();
 
-if (points[i].height && normalizeAxis(AXIS(sp)) == 4) {
-  // if point is right in middle, drag it to the side it appears to be coming from
-  coord_t spa = sp - GRID_EXTENT;
-  coord_t spb = sp + GRID_EXTENT;
-  float maxTemp = min(fgm, bgm);
-  if (SIDE1(sp)) {
-    if (compareNeighboringPixels(spb,spa,sp,maxTemp)) {
-      sp += GRID_EXTENT;
+// point is right in middle, drag it to the correct side
+if (normalizeAxis(AXIS(sp)) == 4) {
+  if (frames_since_door_open < 3) {
+    // door is currently ajar and point is on side of door
+    if ((SIDE(sp) == ajar_side && (door_state == DOOR_AJAR ||
+          // or door was ajar, so no way person is already at row 4
+          previous_door_state == DOOR_AJAR)) ||
+          // or door was closed and point was not behind the door
+          (previous_door_state == DOOR_CLOSED && !doorSide(sp))) {
+      // so drag drag drag
+      if (SIDE1(sp)) {
+        sp += GRID_EXTENT;
+      } else {
+        sp -= GRID_EXTENT;
+      }
     }
-  } else if (compareNeighboringPixels(spa,spb,sp,maxTemp)) {
-    sp -= GRID_EXTENT;
+  } else if (frames_since_door_open >= MAX_DOOR_CHANGE_FRAMES && points[i].height) {
+    // door didn't just open, but it's possible user doesn't have magnet installed
+    // so drag point to side where it has more heat
+    coord_t spa = sp - GRID_EXTENT;
+    coord_t spb = sp + GRID_EXTENT;
+    float maxTemp = min(fgm, bgm);
+    if (SIDE1(sp)) {
+      if (compareNeighboringPixels(spb,spa,sp,maxTemp)) {
+        sp += GRID_EXTENT;
+      }
+    } else if (compareNeighboringPixels(spa,spb,sp,maxTemp)) {
+      sp -= GRID_EXTENT;
+    }
   }
 }
 
-if (door_state == DOOR_AJAR && SIDE(sp) == ajar_side) continue;
+// door is currently ajar and point is on side of door
+if ((SIDE(sp) == ajar_side && (door_state == DOOR_AJAR ||
+    // or door was *just* ajar, so no way a point is already starting there
+    (previous_door_state == DOOR_AJAR && !frames_since_door_open))) ||
+    // or door was *just* closed and point is not behind that door
+    (previous_door_state == DOOR_CLOSED && !frames_since_door_open && !doorSide(sp))) {
+  // so ignore it
+  continue;
+}
 
 Person p = {
   .past_position=points[i].current_position,
