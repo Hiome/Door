@@ -25,7 +25,6 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
   score += (d/maxD);
   score -= (0.0001*p.confidence);
   score -= (0.01*p.neighbors);
-  score += (float(p.noiseSize)/float(p.blobSize));
 
   if (score > 1.6) continue;
 

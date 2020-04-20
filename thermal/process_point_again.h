@@ -21,7 +21,6 @@ for (idx_t fidx=0; fidx < MAX_PEOPLE; fidx++) {
   score += (d/maxDpoint);
   score -= (0.0001*forgotten_people[fidx].confidence);
   score -= (0.01*forgotten_people[fidx].neighbors);
-  score += (float(forgotten_people[fidx].noiseSize)/float(forgotten_people[fidx].blobSize));
 
   if (score > 1.6) continue;
 
