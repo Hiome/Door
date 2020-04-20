@@ -30,10 +30,9 @@ for (idx_t j=0; j<total_masses; j++) {
   float score = (d/maxDperson) + (tempDiff/maxTperson);
   score -= (0.0001*points[j].confidence);
   score -= (0.01*points[j].neighbors);
-  score -= (0.001*points[j].blobSize);
-  score += (0.01*points[j].noiseSize);
+  score += (float(points[j].noiseSize)/float(points[j].blobSize));
 
-  if (score > 1.8) continue;
+  if (score > 1.6) continue;
 
   if (score <= (min_score - 0.05) || (score < (min_score + 0.05) &&
         tempDiff < p.difference_from_point(points[min_index].current_position))) {
