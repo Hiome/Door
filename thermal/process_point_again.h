@@ -16,7 +16,9 @@ for (idx_t fidx=0; fidx < MAX_PEOPLE; fidx++) {
   float maxTperson = forgotten_people[fidx].max_allowed_temp_drift();
   if (tempDiff > min(maxTperson, maxTpoint) + 2) continue;
 
-  float score = (d/maxDpoint) + (tempDiff/maxTpoint);
+  float score = (tempDiff/maxTpoint);
+  score = min(score, 1.1);
+  score += (d/maxDpoint);
   score -= (0.0001*forgotten_people[fidx].confidence);
   score -= (0.01*forgotten_people[fidx].neighbors);
   score += (float(forgotten_people[fidx].noiseSize)/float(forgotten_people[fidx].blobSize));

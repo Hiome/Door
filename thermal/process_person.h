@@ -27,7 +27,11 @@ for (idx_t j=0; j<total_masses; j++) {
   float maxTpoint = points[j].max_allowed_temp_drift();
   if (tempDiff > min(maxTperson, maxTpoint) + 2) continue;
 
-  float score = (d/maxDperson) + (tempDiff/maxTperson);
+  // +1 from temp ratio, +1 from distance ratio,
+  // -0.1 from confidence, -0.08 from neighbors, +1 from noise ratio
+  float score = (tempDiff/maxTperson);
+  score = min(score, 1.1);
+  score += (d/maxDperson);
   score -= (0.0001*points[j].confidence);
   score -= (0.01*points[j].neighbors);
   score += (float(points[j].noiseSize)/float(points[j].blobSize));

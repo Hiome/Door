@@ -20,7 +20,9 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
   // prefer people with more similar temps
   float tempDiff = p.difference_from_point(points[i].current_position);
 
-  float score = (d/maxD) + (tempDiff/maxT);
+  float score = (tempDiff/maxT);
+  score = min(score, 1.1);
+  score += (d/maxD);
   score -= (0.0001*p.confidence);
   score -= (0.01*p.neighbors);
   score += (float(p.noiseSize)/float(p.blobSize));
