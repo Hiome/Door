@@ -23,7 +23,7 @@ typedef struct {
   float     max_allowed_temp_drift() {
     float f = fgm();
     float b = bgm();
-    return max(f, b) + 1.5;
+    return max(f, b);
   };
 } PossiblePerson;
 
@@ -73,7 +73,7 @@ typedef struct {
     return calcMaxDistance(height, width, neighbors, confidence);
   };
   float     max_allowed_temp_drift() {
-    return max(fgm, bgm) + 1.5;
+    return max(fgm, bgm);
   };
   float     difference_from_point(coord_t a) {
     return abs(raw_pixels[(a)] - raw_temp);
