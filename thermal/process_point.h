@@ -7,8 +7,14 @@ float maxD = points[i].max_distance();
 for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
   if (pairs[idx] != i) continue;
 
-  Person p = getPersonFromIdx(idx);
-  if (!p.real()) continue;
+  Person p;
+  if (idx < MAX_PEOPLE) {
+    if (!known_people[idx].real()) continue;
+    p = known_people[idx];
+  } else {
+    if (!forgotten_people[idx-MAX_PEOPLE].real()) continue;
+    p = forgotten_people[idx-MAX_PEOPLE];
+  }
 
   // prefer people with more neighbors
   score = (0.01*((float)p.neighbors));

@@ -38,16 +38,12 @@ uint8_t findCurrentPoints() {
   for (uint8_t z=0; z<active_pixel_count; z++) {
     coord_t i = ordered_indexes_temp[z];
     bool added = false;
-    float fgd = fgDiff(i);
-    float bgd = bgDiff(i);
-    float mt = min(fgd, bgd);
+    float mt = fgDiff(i);
     uint8_t nci = neighborsCount(i, mt, norm_pixels);
     for (uint8_t j=0; j<z; j++) {
       coord_t oj = sibling_indexes[j];
       if ((norm_pixels[i]*2) > norm_pixels[oj] && diffFromPoint(oj, i) < min(mt/4, 1)) {
-        float fgd2 = fgDiff(ordered_indexes[j]);
-        float bgd2 = bgDiff(ordered_indexes[j]);
-        float mt2 = min(fgd2, bgd2);
+        float mt2 = fgDiff(ordered_indexes[j]);
         uint8_t ncj = neighborsCount(ordered_indexes[j], mt2, norm_pixels);
         if (nci > (ncj + 1)) {
           // prefer the point that's more in middle of blob
@@ -106,9 +102,7 @@ uint8_t findCurrentPoints() {
     ordered_indexes_temp[sorted_size] = current_point;
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
-    float fgd = fgDiff(current_point);
-    float bgd = bgDiff(current_point);
-    float mt = min(fgd, bgd);
+    float mt = fgDiff(current_point);
     uint8_t neighbors = 0;
     uint8_t blobSize = 1;
     uint8_t suspiciousConnections = 0;
@@ -163,12 +157,14 @@ uint8_t findCurrentPoints() {
     uint8_t width = maxNAxis - minNAxis;
     uint8_t dimension = max(height, width) + 1;
     uint8_t boundingBox = min(dimension, 5);
+    uint8_t bgd = (uint8_t)bgDiff(current_point);
+    bgd = min(bgd, (uint8_t)mt);
     // ignore a blob that fills less than 1/3 of its bounding box
     // a blob with 9 points will always pass density test
-    if ((blobSize + (uint8_t)mt - suspiciousConnections)*3 >= sq(boundingBox)) {
+    if ((blobSize + bgd - suspiciousConnections)*3 >= sq(boundingBox)) {
       uint8_t noiseSize = 0;
       float mt_constrained = mt*0.7;
-      mt_constrained = constrain(mt_constrained, 0.51, 1.51);
+      mt_constrained = constrain(mt_constrained, 0.5, 1.5);
       for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
         if (clusterNum[n] == clusterIdx) continue;
 

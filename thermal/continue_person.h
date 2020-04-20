@@ -2,7 +2,7 @@
 bool added = false;
 for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
   if (pairs[idx] == i) {
-    Person p = getPersonFromIdx(idx);
+    Person p = idx < MAX_PEOPLE ? known_people[idx] : forgotten_people[idx-MAX_PEOPLE];
     if (!p.real()) break;
 
     PossiblePerson pp = points[i];

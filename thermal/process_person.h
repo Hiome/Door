@@ -1,6 +1,14 @@
 // find which point this person is most interested in pairing with
-Person p = getPersonFromIdx(idx);
-if (!p.real()) continue;
+Person p;
+if (idx < MAX_PEOPLE) {
+  if (!known_people[idx].real()) continue;
+  p = known_people[idx];
+} else {
+  if (!forgotten_people[idx-MAX_PEOPLE].real()) continue;
+  // don't process point that was forgotten earlier in this loop again
+  if (forgotten_expirations[idx-MAX_PEOPLE] == MAX_EMPTY_CYCLES) continue;
+  p = forgotten_people[idx-MAX_PEOPLE];
+}
 
 idx_t min_index = UNDEF_INDEX;
 float min_score = 100;

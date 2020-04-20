@@ -175,17 +175,13 @@ float calculateNewBackground(coord_t i) {
 
 void updateBgAverage() {
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    if (frames_since_door_open < 3 && doorSide(i) &&
-          (previous_door_state == DOOR_CLOSED || door_state == DOOR_OPEN)) {
-      // door just opened, reset avg_pixels to current foreground average
+    if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) {
+      // door just changed, reset avg_pixels to current foreground average
+      // since we know nothing about this brave new world's background
       float cavg = SIDE1(i) ? cavg1 : cavg2;
       avg_pixels[i] = floatToFint3(cavg);
       continue;
     }
-
-    // door is ajar, don't bother updating background for side of door
-    // since it's just the top of the door
-    if (door_state == DOOR_AJAR && SIDE(i) == ajar_side) continue;
 
     // yes we can use += here and rely on type promotion, but I want to be absolutely
     // explicit that we need to use int32_t and not int16_t to avoid overflow

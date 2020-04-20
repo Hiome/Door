@@ -23,7 +23,7 @@ typedef struct {
   float     max_allowed_temp_drift() {
     float f = fgm();
     float b = bgm();
-    return (f + b)/2;
+    return max(f, b) + 1.5;
   };
 } PossiblePerson;
 
@@ -73,7 +73,7 @@ typedef struct {
     return calcMaxDistance(height, width, neighbors, confidence);
   };
   float     max_allowed_temp_drift() {
-    return (fgm + bgm)/2;
+    return max(fgm, bgm) + 1.5;
   };
   float     difference_from_point(coord_t a) {
     return abs(raw_pixels[(a)] - raw_temp);
@@ -287,22 +287,6 @@ void expireForgottenPeople() {
         --forgotten_expirations[i];
       }
     }
-  }
-}
-
-Person getPersonFromIdx(idx_t idx) {
-  if (idx < MAX_PEOPLE) {
-    if (!known_people[idx].real()) return UNDEF_PERSON;
-    return known_people[idx];
-  } else {
-    if (!forgotten_people[idx-MAX_PEOPLE].real() ||
-          forgotten_expirations[idx-MAX_PEOPLE] == MAX_EMPTY_CYCLES) {
-      // point is not real or it was *just* forgotten
-      // this will skip a point that was meant to be remembered for longer if they
-      // happen to have exactly MAX_EMPTY_CYCLES of life left. Oh well.
-      return UNDEF_PERSON;
-    }
-    return forgotten_people[idx-MAX_PEOPLE];
   }
 }
 
