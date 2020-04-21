@@ -20,13 +20,9 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
   // prefer people with more similar temps
   float tempDiff = p.difference_from_point(points[i].current_position);
 
-  float score = (tempDiff/maxT);
-  score = min(score, 1.1);
-  score += (d/maxD);
+  float score = (d/maxD) + (tempDiff/maxT);
   score -= (0.0001*p.confidence);
   score -= (0.01*p.neighbors);
-
-  if (score > 1.6) continue;
 
   if (score <= min_score - 0.05) {
     min_score = score;
@@ -51,12 +47,8 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
   if (pairs[idx] != i || idx == min_idx) continue;
   // does this look like two blobs combining into one?
   if (idx < MAX_PEOPLE && known_people[idx].real()) {
-    if (points[i].confidence > 50 && points[i].neighbors >= 4 &&
-          known_people[idx].count > 1 && known_people[idx].confidence > 50 &&
-          // new point is a merger, so must be bigger than old person
-          points[i].blobSize > known_people[idx].blobSize &&
-          // old person should be at least 1/4th this point's size to bother remembering
-          known_people[idx].blobSize*4 > points[i].blobSize) {
+    // if new point is a merger, it must be bigger than old person
+    if (points[i].neighbors >= 4 && points[i].blobSize > known_people[idx].blobSize) {
       forget_person(idx, pairs, (5*MAX_EMPTY_CYCLES));
     } else {
       forget_person(idx, pairs);

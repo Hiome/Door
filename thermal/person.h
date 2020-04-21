@@ -81,7 +81,8 @@ typedef struct {
 
   #define METALENGTH  50
   void generateMeta(char *meta) {
-    // TODO add reporting of (uint8_t)raw_temp and drop history
+    // TODO add reporting of (uint8_t)raw_temp and drop forgotten count
+    // we also don't need to track the crossed packet number anymore
     sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
       avg_confidence,                     // 3  100
       avg_bgm,                            // 4  1020
