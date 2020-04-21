@@ -108,19 +108,10 @@ typedef struct {
   };
 
   void publishPacket() {
-    if (SIDE1(past_position)) {
-      crossed = _publishFrd("1");
-      if (!crossed) return;
-      // artificially shift starting point ahead 1 row so that
-      // if user turns around now, algorithm considers it an exit
-      int8_t s = ((int8_t)past_position) - ((int8_t)GRID_EXTENT);
-      starting_position = max(s, 0);
-    } else {
-      crossed = _publishFrd("2");
-      if (!crossed) return;
-      uint8_t s = past_position + GRID_EXTENT;
-      starting_position = min(s, (AMG88xx_PIXEL_ARRAY_SIZE-1));
-    }
+    crossed = _publishFrd(SIDE1(past_position) ? "1" : "2");
+    // don't reset person if publish failed, we'll try again next frame
+    if (!crossed) return;
+
     max_temp_drift = 0;
     forgotten_count = 0;
     max_jump = 0;
@@ -128,35 +119,31 @@ typedef struct {
     count = 1;
     history = 1;
     max_position = past_position;
+    starting_position = past_position;
   };
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
-  bool publishMaybeEvent() {
+  void publishMaybeEvent() {
     // door has been closed/ajar for more than 1 frame, no way anybody crossed
-    if (door_state != DOOR_OPEN && frames_since_door_open > 0) return false;
+    if (door_state != DOOR_OPEN && frames_since_door_open > 0) return;
     // door literally just opened this frame, no way anybody crossed
-    if (door_state == DOOR_OPEN && frames_since_door_open < 2) return false;
+    if (door_state == DOOR_OPEN && frames_since_door_open < 2) return;
 
     if (history >= MIN_HISTORY && starting_side() != side()) {
       publishPacket();
-      return true;
     } else if (avg_fgm > 100 && avg_bgm > 100 &&
                 axis_distance(max_position, starting_position) >= 3) {
       if (axis_distance(max_position, past_position) >= 3) {
-        if (crossed && SIDE(max_position) == starting_side()) return false;
+        if (crossed && SIDE(max_position) == starting_side()) return;
         starting_position = max_position;
-      } else if (axis_distance(starting_position, past_position) < 3) return false;
+      } else if (axis_distance(starting_position, past_position) < 3) return;
 
       if (crossed) {
         char rBuf[3];
         sprintf(rBuf, "s%u", crossed);
         _publishFrd(rBuf, 3);
       } else _publishFrd("s", 3);
-
-      return true;
     }
-
-    return false;
   };
 } Person;
 
