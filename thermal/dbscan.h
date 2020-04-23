@@ -105,7 +105,6 @@ uint8_t findCurrentPoints() {
     float mt = fgDiff(current_point);
     uint8_t neighbors = 0;
     uint8_t blobSize = 1;
-    uint8_t suspiciousConnections = 0;
     axis_t minAxis = AXIS(current_point);
     axis_t maxAxis = minAxis;
     axis_t minNAxis = NOT_AXIS(current_point);
@@ -121,15 +120,17 @@ uint8_t findCurrentPoints() {
         uint8_t nc = loadNeighbors(blobPoint, blobNeighbors);
         for (uint8_t bn = 0; bn < nc; bn++) {
           if (clusterNum[blobNeighbors[bn]] == clusterIdx) {
+            if (blobNeighbors[bn] == current_point) {
+              // we are still neighboring current point, give us more time
+              fnc = 3;
+              break;
+            }
             fnc++;
             if (fnc == 2) break;
           }
         }
-        if (fnc == 1) {
-          // if point only has 1 connection to this blob, don't expand on this point
-          suspiciousConnections++;
-          if (suspiciousConnections > min(blobSize/3, 3)) continue;
-        }
+        // if point only has 1 connection to this blob, don't expand on this point
+        if (fnc == 1) continue;
       }
 
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
@@ -158,10 +159,9 @@ uint8_t findCurrentPoints() {
     uint8_t dimension = max(height, width) + 1;
     uint8_t boundingBox = min(dimension, 5);
     uint8_t bgd = (uint8_t)bgDiff(current_point);
-    bgd = min(bgd, (uint8_t)mt);
     // ignore a blob that fills less than 1/3 of its bounding box
     // a blob with 9 points will always pass density test
-    if ((blobSize + bgd - suspiciousConnections)*3 >= sq(boundingBox)) {
+    if ((blobSize + min(bgd, (uint8_t)mt))*3 >= sq(boundingBox)) {
       uint8_t noiseSize = 0;
       float mt_constrained = mt*0.7;
       mt_constrained = constrain(mt_constrained, 0.5, 1.5);

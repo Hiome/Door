@@ -17,6 +17,19 @@ float maxDperson = p.max_distance();
 
 // pair this person with a point in current frame
 for (idx_t j=0; j<total_masses; j++) {
+  // limit unholy human/noise pairing by preventing neighbor count from doubling in one jump
+  // 0 => 3
+  // 1 => 3
+  // 2 => 5
+  // 3 => 7
+  // 4+ => 8
+  // compare this against kat exiting in morning to verify
+  if (p.neighbors > points[j].neighbors) {
+    if ((max(points[j].neighbors, 1)*2 + 1) < p.neighbors) continue;
+  } else {
+    if ((max(p.neighbors, 1)*2 + 1) < points[j].neighbors) continue;
+  }
+
   // can't jump too far
   float d = euclidean_distance(p.past_position, points[j].current_position);
   float maxDpoint = points[j].max_distance();
