@@ -74,14 +74,14 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
     p.neighbors = pp.neighbors;
     p.height = pp.height;
     p.width = pp.width;
+    p.blobSize = (uint8_t)pp.blobSize;
+    p.noiseSize = pp.noiseSize;
     #define UPDATE_RUNNING_AVG(o,n) ( o = ((n) + ((o)*2))/3 )
     UPDATE_RUNNING_AVG(p.avg_bgm, floatToFint2(p.bgm));
     UPDATE_RUNNING_AVG(p.avg_fgm, floatToFint2(p.fgm));
     UPDATE_RUNNING_AVG(p.avg_height, p.height);
     UPDATE_RUNNING_AVG(p.avg_width, p.width);
     UPDATE_RUNNING_AVG(p.avg_neighbors, p.neighbors);
-    UPDATE_RUNNING_AVG(p.blobSize, (uint8_t)pp.blobSize);
-    UPDATE_RUNNING_AVG(p.noiseSize, pp.noiseSize);
     p.avg_confidence = (((uint16_t)p.confidence + (((uint16_t)p.avg_confidence)*2))/3);
     if (p.count < 60000) ++p.count;
 

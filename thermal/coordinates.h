@@ -55,7 +55,7 @@ const axis_t ycoordinates[AMG88xx_PIXEL_ARRAY_SIZE] PROGMEM = {
   #define SIDE2(p)              ( (p) >= (AMG88xx_PIXEL_ARRAY_SIZE/2) )
   #define pointOnBorder(i)      ( (i) < (GRID_EXTENT * 3) || (i) >= (GRID_EXTENT * 5) )
   #define pointOnSmallBorder(i) ( (i) < (GRID_EXTENT * 2) || (i) >= (GRID_EXTENT * 6) )
-  #define pointOnEdge(i)        ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
+  #define pointOnTBEdge(i)      ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
   #define pointOnLREdge(i)      ( NOT_AXIS(i) == 1 || NOT_AXIS(i) == GRID_EXTENT )
 #else
   #define AXIS                  xCoord
@@ -64,13 +64,17 @@ const axis_t ycoordinates[AMG88xx_PIXEL_ARRAY_SIZE] PROGMEM = {
   #define SIDE2(p)              ( (AXIS(p) > (GRID_EXTENT/2) )
   #define pointOnBorder(i)      ( AXIS(i) <= 3 || AXIS(i) >= 6 )
   #define pointOnSmallBorder(i) ( AXIS(i) <= 2 || AXIS(i) >= 7 )
-  #define pointOnEdge(i)        ( AXIS(i) == 1 || AXIS(i) == GRID_EXTENT )
+  #define pointOnTBEdge(i)      ( AXIS(i) == 1 || AXIS(i) == GRID_EXTENT )
   #define pointOnLREdge(i)      ( (i) < GRID_EXTENT || (i) >= (GRID_EXTENT * 7) )
   #error Double check all your code, this is untested
 #endif
 
 uint8_t SIDE(coord_t p) {
   return SIDE1(p) ? 1 : 2;
+}
+
+bool pointOnEdge(coord_t i) {
+  return pointOnTBEdge(i) || pointOnLREdge(i);
 }
 
 axis_t normalizeAxis(axis_t p) {
