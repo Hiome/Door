@@ -7,6 +7,31 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
 
     PossiblePerson pp = points[i];
 
+    // Filter whether we *really* want to pair these points...
+    // these filters could go in process_person to prevent the pairing in the first place, but that
+    // would artificially make this point pair with another even if this is indeed the best match
+
+    if ((p.starting_side() != pp.side() || axis_distance(p.max_position, pp.current_position) > 2) &&
+        // point has crossed and it is on the top or bottom edge since last frame
+        ((pointOnTBEdge(p.past_position) && pointOnTBEdge(pp.current_position)) ||
+          // or it has been in the same position on the left or right edge since last frame
+         (p.past_position == pp.current_position && pointOnLREdge(pp.current_position)))) {
+      // assume we're done and break, point will be forgotten and published if applicable
+      break;
+    }
+
+    if (p.blobSize > pp.blobSize) {
+      // person would be shrinking
+      if (pp.blobSize*2 < p.blobSize && pointOnEdge(p.past_position)) {
+        // person is on edge of grid and is double the size of new point, this is likely the end of a person
+        break;
+      }
+    } else if (p.blobSize*2 < pp.blobSize && pointOnEdge(pp.current_position)) {
+      // person would be growing, but new point is on edge of grid.
+      // If new point is double the size of person, this is likely the start of a new person
+      break;
+    }
+
     fint1_t td = floatToFint1(p.difference_from_point(pp.current_position));
     if (td > 250) td = 250;
     p.max_temp_drift = max(p.max_temp_drift, td);
@@ -42,7 +67,7 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
         }
       } else if (AXIS(p.past_position) != AXIS(pp.current_position)) {
         // "always forward, forward always" - Luke Cage
-        if (!p.retreating || (SIDE1(p.starting_position) &&
+        if ((SIDE1(p.starting_position) &&
               AXIS(pp.current_position) >= AXIS(p.max_position)) ||
             (SIDE2(p.starting_position) &&
               AXIS(pp.current_position) <= AXIS(p.max_position))) {

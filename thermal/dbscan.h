@@ -42,7 +42,7 @@ uint8_t findCurrentPoints() {
     uint8_t nci = neighborsCount(i, mt, norm_pixels);
     for (uint8_t j=0; j<z; j++) {
       coord_t oj = sibling_indexes[j];
-      if ((norm_pixels[i]*2) > norm_pixels[oj] && diffFromPoint(oj, i) < min(mt/4, 1)) {
+      if ((norm_pixels[i]*2) > norm_pixels[oj] && diffFromPoint(oj, i) < min(mt/4, 0.75)) {
         float mt2 = fgDiff(ordered_indexes[j]);
         uint8_t ncj = neighborsCount(ordered_indexes[j], mt2, norm_pixels);
         if (nci > (ncj + 1)) {
@@ -157,6 +157,8 @@ uint8_t findCurrentPoints() {
     uint8_t height = maxAxis - minAxis;
     uint8_t width = maxNAxis - minNAxis;
     uint8_t dimension = max(height, width) + 1;
+    axis_t curr_axis = AXIS(current_point);
+    axis_t curr_naxis = NOT_AXIS(current_point);
     uint8_t boundingBox = min(dimension, 5);
     uint8_t bgd = (uint8_t)bgDiff(current_point);
     // ignore a blob that fills less than 1/3 of its bounding box
@@ -164,21 +166,20 @@ uint8_t findCurrentPoints() {
     if ((blobSize + min(bgd, (uint8_t)mt))*3 >= sq(boundingBox)) {
       uint8_t noiseSize = 0;
       float mt_constrained = mt*0.7;
-      mt_constrained = constrain(mt_constrained, 0.5, 1.5);
+      mt_constrained = constrain(mt_constrained, 0.6, 1.6);
       for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
         if (clusterNum[n] == clusterIdx) continue;
 
         float dp = diffFromPoint(n, current_point);
         if (dp > mt_constrained) continue;
 
-        if (dp > 0.3 && (norm_pixels[n] < CONFIDENCE_THRESHOLD ||
-              (dimension < 5 && int_distance(n, current_point) >= dimension+2))) {
+        if (dp < 0.3 || (norm_pixels[n] > CONFIDENCE_THRESHOLD &&
+              (dimension > 5 || int_distance(n, current_point) < dimension+2)) ||
+              AXIS(n) == curr_axis || NOT_AXIS(n) == curr_naxis) {
           // when diff is more than 0.3º, point either needs to be 0 conf or
           // within a limited radius to person
-          continue;
+          noiseSize++;
         }
-
-        noiseSize++;
       }
 
       if (noiseSize <= blobSize) {

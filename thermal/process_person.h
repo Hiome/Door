@@ -22,29 +22,17 @@ for (idx_t j=0; j<total_masses; j++) {
   // 1 => 4
   // 2 => 6
   // 3+ => 8
-  // compare this against kat exiting in morning to verify
   if (p.neighbors > points[j].neighbors) {
-    if ((points[j].neighbors + 1)*2 < p.neighbors) continue;
+    if (points[j].blobSize*2 < p.neighbors) continue;
   } else {
-    if ((p.neighbors + 1)*2 < points[j].neighbors) continue;
-  }
-
-  if (p.blobSize > points[j].blobSize) {
-    // person would be shrinking
-    if (pointOnEdge(p.past_position)) {
-      // person is on edge of grid and is double the size of new point, then don't pair them.
-      if ((points[j].blobSize - points[j].noiseSize)*2 < (p.blobSize - p.noiseSize)) continue;
-    }
-  } else if (pointOnEdge(points[j].current_position)) {
-    // person would be growing, but new point is on edge of grid.
-    // If new point is double the size of person, then don't pair them.
-    if ((p.blobSize - p.noiseSize)*2 < (points[j].blobSize - points[j].noiseSize)) continue;
+    if (p.blobSize*2 < points[j].neighbors) continue;
   }
 
   // can't jump too far
   float d = euclidean_distance(p.past_position, points[j].current_position);
   float maxDpoint = points[j].max_distance();
-  if (d > min(maxDperson, maxDpoint)) continue;
+  maxDpoint = min(maxDperson, maxDpoint);
+  if (d > min(maxDpoint, 6)) continue;
 
   // can't shift temperature too much
   float tempDiff = p.difference_from_point(points[j].current_position);

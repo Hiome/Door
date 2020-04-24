@@ -132,12 +132,15 @@ typedef struct {
 
     if (history >= MIN_HISTORY && starting_side() != side()) {
       publishPacket();
-    } else if (avg_fgm > 100 && avg_bgm > 100 &&
-                axis_distance(max_position, starting_position) >= 3) {
-      if (axis_distance(max_position, past_position) >= 3) {
+    } else if (count > 3 && avg_fgm > 100 && avg_bgm > 100) {
+      if (axis_distance(max_position, past_position) > axis_distance(starting_position, past_position)) {
+        // person ended closer to start position than max position, so change start position
+        // to max position, assuming we messed up start position.
         if (crossed && SIDE(max_position) == starting_side()) return;
         starting_position = max_position;
-      } else if (axis_distance(starting_position, past_position) < 3) return;
+      }
+      // person didn't travel far enough to deserve a suspicious event
+      if (axis_distance(starting_position, past_position) < 3) return;
 
       if (crossed) {
         char rBuf[3];
