@@ -174,10 +174,10 @@ uint8_t findCurrentPoints() {
         if (dp > mt_constrained) continue;
 
         if (dp < 0.3 || (norm_pixels[n] > CONFIDENCE_THRESHOLD &&
-              (dimension > 5 || int_distance(n, current_point) < dimension+2)) ||
-              AXIS(n) == curr_axis || NOT_AXIS(n) == curr_naxis) {
-          // when diff is more than 0.3º, point either needs to be 0 conf or
-          // within a limited radius to person
+              (dimension > 4 || int_distance(n, current_point) < dimension+2 ||
+                AXIS(n) == curr_axis || NOT_AXIS(n) == curr_naxis))) {
+          // diff must either be less than 0.3º or point needs to have a confidence score
+          // and person needs to be huge or point needs to be nearby or point is on same axis
           noiseSize++;
         }
       }
