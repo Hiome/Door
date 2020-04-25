@@ -17,8 +17,8 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
           // or it has been in the same position on the left or right edge since last frame
          (p.past_position == pp.current_position && pointOnLREdge(pp.current_position)))) {
       // assume we're done and break, point will be forgotten and published if applicable
-      if (idx < MAX_PEOPLE) forget_person(idx, pairs);
-      pairs[idx] = UNDEF_INDEX;
+      if (idx < MAX_PEOPLE) forget_person(idx, pairs, 0);
+      // pairs[idx] = UNDEF_INDEX; keep these points paired still
       break;
     }
 
@@ -26,15 +26,15 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
       // person would be shrinking
       if (pp.blobSize*2 < p.blobSize && pointOnEdge(p.past_position)) {
         // person is on edge of grid and is double the size of new point, this is likely the end of a person
-        if (idx < MAX_PEOPLE) forget_person(idx, pairs);
-        pairs[idx] = UNDEF_INDEX;
+        if (idx < MAX_PEOPLE) forget_person(idx, pairs, 0);
+        // pairs[idx] = UNDEF_INDEX; keep these points paired still
         break;
       }
     } else if (p.blobSize*2 < pp.blobSize && pointOnEdge(pp.current_position)) {
       // person would be growing, but new point is on edge of grid.
       // If new point is double the size of person, this is likely the start of a new person
-      if (idx < MAX_PEOPLE) forget_person(idx, pairs);
-      pairs[idx] = UNDEF_INDEX;
+      if (idx < MAX_PEOPLE) forget_person(idx, pairs, 0);
+      // pairs[idx] = UNDEF_INDEX; keep these points paired still
       break;
     }
 
