@@ -132,7 +132,7 @@ typedef struct {
 
     if (history >= MIN_HISTORY && starting_side() != side()) {
       publishPacket();
-    } else if (count > 3 && avg_fgm > 100 && avg_bgm > 100) {
+    } else if (avg_fgm > 100 && avg_bgm > 100) {
       if (axis_distance(max_position, past_position) > axis_distance(starting_position, past_position)) {
         // person ended closer to start position than max position, so change start position
         // to max position, assuming we messed up start position.
