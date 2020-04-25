@@ -35,7 +35,7 @@ fi
 
 if [[ $1 == 'listen' ]]; then
   fn=$(date +"%FT%H%M%S")
-  $DIR_PATH/read_sensor.py > "${fn}.txt"
+  $DIR_PATH/read_sensor.py > "$DIR_PATH/../logs/${fn}.txt"
   exit 0
 fi
 
