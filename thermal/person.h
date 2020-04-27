@@ -44,17 +44,16 @@ typedef struct {
   uint8_t   height            :4; // 0-7 (only need 3 bits)
   uint8_t   width             :4; // 0-7 (only need 3 bits)
 
-  uint8_t   crossed           :4; // 0-9
-  uint8_t   max_jump          :4; // 0-7 (only need 3 bits)
+  uint8_t   max_jump          :3; // 0-7
+  bool      crossed           :1; // 0-1
+  uint8_t   avg_neighbors     :4; // 0-8
 
   uint8_t   avg_height        :4; // only need 3 bits
   uint8_t   avg_width         :4; // only need 3 bits
 
-  uint8_t   avg_neighbors;        // only need 4 bits
   uint8_t   avg_confidence;
   uint8_t   blobSize;
   uint8_t   noiseSize;
-  uint8_t   forgotten_count;
 
   uint16_t  avg_bgm;
   uint16_t  avg_fgm;
@@ -79,11 +78,10 @@ typedef struct {
     return abs(raw_pixels[(a)] - raw_temp);
   };
 
-  #define METALENGTH  50
-  void generateMeta(char *meta) {
-    // TODO add reporting of (uint8_t)raw_temp and drop forgotten count
-    // we also don't need to track the crossed packet number anymore
-    sprintf(meta, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
+  uint8_t _publishFrd(const char* s, uint8_t retries = HIOME_RETRY_COUNT) {
+    char msg[HIOME_MAX_MESSAGE_LENGTH];
+    sprintf(msg, "%sx%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
+      s,                                  // 1
       avg_confidence,                     // 3  100
       avg_bgm,                            // 4  1020
       avg_fgm,                            // 4  1020
@@ -98,25 +96,19 @@ typedef struct {
       max_jump,                           // 1  5
       noiseSize,                          // 2  60
       max_temp_drift,                     // 3  250
-      forgotten_count                     // 3  250
-    );                                    // + 14 'x' + 1 null => 50 total
-  };
-
-  uint8_t _publishFrd(const char* msg, uint8_t retries = RETRY_COUNT) {
-    char meta[METALENGTH];
-    generateMeta(meta);
-    return hiome.publish(msg, meta, retries, SERIAL_DEBUG);
+      uint8_t(raw_temp)                   // 2  35
+    );                                    // + 15 'x' + 1 null => 51 total
+    return hiome.publish(msg, retries, SERIAL_DEBUG);
   };
 
   void publishPacket() {
-    crossed = _publishFrd(SIDE1(past_position) ? "1" : "2");
     // don't reset person if publish failed, we'll try again next frame
-    if (!crossed) return;
+    if (!_publishFrd(AXIS(past_position) > AXIS(starting_position) ? "2" : "1")) return;
 
     max_temp_drift = 0;
-    forgotten_count = 0;
     max_jump = 0;
     retreating = false;
+    crossed = true;
     count = 1;
     history = 1;
     max_position = past_position;
@@ -131,7 +123,7 @@ typedef struct {
     if (door_state == DOOR_OPEN && frames_since_door_open < 2) return;
 
     if (history >= MIN_HISTORY && starting_side() != side()) {
-      publishPacket();
+      _publishFrd(AXIS(past_position) > AXIS(starting_position) ? "2" : "1");
     } else if (avg_fgm > 100 && avg_bgm > 100) {
       if (axis_distance(max_position, past_position) > axis_distance(starting_position, past_position)) {
         // person ended closer to start position than max position, so change start position
@@ -142,11 +134,7 @@ typedef struct {
       // person didn't travel far enough to deserve a suspicious event
       if (axis_distance(starting_position, past_position) < 3) return;
 
-      if (crossed) {
-        char rBuf[3];
-        sprintf(rBuf, "s%u", crossed);
-        _publishFrd(rBuf, 3);
-      } else _publishFrd("s", 3);
+      _publishFrd("s", 3);
     }
   };
 } Person;
@@ -168,15 +156,14 @@ const Person UNDEF_PERSON = {
   .neighbors=0,
   .height=0,
   .width=0,
-  .crossed=0,
   .max_jump=0,
+  .crossed=false,
+  .avg_neighbors=0,
   .avg_height=0,
   .avg_width=0,
-  .avg_neighbors=0,
   .avg_confidence=0,
   .blobSize=0,
   .noiseSize=0,
-  .forgotten_count=0,
   .avg_bgm=0,
   .avg_fgm=0,
   .raw_temp=0,
@@ -259,9 +246,6 @@ void forget_person(idx_t idx, idx_t (&pairs)[MAX_PEOPLE*2], uint8_t expiration =
       forgotten_people[useIdx].publishMaybeEvent();
       pairs[useIdx+MAX_PEOPLE] = UNDEF_INDEX;
     }
-    // if (known_people[idx].forgotten_count < 250) {
-    //   ++known_people[idx].forgotten_count;
-    // }
     forgotten_people[useIdx] = known_people[idx];
     forgotten_expirations[useIdx] = expiration;
   }
