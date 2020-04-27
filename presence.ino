@@ -1,4 +1,5 @@
 #include "config.h"
+#include "auth.h"
 
 #include "Hiome_AVR.h"
 #include <Hiome_AMG88xx.h>
@@ -120,8 +121,8 @@ void runThermalLoop() {
 void setup() {
   SERIAL_START;
 
-  hiome.begin(NODEID, RFM_HCW);
-  hiome.ledOn();
+  hiome.begin(NODEID, NETWORKID, ENCRYPTKEY, RFM_HCW);
+  hiome.setLED(true);
 
   amg.begin(AMG_ADDR);
 
@@ -129,12 +130,12 @@ void setup() {
   DDRD  = DDRD  & B11100111;  // set pins 3 and 4 as inputs
   PORTD = PORTD | B00011000;  // pull pins 3 and 4 high
 
-  hiome.sleep(SLEEP_1S);
-  hiome.publish(FIRMWARE_VERSION, "0", RETRY_COUNT*2, SERIAL_DEBUG);
+  hiome.wait(SLEEP_1S);
+  hiome.publish(FIRMWARE_VERSION, HIOME_RETRY_COUNT*2, SERIAL_DEBUG);
 
   // give sensor 16sec to stabilize
-  hiome.sleep(SLEEP_8S);
-  hiome.sleep(SLEEP_8S);
+  hiome.wait(SLEEP_8S);
+  hiome.wait(SLEEP_8S);
 
   for (idx_t i=0; i<MAX_PEOPLE; i++) {
     known_people[i] = UNDEF_PERSON;
@@ -143,7 +144,7 @@ void setup() {
 
   startBgAverage();
 
-  hiome.ledOff();
+  hiome.setLED(false);
 }
 
 void loop() {

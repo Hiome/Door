@@ -31,7 +31,7 @@ bool checkDoorState() {
   door_state = readDoorState();
 
   if (door_state != last_published_door_state && hiome.publish(
-    (door_state == DOOR_CLOSED ? "d0" : (door_state == DOOR_OPEN ? "d1" : "d2")), "0", 0, SERIAL_DEBUG)) {
+    (door_state == DOOR_CLOSED ? "d0" : (door_state == DOOR_OPEN ? "d1" : "d2")), 0, SERIAL_DEBUG)) {
     last_published_door_state = door_state;
   }
 

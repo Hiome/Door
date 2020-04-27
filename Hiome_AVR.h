@@ -1,15 +1,15 @@
 #ifndef LIB_HIOME_AVR_H
 #define LIB_HIOME_AVR_H
 
-#define ATC_RSSI      -75
-#define RETRY_TIME    100
-#define RETRY_COUNT   5
-#define BATT          A3
-#define MAX_VOLTAGE_DRIFT   50
-#define MIN_ALLOWED_VOLTAGE 200
-#define MAX_ALLOWED_VOLTAGE 700
-
-#include "auth.h"
+#define HIOME_GATEWAYID           1
+#define HIOME_ATC_RSSI            -60
+#define HIOME_RETRY_TIME          100
+#define HIOME_RETRY_COUNT         5
+#define HIOME_BATT_PIN            A3
+#define HIOME_MAX_VOLTAGE_DRIFT   50
+#define HIOME_MIN_ALLOWED_VOLTAGE 250
+#define HIOME_MAX_ALLOWED_VOLTAGE 600
+#define HIOME_MAX_MESSAGE_LENGTH  54
 
 #include <RFM69_ATC.h>
 #include <RFM69_OTA.h>
@@ -20,14 +20,12 @@ class Hiome_AVR {
   public:
     Hiome_AVR() : flash(8, 0xEF30) {}; //EF30 for windbond 4mbit flash
 
-    void      begin(uint8_t nodeid, bool highPowerMode = true);
-    void      ledOn();
-    void      ledOff();
-    void      sleep(period_t d);
+    void      begin(uint8_t nodeid, uint8_t networkid, const char* encryptkey, bool highPowerMode = true);
+    void      setLED(bool on = true);
+    void      wait(period_t d);
     void      checkForUpdates();
-    uint16_t  checkBattery();
     void      beatHeart(uint32_t maxBeats);
-    uint8_t   publish(const char* msg, const char* meta, uint8_t retries = RETRY_COUNT, bool debug = false);
+    uint8_t   publish(const char* msg, uint8_t retries = HIOME_RETRY_COUNT, bool debug = false);
 
   private:
     uint8_t   packetCount = 1;
@@ -37,6 +35,7 @@ class Hiome_AVR {
     RFM69_ATC radio;
     SPIFlash  flash;
 
+    uint16_t  checkBattery();
     void      checkIfBatteryConnected();
 };
 

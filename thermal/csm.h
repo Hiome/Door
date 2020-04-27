@@ -204,7 +204,7 @@ void startBgAverage() {
   for (uint8_t k=0; k < 10; k++) {
     while (!amg.readPixels(raw_pixels)) {
       // wait for pixels to change
-      hiome.sleep(SLEEP_30MS);
+      hiome.wait(SLEEP_30MS);
     }
 
     for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {

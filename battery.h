@@ -2,7 +2,7 @@
 
 void initialize() {
   LOWPOWER_DELAY(SLEEP_1S);
-  publish(FIRMWARE_VERSION, "0", RETRY_COUNT*2);
+  publish(FIRMWARE_VERSION, HIOME_RETRY_COUNT*2);
 }
 
 void loop_frd() {
