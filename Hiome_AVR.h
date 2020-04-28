@@ -3,7 +3,7 @@
 
 #define HIOME_GATEWAYID           1
 #define HIOME_ATC_RSSI            -60
-#define HIOME_RETRY_TIME          100
+#define HIOME_RETRY_TIME          50
 #define HIOME_RETRY_COUNT         5
 #define HIOME_BATT_PIN            A3
 #define HIOME_MAX_VOLTAGE_DRIFT   50
