@@ -38,12 +38,12 @@ uint8_t findCurrentPoints() {
   for (uint8_t z=0; z<active_pixel_count; z++) {
     coord_t i = ordered_indexes_temp[z];
     bool added = false;
-    float mt = fgDiff(i);
+    float mt = fgDiff(i)*0.75;
     uint8_t nci = neighborsCount(i, mt, norm_pixels);
     for (uint8_t j=0; j<z; j++) {
       coord_t oj = sibling_indexes[j];
       if ((norm_pixels[i]*2) > norm_pixels[oj] && diffFromPoint(oj, i) < min(mt/4, 0.75)) {
-        float mt2 = fgDiff(ordered_indexes[j]);
+        float mt2 = fgDiff(ordered_indexes[j])*0.75;
         uint8_t ncj = neighborsCount(ordered_indexes[j], mt2, norm_pixels);
         if (nci > (ncj + 1)) {
           // prefer the point that's more in middle of blob
@@ -102,7 +102,8 @@ uint8_t findCurrentPoints() {
     ordered_indexes_temp[sorted_size] = current_point;
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
-    float mt = fgDiff(current_point);
+    float mt = fgDiff(current_point)*0.75;
+    mt = max(mt, 2);
     uint8_t neighbors = 0;
     uint8_t blobSize = 1;
     axis_t minAxis = AXIS(current_point);
@@ -157,16 +158,13 @@ uint8_t findCurrentPoints() {
     uint8_t height = maxAxis - minAxis;
     uint8_t width = maxNAxis - minNAxis;
     uint8_t dimension = max(height, width) + 1;
-    axis_t curr_axis = AXIS(current_point);
-    axis_t curr_naxis = NOT_AXIS(current_point);
     uint8_t boundingBox = min(dimension, 5);
-    uint8_t bgd = (uint8_t)bgDiff(current_point);
+    uint8_t bgd = (uint8_t)(bgDiff(current_point)*0.75);
     // ignore a blob that fills less than 1/3 of its bounding box
     // a blob with 9 points will always pass density test
     if ((blobSize + min(bgd, (uint8_t)mt))*3 >= sq(boundingBox)) {
       uint8_t noiseSize = 0;
-      float mt_constrained = mt*0.7;
-      mt_constrained = constrain(mt_constrained, 0.6, 1.6);
+      float mt_constrained = constrain(mt*0.7, 0.6, 1.6);
       for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
         if (clusterNum[n] == clusterIdx) continue;
 
@@ -174,8 +172,7 @@ uint8_t findCurrentPoints() {
         if (dp > mt_constrained) continue;
 
         if (dp < 0.3 || (norm_pixels[n] > CONFIDENCE_THRESHOLD &&
-              (dimension > 4 || int_distance(n, current_point) < dimension+2 ||
-                AXIS(n) == curr_axis || NOT_AXIS(n) == curr_naxis))) {
+              (dimension > 4 || int_distance(n, current_point) < dimension+2))) {
           // diff must either be less than 0.3º or point needs to have a confidence score
           // and person needs to be huge or point needs to be nearby or point is on same axis
           noiseSize++;
