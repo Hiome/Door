@@ -120,6 +120,7 @@ void runThermalLoop() {
 
 void setup() {
   SERIAL_START;
+  SERIAL_PRINTLN(F(FIRMWARE_VERSION));
 
   hiome.begin(NODEID, NETWORKID, ENCRYPTKEY, RFM_HCW);
   hiome.setLED(true);
