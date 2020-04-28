@@ -102,7 +102,8 @@ uint8_t findCurrentPoints() {
     ordered_indexes_temp[sorted_size] = current_point;
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
-    float mt = fgDiff(current_point)*0.75;
+    float fgd = fgDiff(current_point);
+    float mt = fgd*0.75;
     mt = max(mt, 2);
     uint8_t neighbors = 0;
     uint8_t blobSize = 1;
@@ -159,12 +160,12 @@ uint8_t findCurrentPoints() {
     uint8_t width = maxNAxis - minNAxis;
     uint8_t dimension = max(height, width) + 1;
     uint8_t boundingBox = min(dimension, 5);
-    uint8_t bgd = (uint8_t)(bgDiff(current_point)*0.75);
+    uint8_t bgd = (uint8_t)bgDiff(current_point);
     // ignore a blob that fills less than 1/3 of its bounding box
     // a blob with 9 points will always pass density test
-    if ((blobSize + min(bgd, (uint8_t)mt))*3 >= sq(boundingBox)) {
+    if ((blobSize + min(bgd, (uint8_t)fgd))*3 >= sq(boundingBox)) {
       uint8_t noiseSize = 0;
-      float mt_constrained = constrain(mt*0.7, 0.6, 1.6);
+      float mt_constrained = constrain(fgd*0.75, 0.6, 1.6);
       for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
         if (clusterNum[n] == clusterIdx) continue;
 
