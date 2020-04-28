@@ -13,9 +13,7 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
 
     if ((p.starting_side() != pp.side() || axis_distance(p.max_position, pp.current_position) > 2) &&
         // point has crossed and it is on the top or bottom edge since last frame
-        ((pointOnTBEdge(p.past_position) && pointOnTBEdge(pp.current_position)) ||
-          // or it has been in the same position on the left or right edge since last frame
-         (p.past_position == pp.current_position && pointOnLREdge(pp.current_position)))) {
+        pointOnTBEdge(p.past_position) && pointOnTBEdge(pp.current_position)) {
       // assume we're done and break, point will be forgotten and published if applicable
       if (idx < MAX_PEOPLE) forget_person(idx, pairs, 0);
       // pairs[idx] = UNDEF_INDEX; keep these points paired still
