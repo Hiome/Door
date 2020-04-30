@@ -21,7 +21,9 @@ for (idx_t fidx=0; fidx < MAX_PEOPLE; fidx++) {
   // can't shift temperature too much
   float tempDiff = forgotten_people[fidx].difference_from_point(points[i].current_position);
   float maxTperson = forgotten_people[fidx].max_allowed_temp_drift();
-  if (tempDiff > min(maxTperson, maxTpoint) + 2) continue;
+  maxTperson = min(maxTpoint, maxTperson);
+  maxTperson = maxTperson < 2 ? 2 : (2 + (maxTperson - 2)*0.75);
+  if (tempDiff > maxTperson) continue;
 
   float score = (d/maxDpoint) + (tempDiff/maxTpoint);
   score -= (0.0001*forgotten_people[fidx].confidence);

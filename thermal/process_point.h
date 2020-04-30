@@ -24,6 +24,8 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
   score -= (0.0001*p.confidence);
   score -= (0.01*p.neighbors);
 
+  if (idx >= MAX_PEOPLE) score += 0.2;
+
   if (score <= min_score - 0.05) {
     min_score = score;
     min_idx = idx;
@@ -49,7 +51,7 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
   if (idx < MAX_PEOPLE && known_people[idx].real()) {
     // if new point is a merger, it must be bigger than old person
     if (points[i].neighbors >= 4 && points[i].blobSize > known_people[idx].blobSize) {
-      forget_person(idx, pairs, (5*MAX_EMPTY_CYCLES));
+      forget_person(idx, pairs, 3);
     } else {
       forget_person(idx, pairs);
     }

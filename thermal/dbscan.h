@@ -103,8 +103,7 @@ uint8_t findCurrentPoints() {
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
     float fgd = fgDiff(current_point);
-    float mt = fgd*0.75;
-    mt = max(mt, 2);
+    float mt = fgd < 2 ? fgd : (2 + (fgd-2)*0.25);
     uint8_t neighbors = 0;
     uint8_t blobSize = 1;
     axis_t minAxis = AXIS(current_point);
@@ -135,11 +134,18 @@ uint8_t findCurrentPoints() {
         if (fnc == 1) continue;
       }
 
+      float mtb = 0;
+      if (fgd > 2) {
+        float fgdb = fgDiff(blobPoint);
+        mtb = fgdb < 2 ? fgdb : (2 + (fgdb-2)*0.25);
+      }
+
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
         // scan all known points after current_point to find neighbors to point x
         if (ordered_indexes[k] != UNDEF_POINT &&
             isNeighborly(ordered_indexes[k], blobPoint) &&
-            diffFromPoint(ordered_indexes[k], current_point) < mt) {
+            (diffFromPoint(ordered_indexes[k], current_point) < mt ||
+              (mtb > 0.1 && diffFromPoint(ordered_indexes[k], blobPoint) < mtb))) {
           clusterNum[ordered_indexes[k]] = clusterIdx;
           ordered_indexes_temp[sorted_size] = ordered_indexes[k];
           sorted_size++;
@@ -165,7 +171,7 @@ uint8_t findCurrentPoints() {
     // a blob with 9 points will always pass density test
     if ((blobSize + min(bgd, (uint8_t)fgd))*3 >= sq(boundingBox)) {
       uint8_t noiseSize = 0;
-      float mt_constrained = constrain(fgd*0.75, 0.6, 1.6);
+      float mt_constrained = constrain(mt, 0.6, 1.6);
       for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
         if (clusterNum[n] == clusterIdx) continue;
 
