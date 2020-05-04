@@ -51,7 +51,7 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
   if (idx < MAX_PEOPLE && known_people[idx].real()) {
     // if new point is a merger, it must be bigger than old person
     if (points[i].neighbors >= 4 && points[i].blobSize > known_people[idx].blobSize) {
-      forget_person(idx, pairs, 3);
+      forget_person(idx, pairs, 5);
     } else {
       forget_person(idx, pairs);
     }

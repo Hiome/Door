@@ -102,8 +102,7 @@ uint8_t findCurrentPoints() {
     ordered_indexes_temp[sorted_size] = current_point;
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
-    float fgd = fgDiff(current_point);
-    float mt = fgd < 2 ? fgd : (2 + (fgd-2)*0.25);
+    float mt = fgDiff(current_point);
     uint8_t neighbors = 0;
     uint8_t blobSize = 1;
     axis_t minAxis = AXIS(current_point);
@@ -134,18 +133,11 @@ uint8_t findCurrentPoints() {
         if (fnc == 1) continue;
       }
 
-      float mtb = 0;
-      if (fgd > 2) {
-        float fgdb = fgDiff(blobPoint);
-        mtb = fgdb < 2 ? fgdb : (2 + (fgdb-2)*0.25);
-      }
-
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
         // scan all known points after current_point to find neighbors to point x
         if (ordered_indexes[k] != UNDEF_POINT &&
             isNeighborly(ordered_indexes[k], blobPoint) &&
-            (diffFromPoint(ordered_indexes[k], current_point) < mt ||
-              (mtb > 0.1 && diffFromPoint(ordered_indexes[k], blobPoint) < mtb))) {
+            diffFromPoint(ordered_indexes[k], current_point) < mt) {
           clusterNum[ordered_indexes[k]] = clusterIdx;
           ordered_indexes_temp[sorted_size] = ordered_indexes[k];
           sorted_size++;
@@ -169,9 +161,9 @@ uint8_t findCurrentPoints() {
     uint8_t bgd = (uint8_t)bgDiff(current_point);
     // ignore a blob that fills less than 1/3 of its bounding box
     // a blob with 9 points will always pass density test
-    if ((blobSize + min(bgd, (uint8_t)fgd))*3 >= sq(boundingBox)) {
+    if ((blobSize + min(bgd, (uint8_t)mt))*3 >= sq(boundingBox)) {
       uint8_t noiseSize = 0;
-      float mt_constrained = constrain(mt, 0.6, 1.6);
+      float mt_constrained = constrain(mt*0.7, 0.6, 1.6);
       for (coord_t n = 0; n < AMG88xx_PIXEL_ARRAY_SIZE; n++) {
         if (clusterNum[n] == clusterIdx) continue;
 
@@ -186,7 +178,7 @@ uint8_t findCurrentPoints() {
         }
       }
 
-      if (noiseSize <= blobSize) {
+      if (noiseSize < blobSize*2) {
         SERIAL_PRINT(F("+ "));
         SERIAL_PRINTLN(current_point);
 
