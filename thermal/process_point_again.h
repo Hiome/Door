@@ -1,6 +1,6 @@
 // give forgotten people a second chance at adopting this point
-idx_t min_index = UNDEF_INDEX;
-float min_score = 100;
+idx_t max_index = UNDEF_INDEX;
+float max_score = -100;
 float maxTpoint = points[i].max_allowed_temp_drift();
 float maxDpoint = points[i].max_distance();
 for (idx_t fidx=0; fidx < MAX_PEOPLE; fidx++) {
@@ -23,20 +23,35 @@ for (idx_t fidx=0; fidx < MAX_PEOPLE; fidx++) {
   float maxTperson = forgotten_people[fidx].max_allowed_temp_drift();
   if (tempDiff > min(maxTpoint, maxTperson) + 2) continue;
 
-  float score = (d/maxDpoint) + (tempDiff/maxTpoint);
-  score -= (0.0001*forgotten_people[fidx].confidence);
-  score -= (0.01*forgotten_people[fidx].neighbors);
+  float dScore = 1 - ((d+0.1)/(maxDpoint+0.2));
+  float tScore = 1 - ((tempDiff+0.1)/(maxTpoint+0.2));
+  if (dScore < 0.2 && tScore < 0.2) continue;
 
-  if (score <= (min_score - 0.05) || (score < (min_score + 0.05) && tempDiff <
-        forgotten_people[min_index].difference_from_point(points[i].current_position))) {
-    // either score is less than min score, or if it's similar,
+  float score = dScore * tScore;
+  score *= (0.9 + (0.001*forgotten_people[fidx].confidence));
+  score *= (0.92 + (0.01*forgotten_people[fidx].neighbors));
+  score *= (1 - (0.05*(forgotten_starting_expiration[fidx] - forgotten_expirations[fidx])));
+
+  if (forgotten_people[fidx].direction == FACING_SIDE1) {
+    if (forgotten_people[fidx].d1_count > forgotten_people[fidx].d2_count &&
+        AXIS(points[i].current_position) > AXIS(forgotten_people[fidx].past_position)) {
+      score *= 0.85;
+    }
+  } else if (forgotten_people[fidx].d2_count > forgotten_people[fidx].d1_count &&
+        AXIS(points[i].current_position) < AXIS(forgotten_people[fidx].past_position)) {
+    score *= 0.85;
+  }
+
+  if (score >= (max_score + 0.005) || (score > (max_score - 0.005) &&
+        tempDiff < forgotten_people[max_index].difference_from_point(points[i].current_position))) {
+    // either score is greater than max score, or if it's similar,
     // choose the point with more similar raw temp
-    min_score = score;
-    min_index = fidx;
+    max_score = score;
+    max_index = fidx;
   }
 }
 
-if (min_index != UNDEF_INDEX) {
-  pairs[min_index+MAX_PEOPLE] = i;
+if (max_index != UNDEF_INDEX) {
+  pairs[max_index+MAX_PEOPLE] = i;
   taken[i] = 1;
 }

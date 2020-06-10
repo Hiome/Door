@@ -4,9 +4,13 @@ void printDebugInfo() {
     if (known_people[i].real()) {
       SERIAL_PRINT(known_people[i].past_position);
       SERIAL_PRINT(F(" ("));
-      SERIAL_PRINT(known_people[i].starting_position);
+      SERIAL_PRINT(known_people[i].min_position);
       SERIAL_PRINT(F("-"));
-      SERIAL_PRINT(known_people[i].history);
+      SERIAL_PRINT(known_people[i].max_position);
+      SERIAL_PRINT(F("-"));
+      SERIAL_PRINT(known_people[i].d1_count);
+      SERIAL_PRINT(F("-"));
+      SERIAL_PRINT(known_people[i].d2_count);
       SERIAL_PRINT(F("-"));
       SERIAL_PRINT(known_people[i].neighbors);
       SERIAL_PRINT(F("),"));
@@ -18,9 +22,13 @@ void printDebugInfo() {
     if (forgotten_people[i].real()) {
       SERIAL_PRINT(forgotten_people[i].past_position);
       SERIAL_PRINT(F(" ("));
-      SERIAL_PRINT(forgotten_people[i].starting_position);
+      SERIAL_PRINT(forgotten_people[i].min_position);
       SERIAL_PRINT(F("-"));
-      SERIAL_PRINT(forgotten_people[i].history);
+      SERIAL_PRINT(forgotten_people[i].max_position);
+      SERIAL_PRINT(F("-"));
+      SERIAL_PRINT(forgotten_people[i].d1_count);
+      SERIAL_PRINT(F("-"));
+      SERIAL_PRINT(forgotten_people[i].d2_count);
       SERIAL_PRINT(F("-"));
       SERIAL_PRINT(forgotten_people[i].neighbors);
       SERIAL_PRINT(F("),"));

@@ -29,23 +29,24 @@ typedef struct {
 
 PossiblePerson points[MAX_PEOPLE];
 
+const uint8_t FACING_SIDE1 = 0;
+const uint8_t FACING_SIDE2 = 1;
+
 typedef struct {
   coord_t   past_position;        //:7 0-63 + UNDEF_POINT
-  coord_t   starting_position;    //:6 0-63
+  coord_t   min_position;         //:6 0-63
   coord_t   max_position;         //:6 0-63
   uint8_t   confidence;           //:7 0-100
-  fint1_t   max_temp_drift;
   uint16_t  count;
 
-  uint8_t   history           :3; // 1-7
-  bool      retreating        :1; // 0-1
-  uint8_t   neighbors         :4; // 0-8
+  uint8_t   d1_count          :4;
+  uint8_t   d2_count          :4;
 
-  uint8_t   height            :4; // 0-7 (only need 3 bits)
+  uint8_t   height            :3; // 0-7
+  uint8_t   direction         :1; // 0-1
   uint8_t   width             :4; // 0-7 (only need 3 bits)
 
-  uint8_t   max_jump          :3; // 0-7
-  bool      crossed           :1; // 0-1
+  uint8_t   neighbors         :4; // 0-8
   uint8_t   avg_neighbors     :4; // 0-8
 
   uint8_t   avg_height        :4; // only need 3 bits
@@ -63,10 +64,15 @@ typedef struct {
   float     fgm;
 
   bool      real() { return past_position != UNDEF_POINT; };
-  uint8_t   starting_side() { return SIDE(starting_position); };
+  coord_t   starting_position() { return direction == FACING_SIDE1 ? max_position : min_position; };
+  uint8_t   starting_side() { return SIDE(starting_position()); };
   uint8_t   side() { return SIDE(past_position); };
   float     total_distance() {
-    return euclidean_distance(starting_position, past_position);
+    return euclidean_distance(starting_position(), past_position);
+  };
+  uint8_t   history() {
+    if (direction == FACING_SIDE1) return d1_count > d2_count ? d1_count - d2_count : 0;
+    return d2_count > d1_count ? d2_count - d1_count : 0;
   };
   float     max_distance() {
     return calcMaxDistance(height, width, neighbors, confidence);
@@ -78,86 +84,70 @@ typedef struct {
     return abs(raw_pixels[(a)] - raw_temp);
   };
 
-  uint8_t _publishFrd(const char* s, uint8_t retries = HIOME_RETRY_COUNT) {
+  void _publishFrd(uint8_t retries = HIOME_RETRY_COUNT) {
     char msg[HIOME_MAX_MESSAGE_LENGTH];
-    sprintf(msg, "%sx%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
-      s,                                  // 1
+    sprintf(msg, "%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%ux%u",
       avg_confidence,                     // 3  100
       avg_bgm,                            // 4  1020
       avg_fgm,                            // 4  1020
-      starting_position,                  // 2  64
+      starting_position(),                // 2  64
       past_position,                      // 2  64
-      history,                            // 1  8
+      d1_count,                           // 3  255
+      d2_count,                           // 3  255
       count,                              // 5  60000
       blobSize,                           // 2  60
+      noiseSize,                          // 2  60
       avg_neighbors,                      // 1  8
       avg_height,                         // 1  7
       avg_width,                          // 1  7
-      max_jump,                           // 1  5
-      noiseSize,                          // 2  60
-      max_temp_drift,                     // 3  250
       uint8_t(raw_temp)                   // 2  35
-    );                                    // + 15 'x' + 1 null => 51 total
-    return hiome.publish(msg, retries, SERIAL_DEBUG);
+    );                                    // + 13 'x' + 1 null => 49 total
+    hiome.publish(msg, retries, SERIAL_DEBUG);
   };
 
   void publishPacket() {
-    // don't reset person if publish failed, we'll try again next frame
-    if (!_publishFrd(AXIS(past_position) > AXIS(starting_position) ? "2" : "1")) return;
-
-    max_temp_drift = 0;
-    max_jump = 0;
-    retreating = false;
-    crossed = true;
+    _publishFrd();
     count = 1;
-    history = 1;
+    d1_count = 0;
+    d2_count = 0;
+    min_position = past_position;
     max_position = past_position;
-    starting_position = past_position;
   };
 
+  #define NO_REASON             0
+  #define CHANGED_DIRECTION     1
   // called when a point is about to be forgotten to diagnose if min history is an issue
-  void publishMaybeEvent() {
+  void publishMaybeEvent(uint8_t reason = NO_REASON) {
     // door has been closed/ajar for more than 1 frame, no way anybody crossed
     if (door_state != DOOR_OPEN && frames_since_door_open > 0) return;
     // door literally just opened this frame, no way anybody crossed
     if (door_state == DOOR_OPEN && frames_since_door_open < 2) return;
 
-    if (history >= MIN_HISTORY && starting_side() != side()) {
-      _publishFrd(AXIS(past_position) > AXIS(starting_position) ? "2" : "1");
-    } else if (avg_fgm > 100 && avg_bgm > 100) {
-      if (axis_distance(max_position, past_position) > axis_distance(starting_position, past_position)) {
-        // person ended closer to start position than max position, so change start position
-        // to max position, assuming we messed up start position.
-        if (crossed && SIDE(max_position) == starting_side()) return;
-        starting_position = max_position;
-      }
-      // person didn't travel far enough to deserve a suspicious event
-      if (axis_distance(starting_position, past_position) < 3) return;
+    // don't worry about changed directions if we haven't even crossed the half-way mark
+    if (reason == CHANGED_DIRECTION && side() == starting_side()) return;
 
-      _publishFrd("s", 3);
-    }
+    if (history() > 2 && axis_distance(starting_position(), past_position) > 2) publishPacket();
   };
 } Person;
 
 Person known_people[MAX_PEOPLE];
 Person forgotten_people[MAX_PEOPLE];
 uint8_t forgotten_expirations[MAX_PEOPLE] = { 0 };
+uint8_t forgotten_starting_expiration[MAX_PEOPLE] = { 0 };
 
 const Person UNDEF_PERSON = {
   .past_position=UNDEF_POINT,
   // (╯°□°）╯︵ ┻━┻  avr-gcc doesn't implement non-trivial designated initializers...
-  .starting_position=0,
+  .min_position=0,
   .max_position=0,
   .confidence=0,
-  .max_temp_drift=0,
   .count=0,
-  .history=0,
-  .retreating=false,
-  .neighbors=0,
+  .d1_count=0,
+  .d2_count=0,
   .height=0,
+  .direction=0,
   .width=0,
-  .max_jump=0,
-  .crossed=false,
+  .neighbors=0,
   .avg_neighbors=0,
   .avg_height=0,
   .avg_width=0,
@@ -177,11 +167,20 @@ void publishEvents() {
   if (door_state == DOOR_OPEN && frames_since_door_open < 2) return;
 
   for (idx_t i=0; i<MAX_PEOPLE; i++) {
-    if (known_people[i].real() && known_people[i].history > MIN_HISTORY &&
-        known_people[i].starting_side() != known_people[i].side()) {
+    if (!known_people[i].real()) continue;
+    if (known_people[i].history() > 2 && pointOnBorder(known_people[i].past_position) &&
+        axis_distance(known_people[i].starting_position(), known_people[i].past_position) > 2) {
       Person p = known_people[i];
       p.publishPacket();
       known_people[i] = p; // update known_people array
+    } else if (pointOnTBEdge(known_people[i].past_position)) {
+      // reset person when they reach top or bottom edge
+      known_people[i].count = 1;
+      known_people[i].d1_count = 0;
+      known_people[i].d2_count = 0;
+      known_people[i].direction = known_people[i].side() == 1 ? FACING_SIDE2 : FACING_SIDE1;
+      known_people[i].min_position = known_people[i].past_position;
+      known_people[i].max_position = known_people[i].past_position;
     }
   }
 }
@@ -199,14 +198,14 @@ void clearPointsAfterDoorClose() {
           clearPoint = true;
         } else if (previous_door_state == DOOR_AJAR &&
                     known_people[i].starting_side() == ajar_side) {
-          // door is ajar and this person started on the side that the door is ajar
+          // door was ajar and this person started on the side that the door is ajar
           clearPoint = true;
         } else if (door_state == DOOR_AJAR && (known_people[i].side() == ajar_side ||
                       known_people[i].starting_side() == ajar_side)) {
           // door is ajar and this person is somehow on the side that the door is ajar
           clearPoint = true;
         } else if (previous_door_state == DOOR_CLOSED &&
-                    doorSide(known_people[i].starting_position)) {
+                    doorSide(known_people[i].starting_position())) {
           // door just opened
           clearPoint = true;
         }
@@ -248,6 +247,7 @@ void forget_person(idx_t idx, idx_t (&pairs)[MAX_PEOPLE*2], uint8_t expiration =
     }
     forgotten_people[useIdx] = known_people[idx];
     forgotten_expirations[useIdx] = expiration;
+    forgotten_starting_expiration[useIdx] = expiration;
   }
   known_people[(idx)] = UNDEF_PERSON;
 }
@@ -282,7 +282,7 @@ bool updateKnownPerson(Person p, idx_t (&pairs)[MAX_PEOPLE*2]) {
   if (useIdx != UNDEF_INDEX) {
     // we found a slot! save person in there
     if (known_people[useIdx].real()) {
-      forget_person(useIdx, pairs);
+      forget_person(useIdx, pairs, 1);
     }
     pairs[(useIdx)] = UNDEF_INDEX;
     known_people[useIdx] = p;

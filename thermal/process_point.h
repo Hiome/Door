@@ -1,6 +1,6 @@
 // more than one person is trying to match with this single point, pick the best one...
-idx_t min_idx = UNDEF_INDEX;
-float min_score = 100;
+idx_t max_idx = UNDEF_INDEX;
+float max_score = -100;
 float maxT = points[i].max_allowed_temp_drift();
 float maxD = points[i].max_distance();
 for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
@@ -20,33 +20,38 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
   // prefer people with more similar temps
   float tempDiff = p.difference_from_point(points[i].current_position);
 
-  float score = (d/maxD) + (tempDiff/maxT);
-  score -= (0.0001*p.confidence);
-  score -= (0.01*p.neighbors);
+  float dScore = 1 - ((d+0.1)/(maxD+0.2));
+  float tScore = 1 - ((tempDiff+0.1)/(maxT+0.2));
+  float score = dScore * tScore;
+  score *= (0.9 + (0.001*p.confidence));
+  score *= (0.92 + (0.01*p.neighbors));
 
-  if (idx >= MAX_PEOPLE) score += 0.2;
+  // a forgotten point needs to overcome a larger hurdle to be revived
+  if (idx >= MAX_PEOPLE) {
+    score *= (1 - (0.05*(forgotten_starting_expiration[idx-MAX_PEOPLE] - forgotten_expirations[idx-MAX_PEOPLE])));
+  }
 
-  if (score <= min_score - 0.05) {
-    min_score = score;
-    min_idx = idx;
-  } else if (score < min_score + 0.05) {
+  if (score >= max_score + 0.005) {
+    max_score = score;
+    max_idx = idx;
+  } else if (score > max_score - 0.005) {
     uint8_t matchedHistory;
-    if (min_idx < MAX_PEOPLE) {
-      matchedHistory = known_people[min_idx].history;
+    if (max_idx < MAX_PEOPLE) {
+      matchedHistory = known_people[max_idx].history();
     } else {
-      matchedHistory = forgotten_people[min_idx-MAX_PEOPLE].history;
+      matchedHistory = forgotten_people[max_idx-MAX_PEOPLE].history();
     }
-    if (p.history > matchedHistory) {
-      // if 2 competing points have the same score, pick the one with more history
-      min_score = score;
-      min_idx = idx;
+    if (p.history() > matchedHistory) {
+      // if 2 competing people have the same score, pick the one with more history
+      max_score = score;
+      max_idx = idx;
     }
   }
 }
 
 // once we've chosen our winning point, forget the rest...
 for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
-  if (pairs[idx] != i || idx == min_idx) continue;
+  if (pairs[idx] != i || idx == max_idx) continue;
   // does this look like two blobs combining into one?
   if (idx < MAX_PEOPLE && known_people[idx].real()) {
     // if new point is a merger, it must be bigger than old person
@@ -60,4 +65,4 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
 }
 
 // we found a match
-taken[i] = min_idx == UNDEF_INDEX ? 0 : 1;
+taken[i] = max_idx == UNDEF_INDEX ? 0 : 1;

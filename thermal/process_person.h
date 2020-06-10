@@ -6,12 +6,15 @@ if (idx < MAX_PEOPLE) {
 } else {
   if (!forgotten_people[idx-MAX_PEOPLE].real()) continue;
   // don't process point that was forgotten earlier in this loop again
-  if (forgotten_expirations[idx-MAX_PEOPLE] == MAX_EMPTY_CYCLES) continue;
+  if (forgotten_expirations[idx-MAX_PEOPLE] == MAX_EMPTY_CYCLES &&
+      forgotten_starting_expiration[idx-MAX_PEOPLE] == MAX_EMPTY_CYCLES) {
+    continue;
+  }
   p = forgotten_people[idx-MAX_PEOPLE];
 }
 
-idx_t min_index = UNDEF_INDEX;
-float min_score = 100;
+idx_t max_index = UNDEF_INDEX;
+float max_score = -100;
 float maxTperson = p.max_allowed_temp_drift();
 float maxDperson = p.max_distance();
 
@@ -28,6 +31,18 @@ for (idx_t j=0; j<total_masses; j++) {
     if (p.blobSize*2 < points[j].neighbors) continue;
   }
 
+  if (p.blobSize > points[j].blobSize) {
+    // person would be shrinking
+    if (points[j].blobSize*2 < p.blobSize && pointOnEdge(p.past_position)) {
+      // person is on edge of grid and is double the size of new point, this is likely the end of a person
+      continue;
+    }
+  } else if (p.blobSize*2 < points[j].blobSize && pointOnEdge(points[j].current_position)) {
+    // person would be growing, but new point is on edge of grid.
+    // If new point is double the size of person, this is likely the start of a new person
+    continue;
+  }
+
   // can't jump too far
   float d = euclidean_distance(p.past_position, points[j].current_position);
   float maxDpoint = points[j].max_distance();
@@ -39,29 +54,37 @@ for (idx_t j=0; j<total_masses; j++) {
   float maxTpoint = points[j].max_allowed_temp_drift();
   if (tempDiff > min(maxTpoint, maxTperson) + 2) continue;
 
-  // +1 from temp ratio, +1 from distance ratio,
-  // -0.1 from confidence, -0.08 from neighbors
-  float score = (d/maxDperson) + (tempDiff/maxTperson);
-  score -= (0.0001*points[j].confidence);
-  score -= (0.01*points[j].neighbors);
+  float dScore = 1 - ((d+0.1)/(maxDperson+0.2));
+  float tScore = 1 - ((tempDiff+0.1)/(maxTperson+0.2));
+  if (dScore < 0.2 && tScore < 0.2) continue;
+  float score = dScore * tScore;
+  score *= (0.9 + (0.001*points[j].confidence));
+  score *= (0.92 + (0.01*points[j].neighbors));
 
-  if (idx >= MAX_PEOPLE) score += 0.2;
+  // add inertia - a person that is moving forward is more likely to keep moving forward than change direction
+  if (p.direction == FACING_SIDE1) {
+    if (p.d1_count > p.d2_count && AXIS(points[j].current_position) > AXIS(p.past_position)) {
+      score *= 0.85;
+    }
+  } else if (p.d2_count > p.d1_count && AXIS(points[j].current_position) < AXIS(p.past_position)) {
+    score *= 0.85;
+  }
 
-  if (score <= (min_score - 0.05) || (score < (min_score + 0.05) &&
-        tempDiff < p.difference_from_point(points[min_index].current_position))) {
-    // either score is less than min score, or if it's similar,
+  if (score >= (max_score + 0.005) || (score > (max_score - 0.005) &&
+        tempDiff < p.difference_from_point(points[max_index].current_position))) {
+    // either score is greater than max score, or if it's similar,
     // choose the point with more similar raw temp
-    min_score = score;
-    min_index = j;
+    max_score = score;
+    max_index = j;
   }
 }
 
-if (min_index == UNDEF_INDEX) {
+if (max_index == UNDEF_INDEX) {
   // still not found...
   if (idx < MAX_PEOPLE) {
     forget_person(idx, pairs);
   }
 } else {
-  ++taken[min_index];
-  pairs[idx] = min_index;
+  ++taken[max_index];
+  pairs[idx] = max_index;
 }
