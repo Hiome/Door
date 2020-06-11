@@ -56,7 +56,7 @@ for (idx_t j=0; j<total_masses; j++) {
 
   float dScore = 1 - ((d+0.1)/(maxDperson+0.2));
   float tScore = 1 - ((tempDiff+0.1)/(maxTperson+0.2));
-  if (dScore < 0.2 && tScore < 0.2) continue;
+  if (dScore < 0.5 && tScore < 0.5) continue;
   float score = dScore * tScore;
   score *= (0.9 + (0.001*points[j].confidence));
   score *= (0.92 + (0.01*points[j].neighbors));

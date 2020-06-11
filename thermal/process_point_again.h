@@ -25,8 +25,7 @@ for (idx_t fidx=0; fidx < MAX_PEOPLE; fidx++) {
 
   float dScore = 1 - ((d+0.1)/(maxDpoint+0.2));
   float tScore = 1 - ((tempDiff+0.1)/(maxTpoint+0.2));
-  if (dScore < 0.2 && tScore < 0.2) continue;
-
+  if (dScore < 0.5 && tScore < 0.5) continue;
   float score = dScore * tScore;
   score *= (0.9 + (0.001*forgotten_people[fidx].confidence));
   score *= (0.92 + (0.01*forgotten_people[fidx].neighbors));
