@@ -118,7 +118,7 @@ typedef struct {
 
   bool publishable() {
     if (published == side() && side() == starting_side()) return false;
-    return d1_count + d2_count > 2 && history() > 1 && axis_distance(starting_position(), past_position) > 2;
+    return (published || d1_count + d2_count > 2) && history() > 1 && axis_distance(starting_position(), past_position) > 2;
   };
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
@@ -188,12 +188,18 @@ void publishEvents() {
         // person strayed far enough, bombs away
         maybe_person._publishFrd();
         maybe_idx = UNDEF_INDEX;
-        if (known_people[i].count >= maybe_person.count)
+        if (known_people[i].count > maybe_person.count)
           known_people[i].count -= (maybe_person.count - 1);
-        if (known_people[i].d1_count >= maybe_person.d1_count)
+        else
+          known_people[i].count = 1;
+        if (known_people[i].d1_count > maybe_person.d1_count)
           known_people[i].d1_count -= maybe_person.d1_count;
-        if (known_people[i].d2_count >= maybe_person.d2_count)
+        else
+          known_people[i].d1_count = 0;
+        if (known_people[i].d2_count > maybe_person.d2_count)
           known_people[i].d2_count -= maybe_person.d2_count;
+        else
+          known_people[i].d2_count = 0;
         if (maybe_person.direction == FACING_SIDE1) {
           known_people[i].published = 1;
           known_people[i].max_position = known_people[i].past_position;
