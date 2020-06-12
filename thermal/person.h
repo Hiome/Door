@@ -50,8 +50,8 @@ typedef struct {
   uint8_t   avg_neighbors     :4; // 0-8
 
   uint8_t   avg_height        :3;
-  uint8_t   published         :1;
-  uint8_t   avg_width         :4;
+  uint8_t   published         :2;
+  uint8_t   avg_width         :3;
 
   uint8_t   avg_confidence;
   uint8_t   blobSize;
@@ -111,13 +111,13 @@ typedef struct {
     count = 1;
     d1_count = 0;
     d2_count = 0;
-    published = 1;
+    published = direction == FACING_SIDE1 ? 1 : 2;
     min_position = past_position;
     max_position = past_position;
   };
 
   bool publishable() {
-    if (published == 1 && side() == starting_side()) return false;
+    if (published == side() && side() == starting_side()) return false;
     return d1_count + d2_count > 2 && history() > 1 && axis_distance(starting_position(), past_position) > 2;
   };
 
@@ -194,11 +194,12 @@ void publishEvents() {
           known_people[i].d1_count -= maybe_person.d1_count;
         if (known_people[i].d2_count >= maybe_person.d2_count)
           known_people[i].d2_count -= maybe_person.d2_count;
-        known_people[i].published = 1;
-        if (direction == FACING_SIDE1) {
-          known_people[i].min_position = known_people[i].past_position;
-        } else {
+        if (maybe_person.direction == FACING_SIDE1) {
+          known_people[i].published = 1;
           known_people[i].max_position = known_people[i].past_position;
+        } else {
+          known_people[i].published = 2;
+          known_people[i].min_position = known_people[i].past_position;
         }
       }
     }
