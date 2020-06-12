@@ -39,8 +39,8 @@ typedef struct {
   uint8_t   confidence;           //:7 0-100
   uint16_t  count;
 
-  uint8_t   d1_count          :4;
-  uint8_t   d2_count          :4;
+  uint8_t   d1_count;
+  uint8_t   d2_count;
 
   uint8_t   height            :3; // 0-7
   uint8_t   direction         :1; // 0-1
@@ -49,7 +49,8 @@ typedef struct {
   uint8_t   neighbors         :4; // 0-8
   uint8_t   avg_neighbors     :4; // 0-8
 
-  uint8_t   avg_height        :4;
+  uint8_t   avg_height        :3;
+  uint8_t   published         :1;
   uint8_t   avg_width         :4;
 
   uint8_t   avg_confidence;
@@ -110,12 +111,14 @@ typedef struct {
     count = 1;
     d1_count = 0;
     d2_count = 0;
+    published = 1;
     min_position = past_position;
     max_position = past_position;
   };
 
   bool publishable() {
-    return history() > 1 && axis_distance(starting_position(), past_position) > 2;
+    if (published == 1 && side() == starting_side()) return false;
+    return d1_count + d2_count > 2 && history() > 1 && axis_distance(starting_position(), past_position) > 2;
   };
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
@@ -149,6 +152,7 @@ const Person UNDEF_PERSON = {
   .neighbors=0,
   .avg_neighbors=0,
   .avg_height=0,
+  .published=0,
   .avg_width=0,
   .avg_confidence=0,
   .blobSize=0,
@@ -184,11 +188,18 @@ void publishEvents() {
         // person strayed far enough, bombs away
         maybe_person._publishFrd();
         maybe_idx = UNDEF_INDEX;
-        if (known_people[i].d1_count > maybe_person.d1_count)
+        if (known_people[i].count >= maybe_person.count)
+          known_people[i].count -= (maybe_person.count - 1);
+        if (known_people[i].d1_count >= maybe_person.d1_count)
           known_people[i].d1_count -= maybe_person.d1_count;
-        if (known_people[i].d2_count > maybe_person.d2_count)
+        if (known_people[i].d2_count >= maybe_person.d2_count)
           known_people[i].d2_count -= maybe_person.d2_count;
-        known_people[i].count -= maybe_person.count;
+        known_people[i].published = 1;
+        if (direction == FACING_SIDE1) {
+          known_people[i].min_position = known_people[i].past_position;
+        } else {
+          known_people[i].max_position = known_people[i].past_position;
+        }
       }
     }
     if (pointOnBorder(known_people[i].past_position) && known_people[i].publishable()) {
@@ -200,6 +211,7 @@ void publishEvents() {
       known_people[i].count = 1;
       known_people[i].d1_count = 0;
       known_people[i].d2_count = 0;
+      known_people[i].published = 0;
       known_people[i].direction = known_people[i].side() == 1 ? FACING_SIDE2 : FACING_SIDE1;
       known_people[i].min_position = known_people[i].past_position;
       known_people[i].max_position = known_people[i].past_position;

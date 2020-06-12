@@ -20,10 +20,10 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
               maybe_idx = idx;
             }
             p.direction = FACING_SIDE2;
-            if (p.d2_count < 15) ++p.d2_count;
+            if (p.d2_count < 250) ++p.d2_count;
           } else {
             // still moving in direction 1
-            if (p.d1_count < 15) ++p.d1_count;
+            if (p.d1_count < 250) ++p.d1_count;
           }
         } else {
           if (new_axis < old_axis) {
@@ -33,10 +33,10 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
               maybe_idx = idx;
             }
             p.direction = FACING_SIDE1;
-            if (p.d1_count < 15) ++p.d1_count;
+            if (p.d1_count < 250) ++p.d1_count;
           } else {
             // still moving in direction 2
-            if (p.d2_count < 15) ++p.d2_count;
+            if (p.d2_count < 250) ++p.d2_count;
           }
         }
       }
@@ -44,13 +44,9 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
       // check if max or min edge was pushed
       if (new_axis <= AXIS(p.min_position)) {
         p.min_position = pp.current_position;
-        p.d1_count = p.history();
-        p.d2_count = 0;
       }
       if (new_axis >= AXIS(p.max_position)) {
         p.max_position = pp.current_position;
-        p.d2_count = p.history();
-        p.d1_count = 0;
       }
 
       // update current state where position changed
