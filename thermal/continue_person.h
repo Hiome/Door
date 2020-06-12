@@ -15,22 +15,34 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
         if (p.direction == FACING_SIDE1) {
           if (new_axis > old_axis) {
             // changed direction from 1 to 2
-            p.publishMaybeEvent(CHANGED_DIRECTION);
+            if (idx < MAX_PEOPLE && (maybe_idx == UNDEF_INDEX || maybe_person.confidence < p.confidence) && p.publishable()) {
+              maybe_person = p;
+              maybe_idx = idx;
+            }
             p.direction = FACING_SIDE2;
-            if (p.d2_count < 250) ++p.d2_count;
+            p.directional_count = 0;
+            if (p.d2_count < 15) ++p.d2_count;
           } else {
             // still moving in direction 1
-            if (p.d1_count < 250) ++p.d1_count;
+            if (p.d1_count < 15) ++p.d1_count;
+            if (p.directional_count < 3) ++p.directional_count;
+            if (p.directional_count > 1) p.min_position = pp.current_position;
           }
         } else {
           if (new_axis < old_axis) {
             // changed direction from 2 to 1
-            p.publishMaybeEvent(CHANGED_DIRECTION);
+            if (idx < MAX_PEOPLE && (maybe_idx == UNDEF_INDEX || maybe_person.confidence < p.confidence) && p.publishable()) {
+              maybe_person = p;
+              maybe_idx = idx;
+            }
             p.direction = FACING_SIDE1;
-            if (p.d1_count < 250) ++p.d1_count;
+            p.directional_count = 0;
+            if (p.d1_count < 15) ++p.d1_count;
           } else {
             // still moving in direction 2
-            if (p.d2_count < 250) ++p.d2_count;
+            if (p.d2_count < 15) ++p.d2_count;
+            if (p.directional_count < 3) ++p.directional_count;
+            if (p.directional_count > 1) p.max_position = pp.current_position;
           }
         }
       }

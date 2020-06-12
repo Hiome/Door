@@ -49,8 +49,9 @@ typedef struct {
   uint8_t   neighbors         :4; // 0-8
   uint8_t   avg_neighbors     :4; // 0-8
 
-  uint8_t   avg_height        :4; // only need 3 bits
-  uint8_t   avg_width         :4; // only need 3 bits
+  uint8_t   avg_height        :3;
+  uint8_t   directional_count :2;
+  uint8_t   avg_width         :3;
 
   uint8_t   avg_confidence;
   uint8_t   blobSize;
@@ -114,19 +115,18 @@ typedef struct {
     max_position = past_position;
   };
 
-  #define NO_REASON             0
-  #define CHANGED_DIRECTION     1
+  bool publishable() {
+    return history() > 2 && axis_distance(starting_position(), past_position) > 2;
+  };
+
   // called when a point is about to be forgotten to diagnose if min history is an issue
-  void publishMaybeEvent(uint8_t reason = NO_REASON) {
+  void publishMaybeEvent() {
     // door has been closed/ajar for more than 1 frame, no way anybody crossed
     if (door_state != DOOR_OPEN && frames_since_door_open > 0) return;
     // door literally just opened this frame, no way anybody crossed
     if (door_state == DOOR_OPEN && frames_since_door_open < 2) return;
 
-    // don't worry about changed directions if we haven't even crossed the half-way mark
-    if (reason == CHANGED_DIRECTION && side() == starting_side()) return;
-
-    if (history() > 2 && axis_distance(starting_position(), past_position) > 2) publishPacket();
+    if (publishable()) publishPacket();
   };
 } Person;
 
@@ -150,6 +150,7 @@ const Person UNDEF_PERSON = {
   .neighbors=0,
   .avg_neighbors=0,
   .avg_height=0,
+  .directional_count=0,
   .avg_width=0,
   .avg_confidence=0,
   .blobSize=0,
@@ -161,6 +162,9 @@ const Person UNDEF_PERSON = {
   .fgm=0
 };
 
+idx_t maybe_idx = UNDEF_INDEX;
+Person maybe_person;
+
 void publishEvents() {
   // door has been closed/ajar for more than 1 frame, no way anybody crossed
   if (door_state != DOOR_OPEN && frames_since_door_open > 0) return;
@@ -168,8 +172,28 @@ void publishEvents() {
 
   for (idx_t i=0; i<MAX_PEOPLE; i++) {
     if (!known_people[i].real()) continue;
-    if (known_people[i].history() > 2 && pointOnBorder(known_people[i].past_position) &&
-        axis_distance(known_people[i].starting_position(), known_people[i].past_position) > 2) {
+    if (maybe_idx == i) {
+      if (known_people[i].direction == maybe_person.direction) {
+        // clear fork if person corrected their direction before straying too far
+        if (maybe_person.direction == FACING_SIDE1) {
+          if (AXIS(known_people[i].past_position) <= AXIS(maybe_person.past_position)) {
+            maybe_idx = UNDEF_INDEX;
+          }
+        } else if (AXIS(known_people[i].past_position) >= AXIS(maybe_person.past_position)) {
+          maybe_idx = UNDEF_INDEX;
+        }
+      } else if (axis_distance(known_people[i].past_position, maybe_person.past_position) >= 2) {
+        // person strayed far enough, bombs away
+        maybe_person._publishFrd();
+        maybe_idx = UNDEF_INDEX;
+        if (known_people[i].d1_count > maybe_person.d1_count)
+          known_people[i].d1_count -= maybe_person.d1_count;
+        if (known_people[i].d2_count > maybe_person.d2_count)
+          known_people[i].d2_count -= maybe_person.d2_count;
+        known_people[i].count -= maybe_person.count;
+      }
+    }
+    if (pointOnBorder(known_people[i].past_position) && known_people[i].publishable()) {
       Person p = known_people[i];
       p.publishPacket();
       known_people[i] = p; // update known_people array
@@ -181,6 +205,7 @@ void publishEvents() {
       known_people[i].direction = known_people[i].side() == 1 ? FACING_SIDE2 : FACING_SIDE1;
       known_people[i].min_position = known_people[i].past_position;
       known_people[i].max_position = known_people[i].past_position;
+      if (maybe_idx == i) maybe_idx = UNDEF_INDEX;
     }
   }
 }
@@ -213,6 +238,7 @@ void clearPointsAfterDoorClose() {
         if (clearPoint) {
           known_people[i].publishMaybeEvent();
           known_people[i] = UNDEF_PERSON;
+          if (maybe_idx == i) maybe_idx = UNDEF_INDEX;
         }
       }
 
@@ -250,6 +276,7 @@ void forget_person(idx_t idx, idx_t (&pairs)[MAX_PEOPLE*2], uint8_t expiration =
     forgotten_starting_expiration[useIdx] = expiration;
   }
   known_people[(idx)] = UNDEF_PERSON;
+  if (maybe_idx == idx) maybe_idx = UNDEF_INDEX;
 }
 
 void expireForgottenPeople() {
