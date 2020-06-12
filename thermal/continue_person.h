@@ -44,10 +44,12 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
       // check if max or min edge was pushed
       if (new_axis <= AXIS(p.min_position)) {
         p.min_position = pp.current_position;
+        p.d1_count = p.history();
         p.d2_count = 0;
       }
       if (new_axis >= AXIS(p.max_position)) {
         p.max_position = pp.current_position;
+        p.d2_count = p.history();
         p.d1_count = 0;
       }
 

@@ -115,7 +115,7 @@ typedef struct {
   };
 
   bool publishable() {
-    return history() > 2 && axis_distance(starting_position(), past_position) > 2;
+    return history() > 1 && axis_distance(starting_position(), past_position) > 2;
   };
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
