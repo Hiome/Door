@@ -20,13 +20,10 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
               maybe_idx = idx;
             }
             p.direction = FACING_SIDE2;
-            p.directional_count = 0;
             if (p.d2_count < 15) ++p.d2_count;
           } else {
             // still moving in direction 1
             if (p.d1_count < 15) ++p.d1_count;
-            if (p.directional_count < 3) ++p.directional_count;
-            if (p.directional_count > 1) p.min_position = pp.current_position;
           }
         } else {
           if (new_axis < old_axis) {
@@ -36,13 +33,10 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
               maybe_idx = idx;
             }
             p.direction = FACING_SIDE1;
-            p.directional_count = 0;
             if (p.d1_count < 15) ++p.d1_count;
           } else {
             // still moving in direction 2
             if (p.d2_count < 15) ++p.d2_count;
-            if (p.directional_count < 3) ++p.directional_count;
-            if (p.directional_count > 1) p.max_position = pp.current_position;
           }
         }
       }

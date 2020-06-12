@@ -59,7 +59,6 @@ Person p = {
   .neighbors=points[i].neighbors,
   .avg_neighbors=points[i].neighbors,
   .avg_height=points[i].height,
-  .directional_count=0,
   .avg_width=points[i].width,
   .avg_confidence=points[i].confidence,
   .blobSize=(uint8_t)points[i].blobSize,

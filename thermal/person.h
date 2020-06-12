@@ -49,9 +49,8 @@ typedef struct {
   uint8_t   neighbors         :4; // 0-8
   uint8_t   avg_neighbors     :4; // 0-8
 
-  uint8_t   avg_height        :3;
-  uint8_t   directional_count :2;
-  uint8_t   avg_width         :3;
+  uint8_t   avg_height        :4;
+  uint8_t   avg_width         :4;
 
   uint8_t   avg_confidence;
   uint8_t   blobSize;
@@ -150,7 +149,6 @@ const Person UNDEF_PERSON = {
   .neighbors=0,
   .avg_neighbors=0,
   .avg_height=0,
-  .directional_count=0,
   .avg_width=0,
   .avg_confidence=0,
   .blobSize=0,
