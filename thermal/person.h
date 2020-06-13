@@ -118,7 +118,7 @@ typedef struct {
 
   bool publishable() {
     if (published == side() && side() == starting_side()) return false;
-    return (published || d1_count + d2_count > 2) && history() > 1 && axis_distance(starting_position(), past_position) > 2;
+    return (published || (d1_count + d2_count > 2)) && history() > 1 && axis_distance(starting_position(), past_position) > 2;
   };
 
   // called when a point is about to be forgotten to diagnose if min history is an issue
@@ -167,6 +167,32 @@ const Person UNDEF_PERSON = {
 idx_t maybe_idx = UNDEF_INDEX;
 Person maybe_person;
 
+void publish_maybe_person(idx_t i) {
+  if (maybe_idx == i) {
+    maybe_person._publishFrd();
+    maybe_idx = UNDEF_INDEX;
+    if (known_people[i].count > maybe_person.count)
+      known_people[i].count -= (maybe_person.count - 1);
+    else
+      known_people[i].count = 1;
+    if (known_people[i].d1_count > maybe_person.d1_count)
+      known_people[i].d1_count -= maybe_person.d1_count;
+    else
+      known_people[i].d1_count = 0;
+    if (known_people[i].d2_count > maybe_person.d2_count)
+      known_people[i].d2_count -= maybe_person.d2_count;
+    else
+      known_people[i].d2_count = 0;
+    if (maybe_person.direction == FACING_SIDE1) {
+      known_people[i].published = 1;
+      known_people[i].max_position = known_people[i].past_position;
+    } else {
+      known_people[i].published = 2;
+      known_people[i].min_position = known_people[i].past_position;
+    }
+  }
+}
+
 void publishEvents() {
   // door has been closed/ajar for more than 1 frame, no way anybody crossed
   if (door_state != DOOR_OPEN && frames_since_door_open > 0) return;
@@ -186,27 +212,7 @@ void publishEvents() {
         }
       } else if (axis_distance(known_people[i].past_position, maybe_person.past_position) >= 2) {
         // person strayed far enough, bombs away
-        maybe_person._publishFrd();
-        maybe_idx = UNDEF_INDEX;
-        if (known_people[i].count > maybe_person.count)
-          known_people[i].count -= (maybe_person.count - 1);
-        else
-          known_people[i].count = 1;
-        if (known_people[i].d1_count > maybe_person.d1_count)
-          known_people[i].d1_count -= maybe_person.d1_count;
-        else
-          known_people[i].d1_count = 0;
-        if (known_people[i].d2_count > maybe_person.d2_count)
-          known_people[i].d2_count -= maybe_person.d2_count;
-        else
-          known_people[i].d2_count = 0;
-        if (maybe_person.direction == FACING_SIDE1) {
-          known_people[i].published = 1;
-          known_people[i].max_position = known_people[i].past_position;
-        } else {
-          known_people[i].published = 2;
-          known_people[i].min_position = known_people[i].past_position;
-        }
+        publish_maybe_person(i);
       }
     }
     if (pointOnBorder(known_people[i].past_position) && known_people[i].publishable()) {
@@ -255,7 +261,10 @@ void clearPointsAfterDoorClose() {
         if (clearPoint) {
           known_people[i].publishMaybeEvent();
           known_people[i] = UNDEF_PERSON;
-          if (maybe_idx == i) maybe_idx = UNDEF_INDEX;
+          if (maybe_idx == i) {
+            maybe_person._publishFrd();
+            maybe_idx = UNDEF_INDEX;
+          }
         }
       }
 
@@ -268,6 +277,7 @@ void clearPointsAfterDoorClose() {
 }
 
 void forget_person(idx_t idx, idx_t (&pairs)[MAX_PEOPLE*2], uint8_t expiration = MAX_EMPTY_CYCLES) {
+  publish_maybe_person(idx);
   idx_t useIdx = UNDEF_INDEX;
   uint8_t min_conf = known_people[idx].confidence;
   for (idx_t j = 0; j < MAX_PEOPLE; j++) {
@@ -293,7 +303,6 @@ void forget_person(idx_t idx, idx_t (&pairs)[MAX_PEOPLE*2], uint8_t expiration =
     forgotten_starting_expiration[useIdx] = expiration;
   }
   known_people[(idx)] = UNDEF_PERSON;
-  if (maybe_idx == idx) maybe_idx = UNDEF_INDEX;
 }
 
 void expireForgottenPeople() {

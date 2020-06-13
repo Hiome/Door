@@ -20,11 +20,21 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
               maybe_idx = idx;
             }
             p.direction = FACING_SIDE2;
-            if (p.d2_count < 250) ++p.d2_count;
+            if (p.d2_count < 250) {
+              ++p.d2_count;
+            } else {
+              p.d2_count = p.history() + 1;
+              p.d1_count = 0;
+            }
           } else {
             // still moving in direction 1
-            if (p.d1_count < 250) ++p.d1_count;
-            if (p.d2_count > 0) --p.d2_count;
+            if (p.d1_count < 250) {
+              ++p.d1_count;
+              if (p.d2_count > 0) --p.d2_count;
+            } else {
+              p.d1_count = p.history() + 1;
+              p.d2_count = 0;
+            }
           }
         } else {
           if (new_axis < old_axis) {
@@ -34,11 +44,21 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
               maybe_idx = idx;
             }
             p.direction = FACING_SIDE1;
-            if (p.d1_count < 250) ++p.d1_count;
+            if (p.d1_count < 250) {
+              ++p.d1_count;
+            } else {
+              p.d1_count = p.history() + 1;
+              p.d2_count = 0;
+            }
           } else {
             // still moving in direction 2
-            if (p.d2_count < 250) ++p.d2_count;
-            if (p.d1_count > 0) --p.d1_count;
+            if (p.d2_count < 250) {
+              ++p.d2_count;
+              if (p.d1_count > 0) --p.d1_count;
+            } else {
+              p.d2_count = p.history() + 1;
+              p.d1_count = 0;
+            }
           }
         }
       }

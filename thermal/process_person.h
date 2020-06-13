@@ -14,7 +14,7 @@ if (idx < MAX_PEOPLE) {
 }
 
 idx_t max_index = UNDEF_INDEX;
-float max_score = -100;
+float max_score = 0;
 float maxTperson = p.max_allowed_temp_drift();
 float maxDperson = p.max_distance();
 
@@ -55,25 +55,22 @@ for (idx_t j=0; j<total_masses; j++) {
   if (tempDiff > min(maxTpoint, maxTperson) + 2) continue;
 
   float dScore = 1 - ((d+0.1)/(maxDperson+0.2));
-  float tScore = 1 - ((tempDiff+0.1)/(maxTperson+0.2));
+  float tScore = 1 - ((tempDiff+0.1)/(maxTperson+2.2));
   if (dScore < 0.5 && tScore < 0.5) continue;
-  float score = dScore * tScore;
-  score *= (0.9 + (0.001*points[j].confidence));
-  score *= (0.92 + (0.01*points[j].neighbors));
+  float score = dScore + tScore;
+  score += (0.001*points[j].confidence);
+  score += (0.01*points[j].neighbors);
 
   // add inertia - a person that is moving forward is more likely to keep moving forward than change direction
   if (p.direction == FACING_SIDE1) {
     if (p.d1_count > p.d2_count && AXIS(points[j].current_position) > AXIS(p.past_position)) {
-      score *= 0.85;
+      score *= 0.95;
     }
   } else if (p.d2_count > p.d1_count && AXIS(points[j].current_position) < AXIS(p.past_position)) {
-    score *= 0.85;
+    score *= 0.95;
   }
 
-  if (score >= (max_score + 0.005) || (score > (max_score - 0.005) &&
-        tempDiff < p.difference_from_point(points[max_index].current_position))) {
-    // either score is greater than max score, or if it's similar,
-    // choose the point with more similar raw temp
+  if (score > max_score) {
     max_score = score;
     max_index = j;
   }

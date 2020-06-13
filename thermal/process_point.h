@@ -1,6 +1,6 @@
 // more than one person is trying to match with this single point, pick the best one...
 idx_t max_idx = UNDEF_INDEX;
-float max_score = -100;
+float max_score = 0;
 float maxT = points[i].max_allowed_temp_drift();
 float maxD = points[i].max_distance();
 for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
@@ -21,31 +21,20 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
   float tempDiff = p.difference_from_point(points[i].current_position);
 
   float dScore = 1 - ((d+0.1)/(maxD+0.2));
-  float tScore = 1 - ((tempDiff+0.1)/(maxT+0.2));
-  float score = dScore * tScore;
-  score *= (0.9 + (0.001*p.confidence));
-  score *= (0.92 + (0.01*p.neighbors));
+  float tScore = 1 - ((tempDiff+0.1)/(maxT+2.2));
+  float score = dScore + tScore;
+  score += (0.001*p.confidence);
+  score += (0.01*p.neighbors);
+  score += (0.05*p.history());
 
   // a forgotten point needs to overcome a larger hurdle to be revived
   if (idx >= MAX_PEOPLE) {
-    score *= (1 - (0.05*(forgotten_starting_expiration[idx-MAX_PEOPLE] - forgotten_expirations[idx-MAX_PEOPLE])));
+    score -= (0.05*(forgotten_starting_expiration[idx-MAX_PEOPLE] - forgotten_expirations[idx-MAX_PEOPLE]));
   }
 
-  if (score >= max_score + 0.005) {
+  if (score > max_score) {
     max_score = score;
     max_idx = idx;
-  } else if (score > max_score - 0.005) {
-    uint8_t matchedHistory;
-    if (max_idx < MAX_PEOPLE) {
-      matchedHistory = known_people[max_idx].history();
-    } else {
-      matchedHistory = forgotten_people[max_idx-MAX_PEOPLE].history();
-    }
-    if (p.history() > matchedHistory) {
-      // if 2 competing people have the same score, pick the one with more history
-      max_score = score;
-      max_idx = idx;
-    }
   }
 }
 
