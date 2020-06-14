@@ -20,26 +20,8 @@ float maxDperson = p.max_distance();
 
 // pair this person with a point in current frame
 for (idx_t j=0; j<total_masses; j++) {
-  // limit unholy human/noise pairing by preventing neighbor count from doubling in one jump
-  // 0 => 2
-  // 1 => 4
-  // 2 => 6
-  // 3+ => 8
-  if (p.neighbors > points[j].neighbors) {
-    if (points[j].blobSize*2 < p.neighbors) continue;
-  } else {
-    if (p.blobSize*2 < points[j].neighbors) continue;
-  }
-
-  if (p.blobSize > points[j].blobSize) {
-    // person would be shrinking
-    if (points[j].blobSize*2 < p.blobSize && pointOnEdge(p.past_position)) {
-      // person is on edge of grid and is double the size of new point, this is likely the end of a person
-      continue;
-    }
-  } else if (p.blobSize*2 < points[j].blobSize && pointOnEdge(points[j].current_position)) {
-    // person would be growing, but new point is on edge of grid.
-    // If new point is double the size of person, this is likely the start of a new person
+  if (!safeToMerge(p.past_position, p.blobSize, p.neighbors,
+                   points[j].current_position, points[j].blobSize, points[j].neighbors)) {
     continue;
   }
 

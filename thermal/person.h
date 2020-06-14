@@ -343,3 +343,36 @@ bool updateKnownPerson(Person p, idx_t (&pairs)[MAX_PEOPLE*2]) {
   }
   return false;
 }
+
+// limit unholy human/noise pairing by preventing neighbor count from doubling in one jump
+bool safeToMerge(uint8_t personPosition, uint8_t personSize, uint8_t personNeighbors,
+                 uint8_t pointPosition, uint8_t pointSize, uint8_t pointNeighbors) {
+  if (personSize > pointSize) {
+    // person would be shrinking
+    if (pointOnEdge(personPosition)) {
+      if (pointSize*2 < personSize && !pointOnEdge(pointPosition)) {
+        // person is on edge of grid and is double the size of new point, which is in middle of grid.
+        // this is likely the end of a person
+        return false;
+      }
+    } else if (pointSize*4 < personNeighbors && !pointOnEdge(pointPosition)) {
+      // both person and new point are in middle of grid, but person is 4x larger than new point
+      // this is the same as points[j].blobSize == 1 && p.neighbors > 4
+      return false;
+    }
+  } else {
+    // person would be growing
+    if (pointOnEdge(pointPosition)) {
+      if (personSize*2 < pointSize && !pointOnEdge(personPosition)) {
+        // new point is on edge of grid and is double the size of person, who is in middle of grid.
+        // this is likely the start of a new person
+        return false;
+      }
+    } else if (personSize*4 < pointNeighbors && !pointOnEdge(personPosition)) {
+      // both person and new point are in middle of grid, but new point is 4x larger than person
+      // this is the same as p.blobSize == 1 && points[j].neighbors > 4
+      return false;
+    }
+  }
+  return true;
+}

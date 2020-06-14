@@ -6,10 +6,9 @@ float maxDpoint = points[i].max_distance();
 for (idx_t fidx=0; fidx < MAX_PEOPLE; fidx++) {
   if (!forgotten_people[fidx].real() || pairs[fidx+MAX_PEOPLE] != UNDEF_INDEX) continue;
 
-  if (forgotten_people[fidx].neighbors > points[i].neighbors) {
-    if (points[i].blobSize*2 < forgotten_people[fidx].neighbors) continue;
-  } else {
-    if (forgotten_people[fidx].blobSize*2 < points[i].neighbors) continue;
+  if (!safeToMerge(forgotten_people[fidx].past_position, forgotten_people[fidx].blobSize, forgotten_people[fidx].neighbors,
+                   points[i].current_position, points[i].blobSize, points[i].neighbors)) {
+    continue;
   }
 
   // can't jump too far
