@@ -21,7 +21,7 @@ float fint1ToFloat(fint1_t a) {
 }
 
 fint1_t floatToFint1(float a) {
-  return ((fint1_t)(a*10.0));
+  return ((fint1_t)((a)*10.0));
 }
 
 float fint2ToFloat(fint2_t a) {
@@ -29,7 +29,7 @@ float fint2ToFloat(fint2_t a) {
 }
 
 fint2_t floatToFint2(float a) {
-  return ((fint2_t)(a*100.0));
+  return ((fint2_t)((a)*100.0));
 }
 
 float fint3ToFloat(fint3_t a) {
@@ -37,5 +37,5 @@ float fint3ToFloat(fint3_t a) {
 }
 
 fint3_t floatToFint3(float a) {
-  return ((fint3_t)(a*1000.0));
+  return ((fint3_t)((a)*1000.0));
 }

@@ -109,8 +109,11 @@ float trimMean(uint8_t side) {
     // such as when keith is sweaty. We shall see!
     avg += constrainedPixel(sortedPixels[i]);
     total++;
-    if (frames_since_door_open >= MAX_DOOR_CHANGE_FRAMES &&
-        (uint8_t)bgDiff(sortedPixels[i]) == 0) {
+    if ((frames_since_door_open >= MAX_DOOR_CHANGE_FRAMES
+        #ifndef RECESSED
+          || (side == ajar_side && (door_state == DOOR_AJAR || previous_door_state == DOOR_AJAR))
+        #endif
+        ) && (uint8_t)bgDiff(sortedPixels[i]) == 0) {
       // double weight of points with low background diff
       avg += constrainedPixel(sortedPixels[i]);
       total++;
@@ -175,11 +178,15 @@ float calculateNewBackground(coord_t i) {
 
 void updateBgAverage() {
   for (coord_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
+    #ifdef RECESSED
     if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES) {
+    #else
+    if (frames_since_door_open < MAX_DOOR_CHANGE_FRAMES && SIDE(i) != ajar_side &&
+        (door_state == DOOR_AJAR || previous_door_state == DOOR_AJAR)) {
+    #endif
       // door just changed, reset avg_pixels to current foreground average
       // since we know nothing about this brave new world's background
-      float cavg = SIDE1(i) ? cavg1 : cavg2;
-      avg_pixels[i] = floatToFint3(cavg);
+      avg_pixels[i] = floatToFint3(SIDE1(i) ? cavg1 : cavg2);
       continue;
     }
 
