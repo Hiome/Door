@@ -20,10 +20,10 @@ float maxDperson = p.max_distance();
 
 // pair this person with a point in current frame
 for (idx_t j=0; j<total_masses; j++) {
-  if (!safeToMerge(p.past_position, p.blobSize, p.neighbors,
-                   points[j].current_position, points[j].blobSize, points[j].neighbors)) {
-    continue;
-  }
+  // if (!safeToMerge(p.past_position, p.blobSize, p.neighbors,
+  //                  points[j].current_position, points[j].blobSize, points[j].neighbors)) {
+  //   continue;
+  // }
 
   // can't jump too far
   float d = euclidean_distance(p.past_position, points[j].current_position);
