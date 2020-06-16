@@ -103,6 +103,7 @@ uint8_t findCurrentPoints() {
     sorted_size++;
     ordered_indexes[y] = UNDEF_POINT;
     float mt = fgDiff(current_point);
+    float max_temp = constrain(mt, 2, 4);
     uint8_t neighbors = 0;
     uint8_t blobSize = 1;
     axis_t minAxis = AXIS(current_point);
@@ -133,11 +134,14 @@ uint8_t findCurrentPoints() {
         if (fnc == 1) continue;
       }
 
+      float mt_blob = fgDiff(blobPoint);
+      mt_blob = min(mt_blob, 3);
       for (uint8_t k=y+1; k<active_pixel_count; k++) {
         // scan all known points after current_point to find neighbors to point x
         if (ordered_indexes[k] != UNDEF_POINT &&
             isNeighborly(ordered_indexes[k], blobPoint) &&
-            diffFromPoint(ordered_indexes[k], current_point) < mt) {
+            (diffFromPoint(ordered_indexes[k], blobPoint) < mt_blob ||
+              diffFromPoint(ordered_indexes[k], current_point) < max_temp)) {
           clusterNum[ordered_indexes[k]] = clusterIdx;
           ordered_indexes_temp[sorted_size] = ordered_indexes[k];
           sorted_size++;
@@ -178,7 +182,7 @@ uint8_t findCurrentPoints() {
         }
       }
 
-      if (neighbors > 4 || blobSize > 7 || noiseSize < blobSize*2) {
+      if (true || neighbors > 4 || blobSize > 7 || noiseSize < blobSize*2) {
         SERIAL_PRINT(F("+ "));
         SERIAL_PRINTLN(current_point);
 
