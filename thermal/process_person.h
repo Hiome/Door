@@ -34,10 +34,10 @@ for (idx_t j=0; j<total_masses; j++) {
   // can't shift temperature too much
   float tempDiff = p.difference_from_point(points[j].current_position);
   float maxTpoint = points[j].max_allowed_temp_drift();
-  if (tempDiff > min(maxTpoint, maxTperson) + 2) continue;
+  if (tempDiff > min(maxTpoint, maxTperson) + 3) continue;
 
   float dScore = 1 - ((d+0.1)/(maxDperson+0.2));
-  float tScore = 1 - ((tempDiff+0.1)/(maxTperson+2.2));
+  float tScore = 1 - ((tempDiff+0.1)/(maxTperson+3.2));
   if (dScore < 0.5 && tScore < 0.5) continue;
   float score = dScore + tScore;
   score += (0.001*points[j].confidence);

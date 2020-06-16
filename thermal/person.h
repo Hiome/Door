@@ -169,6 +169,11 @@ Person maybe_person;
 
 void publish_maybe_person(idx_t i) {
   if (maybe_idx == i) {
+    // door has been closed/ajar for more than 1 frame, no way anybody crossed
+    if (door_state != DOOR_OPEN && frames_since_door_open > 0) return;
+    // door literally just opened this frame, no way anybody crossed
+    if (door_state == DOOR_OPEN && frames_since_door_open < 2) return;
+
     maybe_person._publishFrd();
     maybe_idx = UNDEF_INDEX;
     if (known_people[i].count > maybe_person.count)
@@ -259,12 +264,9 @@ void clearPointsAfterDoorClose() {
         }
 
         if (clearPoint) {
+          publish_maybe_person(i);
           known_people[i].publishMaybeEvent();
           known_people[i] = UNDEF_PERSON;
-          if (maybe_idx == i) {
-            maybe_person._publishFrd();
-            maybe_idx = UNDEF_INDEX;
-          }
         }
       }
 
