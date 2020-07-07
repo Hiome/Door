@@ -178,7 +178,7 @@ uint8_t findCurrentPoints() {
         }
       }
 
-      if (neighbors > 4 || blobSize > 7 || noiseSize < blobSize*2) {
+      if (neighbors > 5 || blobSize > 7 || noiseSize < blobSize*2) {
         SERIAL_PRINT(F("+ "));
         SERIAL_PRINTLN(current_point);
 

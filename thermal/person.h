@@ -118,7 +118,9 @@ typedef struct {
 
   bool publishable() {
     if (published == side() && side() == starting_side()) return false;
-    return (published || (d1_count + d2_count > 2)) && history() > 1 && axis_distance(starting_position(), past_position) > 2;
+    if (history() <= 1) return false;
+    if (published && (published != side() || axis_distance(starting_position(), past_position) > 2)) return true;
+    return d1_count + d2_count > 2 && published == 0 && axis_distance(starting_position(), past_position) > 2;
   };
 
   // called when a point is about to be forgotten to diagnose if min history is an issue

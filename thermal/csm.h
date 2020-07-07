@@ -103,8 +103,8 @@ float trimMean(uint8_t side) {
 
   float avg = 0;
   uint8_t total = 0;
-  for (uint8_t i=6; i < (AMG88xx_PIXEL_ARRAY_SIZE/2); i++) {
-    // drop the 6^ warmest points when calculating mean to skew it lower
+  for (uint8_t i=16; i < (AMG88xx_PIXEL_ARRAY_SIZE/2); i++) {
+    // drop the 16^ warmest points when calculating mean to skew it lower
     // this might cause issues if the person is actually cooler than the background,
     // such as when keith is sweaty. We shall see!
     avg += constrainedPixel(sortedPixels[i]);
