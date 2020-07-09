@@ -170,6 +170,7 @@ idx_t maybe_idx = UNDEF_INDEX;
 Person maybe_person;
 
 void publish_maybe_person(idx_t i) {
+  return;
   if (maybe_idx == i) {
     // door has been closed/ajar for more than 1 frame, no way anybody crossed
     if (door_state != DOOR_OPEN && frames_since_door_open > 0) return;
@@ -207,21 +208,21 @@ void publishEvents() {
 
   for (idx_t i=0; i<MAX_PEOPLE; i++) {
     if (!known_people[i].real()) continue;
-    if (maybe_idx == i) {
-      if (known_people[i].direction == maybe_person.direction) {
-        // clear fork if person corrected their direction before straying too far
-        if (maybe_person.direction == FACING_SIDE1) {
-          if (AXIS(known_people[i].past_position) <= AXIS(maybe_person.past_position)) {
-            maybe_idx = UNDEF_INDEX;
-          }
-        } else if (AXIS(known_people[i].past_position) >= AXIS(maybe_person.past_position)) {
-          maybe_idx = UNDEF_INDEX;
-        }
-      } else if (axis_distance(known_people[i].past_position, maybe_person.past_position) >= 2) {
-        // person strayed far enough, bombs away
-        publish_maybe_person(i);
-      }
-    }
+    // if (maybe_idx == i) {
+    //   if (known_people[i].direction == maybe_person.direction) {
+    //     // clear fork if person corrected their direction before straying too far
+    //     if (maybe_person.direction == FACING_SIDE1) {
+    //       if (AXIS(known_people[i].past_position) <= AXIS(maybe_person.past_position)) {
+    //         maybe_idx = UNDEF_INDEX;
+    //       }
+    //     } else if (AXIS(known_people[i].past_position) >= AXIS(maybe_person.past_position)) {
+    //       maybe_idx = UNDEF_INDEX;
+    //     }
+    //   } else if (axis_distance(known_people[i].past_position, maybe_person.past_position) >= 2) {
+    //     // person strayed far enough, bombs away
+    //     publish_maybe_person(i);
+    //   }
+    // }
     if (pointOnBorder(known_people[i].past_position) && known_people[i].publishable()) {
       Person p = known_people[i];
       p.publishPacket();
