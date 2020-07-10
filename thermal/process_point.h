@@ -22,7 +22,7 @@ for (idx_t idx=0; idx < MAX_PEOPLE*2; idx++) {
 
   float dScore = 1 - ((d+0.1)/(maxD+0.2));
   float tScore = 1 - ((tempDiff+0.1)/(maxT+2.2));
-  float score = dScore + tScore;
+  float score = dScore * tScore;
   score += (0.001*p.confidence);
   score += (0.01*p.neighbors);
   score += (0.05*p.history());
