@@ -58,6 +58,11 @@ if [[ $1 == 'flash' ]]; then
     exit 1
   fi
 
+  if [[ $2 == "door/r2*" ]]; then
+    echo "cannot flash r2 sensors"
+    exit 1
+  fi
+
   echo "💥 Flashing ~/Code/core-firmware/$2.hex to node 13..."
   sleep 1
 
