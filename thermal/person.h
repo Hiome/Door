@@ -1,5 +1,5 @@
 float calcMaxDistance(uint8_t height, uint8_t width, uint8_t neighbors, uint8_t confidence) {
-  return 3.0 + (height+width+neighbors)/4.0 + (confidence/100.0);
+  return 2.0 + (height+width+neighbors)/4.0 + (confidence/100.0);
 }
 
 typedef struct {

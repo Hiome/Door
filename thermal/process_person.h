@@ -27,9 +27,10 @@ for (idx_t j=0; j<total_masses; j++) {
 
   // can't jump too far
   float d = euclidean_distance(p.past_position, points[j].current_position);
+  if (idx >= MAX_PEOPLE && d >= 3) continue;
   float maxDpoint = points[j].max_distance();
   maxDpoint = min(maxDperson, maxDpoint);
-  if (d > min(maxDpoint, 6)) continue;
+  if (d >= min(maxDpoint, 6)) continue;
 
   // can't shift temperature too much
   float tempDiff = p.difference_from_point(points[j].current_position);

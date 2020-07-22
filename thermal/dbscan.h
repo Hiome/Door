@@ -9,6 +9,10 @@ uint8_t findCurrentPoints() {
     norm_pixels[i] = min(bgm, fgm);
 
     if (norm_pixels[i] > CONFIDENCE_THRESHOLD) {
+      if (norm_pixels[i] > 70 && raw_pixels[i] < cavg1 && raw_pixels[i] < cavg2 && raw_pixels[i] < bgPixel(i)) {
+        // ignore points colder than average, it's likely noise
+        continue;
+      }
       bool added = false;
       for (uint8_t j=0; j<active_pixel_count; j++) {
         if (norm_pixels[i] > norm_pixels[(ordered_indexes_temp[j])] ||

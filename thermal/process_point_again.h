@@ -3,6 +3,7 @@ idx_t max_index = UNDEF_INDEX;
 float max_score = 0;
 float maxTpoint = points[i].max_allowed_temp_drift();
 float maxDpoint = points[i].max_distance();
+maxDpoint = min(maxDpoint, 3);
 for (idx_t fidx=0; fidx < MAX_PEOPLE; fidx++) {
   if (!forgotten_people[fidx].real() || pairs[fidx+MAX_PEOPLE] != UNDEF_INDEX) continue;
 
@@ -13,9 +14,7 @@ for (idx_t fidx=0; fidx < MAX_PEOPLE; fidx++) {
 
   // can't jump too far
   float d = euclidean_distance(forgotten_people[fidx].past_position, points[i].current_position);
-  float maxDperson = forgotten_people[fidx].max_distance();
-  maxDperson = min(maxDperson, maxDpoint);
-  if (d > min(maxDperson, 6)) continue;
+  if (d >= maxDpoint) continue;
 
   // can't shift temperature too much
   float tempDiff = forgotten_people[fidx].difference_from_point(points[i].current_position);
