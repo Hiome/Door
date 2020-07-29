@@ -5,7 +5,7 @@ OUTPUT_DIR="/Users/neil/Code/core-firmware"
 count=0
 
 compileHex() {
-  for i in {2..35}
+  for i in {2..45}
   do
     echo "Compiling $2/$i.hex..."
     echo -e "#define NODEID ${i}\n${1}" > config.h
