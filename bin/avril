@@ -66,6 +66,7 @@ if [[ $1 == 'flash' ]]; then
   echo "💥 Flashing ~/Code/core-firmware/$2.hex to node 13..."
   sleep 1
 
+  # if nothing happens, make sure Arduino.app isn't running and blocking the serial port
   UID_FILE=$DIR_PATH/uid.txt ~/Code/core-updater/OTA.py -s /dev/cu.usbserial-AL05VI82 -b 19200 -f ~/Code/core-firmware/$2.hex -t 13
   say all done
   exit 0
