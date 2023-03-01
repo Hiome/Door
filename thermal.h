@@ -19,9 +19,9 @@
 #define ALPHA                   0.001
 #define SLOW_ALPHA              0.0001
 
-#include <Adafruit_AMG88xx.h>
+#include <Hiome_AMG88xx.h>
 
-Adafruit_AMG88xx amg;
+Hiome_AMG88xx amg;
 
 float avg_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
 float norm_pixels[AMG88xx_PIXEL_ARRAY_SIZE];
@@ -408,24 +408,8 @@ void scanSegment(float *arr, uint8_t base, uint8_t inc, float edgePoint) {
   }
 }
 
-bool pixelsChanged() {
-  amg.readPixels(norm_pixels);
-
-  float _hsh = 0.0;
-  for (uint8_t i=0; i<AMG88xx_PIXEL_ARRAY_SIZE; i++) {
-    _hsh += sq(norm_pixels[i] + i);
-  }
-  if (abs(_hsh - cur_pixels_hash) < 0.01) {
-    // nothing changed, stop here
-    return false;
-  } else {
-    cur_pixels_hash = _hsh;
-    return true;
-  }
-}
-
 bool normalizePixels() {
-  if (!pixelsChanged()) return false;
+  if (!amg.readPixels(norm_pixels)) return false;
 
   // calculate CSM gradient
   float bgm = GRADIENT_THRESHOLD;
@@ -1209,7 +1193,7 @@ void initialize() {
   }
 
   for (uint8_t k=0; k < 10; k++) {
-    while (!pixelsChanged()) {
+    while (!amg.readPixels(norm_pixels)) {
       // wait for pixels to change
       LOWPOWER_DELAY(SLEEP_30MS);
     }

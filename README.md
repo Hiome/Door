@@ -11,15 +11,15 @@ Hiome Sensor code.
 ```bash
 cd ~/Documents/Arduino/libraries
 
-git clone git@github.com:LowPowerLab/LowPower.git
-git clone git@github.com:LowPowerLab/SPIFlash.git
-git clone -b skipcansend git@github.com:hiome/RFM69-1.git # rename dir to RFM69
-git clone git@gitlab.com:hiome/Adafruit_AMG88xx.git
+git clone git@github.com:Hiome/LowPower.git
+git clone git@github.com:Hiome/SPIFlash.git
+git clone -b skipcansend git@github.com:Hiome/RFM69.git
+git clone git@github.com:Hiome/Hiome_AMG88xx.git
 
 cd ..
 
-git clone git@gitlab.com:hiome/RFM69Gateway.git
-git clone git@gitlab.com:hiome/Door.git
+git clone git@github.com:Hiome/RFM69Gateway.git
+git clone git@github.com:Hiome/Door.git
 ```
 
 2. Install moteino board by adding https://lowpowerlab.github.io/MoteinoCore/package_LowPowerLab_index.json to `Additional Board Manager URLs` in Arduino IDE preferences. See https://lowpowerlab.com/guide/moteino/programming-libraries/ for more info.
@@ -27,3 +27,11 @@ git clone git@gitlab.com:hiome/Door.git
 3. Install moteino board via Arduino board manager.
 
 4. Plug in sensor and flash it!
+
+## Disclaimer
+
+This code will **not** work as-is without the rest of the Hiome ecosystem. This is currently shared as a source of inspiration.
+
+## License
+
+All rights reserved. Copyright Hiome Inc, 2020.
