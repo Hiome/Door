@@ -1,0 +1,77 @@
+#!/bin/bash
+
+set -e
+
+DIR_PATH=$(dirname "${BASH_SOURCE[0]}")
+
+verify() {
+  echo ""
+  echo "👇 Using these settings..."
+  echo ""
+  cat $DIR_PATH/../config.h | sed -n '/\/\//!p' # strip comments
+  echo ""
+
+  arduino-cli compile --fqbn Moteino:avr:Moteino --warnings "all" $DIR_PATH/../presence.ino
+
+  echo ""
+  echo "✅ Verified on `date`"
+  echo ""
+}
+
+if [[ $1 == 'config' ]]; then
+  nano $DIR_PATH/../config.h
+  exit 0
+fi
+
+if [[ $1 == 'verify' ]]; then
+  verify
+  exit 0
+fi
+
+if [[ $1 == 'compile' ]]; then
+  $DIR_PATH/compile_all.sh
+  exit 0
+fi
+
+if [[ $1 == 'listen' ]]; then
+  fn=$(date +"%FT%H%M%S")
+  $DIR_PATH/read_sensor.py > "$DIR_PATH/../logs/${fn}.txt"
+  exit 0
+fi
+
+if [[ $1 == 'upload' ]]; then
+  verify
+
+  nodeid=$(cat $DIR_PATH/../config.h | sed -nE 's/#define NODEID +([[:digit:]]+)/\1/p')
+  echo ""
+  echo "🚀 Uploading to node $nodeid..."
+  echo ""
+
+  UID_FILE=$DIR_PATH/uid.txt ~/Code/core-updater/OTA.py -s /dev/cu.usbserial-AL05VI82 -b 19200 -f $DIR_PATH/../presence.ino.Moteino.avr.Moteino.hex -t $nodeid
+  exit 0
+fi
+
+if [[ $1 == 'flash' ]]; then
+  if [ -z "$2" ]; then
+    echo "Pass a file type like door/r3_alpha/2 or use the following sample command to flash it yourself:"
+    echo "UID_FILE=$DIR_PATH/uid.txt ~/Code/core-updater/OTA.py -s /dev/cu.usbserial-AL05VI82 -b 19200 -f ~/Code/core-firmware/door/r3_alpha/2.hex -t 13"
+    exit 1
+  fi
+
+  if [[ $2 == "door/r2*" ]]; then
+    echo "cannot flash r2 sensors"
+    exit 1
+  fi
+
+  echo "💥 Flashing ~/Code/core-firmware/$2.hex to node 13..."
+  sleep 1
+
+  # if nothing happens, make sure Arduino.app isn't running and blocking the serial port
+  UID_FILE=$DIR_PATH/uid.txt ~/Code/core-updater/OTA.py -s /dev/cu.usbserial-AL05VI82 -b 19200 -f ~/Code/core-firmware/$2.hex -t 13
+  say all done
+  exit 0
+fi
+
+echo "AVRil CLI"
+echo "Available commands: config, verify, compile, listen, upload, flash <door/r3_alpha/2>"
+exit 1

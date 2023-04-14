@@ -1,10 +1,4 @@
-// Choose one:
-//#define LIDAR
-//#define MOTION
-//#define DOOR
-#define THERMAL
-//#define BED
-
-#define NODEID        13   // unique for each node on same network
 #define ENABLE_SERIAL
-
+#define NODEID 2
+#define R3
+// #define RECESSED
