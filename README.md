@@ -18,8 +18,8 @@ git clone git@github.com:Hiome/Hiome_AMG88xx.git
 
 cd ..
 
-git clone git@gitlab.com:hiome/RFM69Gateway.git
-git clone git@gitlab.com:hiome/Door.git
+git clone git@github.com:Hiome/RFM69Gateway.git
+git clone git@github.com:Hiome/Door.git
 ```
 
 2. Install moteino board by adding https://lowpowerlab.github.io/MoteinoCore/package_LowPowerLab_index.json to `Additional Board Manager URLs` in Arduino IDE preferences. See https://lowpowerlab.com/guide/moteino/programming-libraries/ for more info.
