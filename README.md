@@ -1,6 +1,6 @@
-# SmarterDoor
+# Hiome Door
 
-Hiome Sensor code.
+Code that powers [Hiome Door](https://www.hiome.com) sensors for lightning fast occupancy counts using an AMG8833 thermal sensor.
 
 ## Setup
 
